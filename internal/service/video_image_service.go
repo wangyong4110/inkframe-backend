@@ -726,14 +726,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 对 Seedream 等非 IP-Adapter 模型，prompt 靠前的 token 权重更高；
 	// 若场景描述排在第一位，模型优先渲染场景而忽略角色。
 	var sceneRefImage string
-	var sceneAnchorName string
+	// sceneAnchorName: 仅供下方已临时注释的 [图N] 替换逻辑使用，暂时用 _ 丢弃。
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if fragment, refURL, aName, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
+		if fragment, refURL, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
 			if fragment != "" {
 				promptText = fragment + ", " + promptText
 			}
 			sceneRefImage = refURL
-			sceneAnchorName = aName
 		}
 	}
 
@@ -1069,69 +1068,70 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 使模型能将名称与传入的参考图位置一一对应，提升角色/物品/场景一致性。
 	// promptForFallback 保留替换前版本，用于无参考图降级（文字是唯一外貌约束，不应出现 [图N]）。
 	promptForFallback := promptText
-	if len(allRefImages) > 0 {
-		nameToRefIdx := make(map[string]int)
-		for i, po := range portraitOwners {
-			if i < len(cappedPortraits) && po.name != "" {
-				nameToRefIdx[po.name] = i + 1
-			}
-		}
-		offset := len(cappedPortraits)
-		for i, name := range itemRefNames {
-			if name != "" {
-				nameToRefIdx[name] = offset + i + 1
-			}
-		}
-		if sceneRefImage != "" && sceneAnchorName != "" {
-			nameToRefIdx[sceneAnchorName] = offset + len(itemRefImages) + 1
-		}
-		if len(nameToRefIdx) > 0 {
-			isEn := isEnglishPrompt(shot.GenMeta.Prompt)
-			promptText = replaceNamesWithRefIndex(promptText, nameToRefIdx, isEn)
-
-			// 参考图映射声明：在 prompt 最前面明确列出每张参考图对应的角色/物品/场景，
-			// 并声明"每张参考图是不同的独立角色，每个角色只出现一次"。
-			// 解决模型将多张参考图误认为同一角色多视角，导致画面中角色重复出现的问题。
-			type refEntry struct {
-				idx  int
-				name string
-			}
-			entries := make([]refEntry, 0, len(nameToRefIdx))
-			for name, idx := range nameToRefIdx {
-				entries = append(entries, refEntry{idx, name})
-			}
-			sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
-
-			var mappings []string
-			for _, e := range entries {
-				var tag string
-				if isEn {
-					tag = fmt.Sprintf("[Image-%d]", e.idx)
-				} else {
-					cn := fmt.Sprintf("%d", e.idx)
-					if e.idx >= 1 && e.idx <= len(chineseNumerals) {
-						cn = chineseNumerals[e.idx-1]
-					}
-					tag = fmt.Sprintf("[图%s]", cn)
-				}
-				if isEn {
-					mappings = append(mappings, tag+"="+e.name)
-				} else {
-					mappings = append(mappings, tag+"为"+e.name)
-				}
-			}
-			var refAnnotation string
-			if isEn {
-				refAnnotation = "Reference images: " + strings.Join(mappings, ", ") +
-					". Each reference image is a DIFFERENT unique individual/object. Do NOT duplicate any character — each appears exactly once in the scene."
-			} else {
-				refAnnotation = "参考图说明：" + strings.Join(mappings, "，") +
-					"。每张参考图各对应不同的独立角色/物品，场景中每个角色只出现一次，不得重复。"
-			}
-			promptText = refAnnotation + " " + promptText
-			logger.Printf("[RefIdx] shot#%d refMap=%v isEn=%v annotation=%q", shot.ShotNo, nameToRefIdx, isEn, refAnnotation)
-		}
-	}
+	// TODO(temp): 暂时禁用"人物名替换为 [图N]/[Image-N]"逻辑，先注释掉相关方法的调用。
+	// if len(allRefImages) > 0 {
+	// 	nameToRefIdx := make(map[string]int)
+	// 	for i, po := range portraitOwners {
+	// 		if i < len(cappedPortraits) && po.name != "" {
+	// 			nameToRefIdx[po.name] = i + 1
+	// 		}
+	// 	}
+	// 	offset := len(cappedPortraits)
+	// 	for i, name := range itemRefNames {
+	// 		if name != "" {
+	// 			nameToRefIdx[name] = offset + i + 1
+	// 		}
+	// 	}
+	// 	if sceneRefImage != "" && sceneAnchorName != "" {
+	// 		nameToRefIdx[sceneAnchorName] = offset + len(itemRefImages) + 1
+	// 	}
+	// 	if len(nameToRefIdx) > 0 {
+	// 		isEn := isEnglishPrompt(shot.GenMeta.Prompt)
+	// 		promptText = replaceNamesWithRefIndex(promptText, nameToRefIdx, isEn)
+	//
+	// 		// 参考图映射声明：在 prompt 最前面明确列出每张参考图对应的角色/物品/场景，
+	// 		// 并声明"每张参考图是不同的独立角色，每个角色只出现一次"。
+	// 		// 解决模型将多张参考图误认为同一角色多视角，导致画面中角色重复出现的问题。
+	// 		type refEntry struct {
+	// 			idx  int
+	// 			name string
+	// 		}
+	// 		entries := make([]refEntry, 0, len(nameToRefIdx))
+	// 		for name, idx := range nameToRefIdx {
+	// 			entries = append(entries, refEntry{idx, name})
+	// 		}
+	// 		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+	//
+	// 		var mappings []string
+	// 		for _, e := range entries {
+	// 			var tag string
+	// 			if isEn {
+	// 				tag = fmt.Sprintf("[Image-%d]", e.idx)
+	// 			} else {
+	// 				cn := fmt.Sprintf("%d", e.idx)
+	// 				if e.idx >= 1 && e.idx <= len(chineseNumerals) {
+	// 					cn = chineseNumerals[e.idx-1]
+	// 				}
+	// 				tag = fmt.Sprintf("[图%s]", cn)
+	// 			}
+	// 			if isEn {
+	// 				mappings = append(mappings, tag+"="+e.name)
+	// 			} else {
+	// 				mappings = append(mappings, tag+"为"+e.name)
+	// 			}
+	// 		}
+	// 		var refAnnotation string
+	// 		if isEn {
+	// 			refAnnotation = "Reference images: " + strings.Join(mappings, ", ") +
+	// 				". Each reference image is a DIFFERENT unique individual/object. Do NOT duplicate any character — each appears exactly once in the scene."
+	// 		} else {
+	// 			refAnnotation = "参考图说明：" + strings.Join(mappings, "，") +
+	// 				"。每张参考图各对应不同的独立角色/物品，场景中每个角色只出现一次，不得重复。"
+	// 		}
+	// 		promptText = refAnnotation + " " + promptText
+	// 		logger.Printf("[RefIdx] shot#%d refMap=%v isEn=%v annotation=%q", shot.ShotNo, nameToRefIdx, isEn, refAnnotation)
+	// 	}
+	// }
 
 	// 场景锚点图片不加入 allRefImages：
 	// 见上方"参考图列表"注释。二次读取也同样跳过场景图，防止并发批次中后加进来。
