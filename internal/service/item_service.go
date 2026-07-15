@@ -578,10 +578,14 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 }
 
 // extractItemsFromContent 从章节内容中提取物品（纯 AI 提取，不操作 DB）
+// extractItemsFromContent 单章物品提取的共享核心：渲染 extract_chapter_items.j2、调用 LLM、解析
+// JSON。同时供 AIExtractAllFromNovel（分析流水线，逐章并发调用，不落库，由调用方合并去重后
+// 统一入库）和 AIExtractChapterItems（章节页面手动触发，单章调用，自己落库）复用——此前这两处
+// 各自写了一份几乎相同的渲染+调用+解析代码，只有 userPrompt/MaxTokens 等细节不同。
 func (s *ItemService) extractItemsFromContent(
 	ctx context.Context,
 	tenantID, novelID uint,
-	novelTitle, genre, promptLanguage, content string,
+	novelTitle, genre, promptLanguage, content, userPrompt string,
 	existingNames []string,
 ) ([]analysisItemJSON, error) {
 	chItemsPrompt, err := renderPrompt("extract_chapter_items", map[string]interface{}{
@@ -589,6 +593,7 @@ func (s *ItemService) extractItemsFromContent(
 		"Genre":          genre,
 		"ExistingNames":  existingNames,
 		"Content":        content,
+		"UserPrompt":     userPrompt,
 		"PromptLanguage": promptLanguage,
 	})
 	if err != nil {
@@ -596,7 +601,7 @@ func (s *ItemService) extractItemsFromContent(
 	}
 
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
-		StoryboardOverrides{})
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +702,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 			if content == "" {
 				content = c.Summary
 			}
-			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, existingNames)
+			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, "", existingNames)
 			results[idx] = chResult{items, err}
 		}(i, ch)
 	}
@@ -810,40 +815,13 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 		existingNameSet[strings.ToLower(it.Name)] = true
 	}
 
-	chItemsPrompt2, err := renderPrompt("extract_chapter_items", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"ExistingNames":  existingNames,
-		"Content":        content,
-		"UserPrompt":     userPrompt,
-		"PromptLanguage": promptLanguage,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
-	}
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt2, "",
-		StoryboardOverrides{MaxTokens: 8192})
+	// 渲染+调用 LLM+解析 JSON 复用 extractItemsFromContent（与分析流水线的
+	// AIExtractAllFromNovel 共享同一份实现，见该函数上的注释）。
+	items, err := s.extractItemsFromContent(context.Background(), tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, userPrompt, existingNames)
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter items: %w", err)
 	}
-
-	type itemJSON struct {
-		Name         string `json:"name"`
-		Category     string `json:"category"`
-		Appearance   string `json:"appearance"`
-		Description  string `json:"description"`
-		Location     string `json:"location"`
-		Owner        string `json:"owner"`
-		VisualPrompt string `json:"visual_prompt"`
-	}
-	var items []itemJSON
-	cleaned := extractJSON(strings.TrimSpace(result))
-	if parseErr := json.Unmarshal([]byte(cleaned), &items); parseErr != nil {
-		logger.Errorf("[ItemService] AIExtractChapterItems: parse error: %v, raw: %.300s", parseErr, result)
-		return nil, fmt.Errorf("parse items JSON: %w", parseErr)
-	}
-	logger.Printf("[ItemService] AIExtractChapterItems: chapterID=%d AI returned %d items, raw len=%d", chapterID, len(items), len(result))
+	logger.Printf("[ItemService] AIExtractChapterItems: chapterID=%d AI returned %d items", chapterID, len(items))
 
 	var created []*model.Item
 	for _, it := range items {

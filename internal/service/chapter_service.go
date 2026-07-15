@@ -611,7 +611,7 @@ func (s *ChapterService) InsertChapterAfter(novelID uint, afterChapterNo int) (*
 		TenantID:  tenantID,
 		NovelID:   novelID,
 		ChapterNo: newNo,
-		Title:     "",
+		Title:     fmt.Sprintf("第%d章", newNo),
 		Status:    model.StatusDraft,
 	}
 	if err := s.chapterRepo.Create(chapter); err != nil {
