@@ -60,6 +60,12 @@ func (h *VideoHandler) WithCapCutSegmentRepo(r *repository.ShotVoiceSegmentRepos
 	return h
 }
 
+// WithCapCutSceneAnchorRepo 将场景锚点仓库注入 CapCutService，使 Excel 分镜脚本导出能带出场景锚点名称/描述。
+func (h *VideoHandler) WithCapCutSceneAnchorRepo(r *repository.SceneAnchorRepository) *VideoHandler {
+	h.capcutService.WithSceneAnchorRepo(r)
+	return h
+}
+
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
 	h.sfxItemRepo = r
 	h.capcutService.WithSFXItemRepo(r) // 同时注入 CapCut 导出服务，使多条 SFX item 能正确导出

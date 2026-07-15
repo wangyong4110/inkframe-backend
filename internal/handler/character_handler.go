@@ -571,35 +571,6 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "角色图片批量生成任务已提交")
 }
 
-// GenerateCharacterProfile AI生成角色档案（异步任务）
-// POST /api/v1/novels/:novel_id/characters/generate
-func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
-	novelId, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var req struct {
-		Description string `json:"description" binding:"required"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	tenantID := getTenantID(c)
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCharProfileGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 description 调用同一个
-	// h.characterService.GenerateProfile）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCharProfileGen, "角色档案生成", "novel", uint(novelId), map[string]interface{}{
-		"description": req.Description,
-	})
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	respondAccepted(c, task.TaskID, "角色档案生成任务已提交")
-}
-
 // GetCharacterArc 获取角色弧光
 // GET /api/v1/novels/:novel_id/character-arcs/:character_id
 func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {

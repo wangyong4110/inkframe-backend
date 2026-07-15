@@ -857,6 +857,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
 			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
 			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
+			WithCapCutSceneAnchorRepo(repos.SceneAnchorRepo).  // Excel 分镜脚本导出：场景锚点名称/描述
 			WithServerBaseURL(buildServerBaseURL(cfg)).        // 本地/DB 存储媒体 URL 解析
 			WithAuditService(services.AuditService),
 		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService).WithAIService(services.AIService).WithTaskService(services.TaskService),

@@ -308,7 +308,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/characters", cfg.CharacterHandler.ListCharacters)
 			novels.POST("/:id/characters", cfg.CharacterHandler.CreateCharacter)
 			novels.DELETE("/:id/characters", cfg.CharacterHandler.BatchDeleteCharacters)
-			novels.POST("/:id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
 			novels.POST("/:id/characters/ai-generate", cfg.CharacterHandler.GenerateCharacterInfo)
 			novels.POST("/:id/characters/ai-batch", cfg.CharacterHandler.AIBatchGenerate)
 			novels.POST("/:id/characters/batch-images", cfg.CharacterHandler.BatchGenerateImages)

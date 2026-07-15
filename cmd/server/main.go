@@ -359,7 +359,6 @@ func main() {
 			service.TaskTypeCharReanalyze,
 			service.TaskTypeChapterCharExtract,
 			service.TaskTypeCharImageGen,
-			service.TaskTypeCharProfileGen,
 			service.TaskTypeVoicePreview,
 			service.TaskTypeLookPromptGen,
 			service.TaskTypeLookImageGen,

@@ -54,7 +54,6 @@ const (
 	TaskTypeChapterSceneExtract      = "chapter_scene_extract"
 	TaskTypeNovelOutlineGen          = "novel_outline_gen"
 	TaskTypeCharImageGen             = "char_image_gen"
-	TaskTypeCharProfileGen           = "char_profile_gen"
 	TaskTypeVoicePreview             = "voice_preview"
 	TaskTypeLookPromptGen            = "look_prompt_gen"
 	TaskTypeLookImageGen             = "look_image_gen"
@@ -497,7 +496,6 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeCharReanalyze:        "角色重分析",
 		TaskTypeNovelOutlineGen:      "生成大纲",
 		TaskTypeCharImageGen:         "角色图像",
-		TaskTypeCharProfileGen:       "角色档案",
 		TaskTypeCoverImageGen:        "封面生成",
 		TaskTypeImageEdit:            "图像编辑",
 		TaskTypeImageUpscale:         "图像放大",

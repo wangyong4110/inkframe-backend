@@ -20,6 +20,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/xuri/excelize/v2"
 )
 
 // maxExportMediaBytes P2-4: skip local media embeds beyond this limit to prevent OOM.
@@ -27,9 +28,10 @@ const maxExportMediaBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
 
 // CapCutService 剪映草稿导出服务
 type CapCutService struct {
-	segmentRepo   *repository.ShotVoiceSegmentRepository // P1-2: for including multi-segment audio in exports
-	sfxItemRepo   *repository.ShotSFXItemRepository      // for including multi-item SFX in exports
-	serverBaseURL string                                  // 服务器自身 base URL，用于解析 /uploads/... 和 /api/v1/media/... 相对路径
+	segmentRepo     *repository.ShotVoiceSegmentRepository // P1-2: for including multi-segment audio in exports
+	sfxItemRepo     *repository.ShotSFXItemRepository      // for including multi-item SFX in exports
+	sceneAnchorRepo *repository.SceneAnchorRepository      // for resolving shot.SceneAnchorID → name/description in exports
+	serverBaseURL   string                                  // 服务器自身 base URL，用于解析 /uploads/... 和 /api/v1/media/... 相对路径
 }
 
 func NewCapCutService() *CapCutService {
@@ -45,6 +47,13 @@ func (s *CapCutService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *Ca
 // WithSegmentRepo 注入 VoiceSegment 仓库，使导出时能包含多段配音音频。
 func (s *CapCutService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository) *CapCutService {
 	s.segmentRepo = r
+	return s
+}
+
+// WithSceneAnchorRepo 注入场景锚点仓库，使导出（如 Excel 分镜脚本）能将 shot.SceneAnchorID
+// 解析为场景锚点的名称与描述。
+func (s *CapCutService) WithSceneAnchorRepo(r *repository.SceneAnchorRepository) *CapCutService {
+	s.sceneAnchorRepo = r
 	return s
 }
 
@@ -4532,5 +4541,132 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 		Data:        buf.Bytes(),
 		Filename:    projectName + "_shots.csv",
 		ContentType: "text/csv; charset=utf-8",
+	}, nil
+}
+
+// ExportXLSX 导出分镜脚本为 Excel（.xlsx），供制片/审片人员离线查阅：
+// 基础信息（镜号/画面描述/台词字幕/时长/镜头方向）+ 角色物品清单 + 场景锚点信息。
+func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	logger.Printf("[CapCutService] ExportXLSX: videoID=%d shots=%d", video.ID, len(shots))
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	// 场景锚点按小说一次性批量查询，避免逐条按 ID 查库
+	anchorByID := make(map[uint]*model.SceneAnchor)
+	if s.sceneAnchorRepo != nil && video.NovelID > 0 {
+		if anchors, err := s.sceneAnchorRepo.ListByNovel(video.NovelID); err == nil {
+			for _, a := range anchors {
+				anchorByID[a.ID] = a
+			}
+		}
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+	const sheet = "分镜脚本"
+	f.SetSheetName("Sheet1", sheet)
+
+	headers := []string{
+		"镜号", "画面描述", "旁白", "台词", "字幕", "时长(秒)",
+		"镜头类型", "景别", "机位角度", "转场",
+		"角色", "物品", "场景锚点", "场景描述",
+	}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		_ = f.SetCellStr(sheet, cell, h)
+	}
+
+	type shotCharMeta struct {
+		Name string `json:"name"`
+	}
+	type shotItemMeta struct {
+		Name     string `json:"name"`
+		Holder   string `json:"holder"`
+		Location string `json:"location"`
+	}
+
+	for i, shot := range shots {
+		row := i + 2
+
+		var characters []string
+		if shot.GenMeta.Characters != "" {
+			var cs []shotCharMeta
+			if json.Unmarshal([]byte(shot.GenMeta.Characters), &cs) == nil {
+				for _, c := range cs {
+					if c.Name != "" {
+						characters = append(characters, c.Name)
+					}
+				}
+			}
+		}
+
+		var items []string
+		if shot.GenMeta.Items != "" {
+			var its []shotItemMeta
+			if json.Unmarshal([]byte(shot.GenMeta.Items), &its) == nil {
+				for _, it := range its {
+					if it.Name == "" {
+						continue
+					}
+					label := it.Name
+					switch {
+					case it.Holder != "":
+						label += "(持有:" + it.Holder + ")"
+					case it.Location != "":
+						label += "(位置:" + it.Location + ")"
+					}
+					items = append(items, label)
+				}
+			}
+		}
+
+		var anchorName, anchorDesc string
+		if shot.SceneAnchorID != nil {
+			if a, ok := anchorByID[*shot.SceneAnchorID]; ok {
+				anchorName = a.Name
+				anchorDesc = a.Description
+			}
+		}
+
+		values := []interface{}{
+			shot.ShotNo,
+			shot.Description,
+			shot.Narration,
+			shot.GenMeta.Dialogue,
+			shot.GenMeta.Subtitle,
+			shot.Duration,
+			shot.CamDir.CameraType,
+			shot.CamDir.ShotSize,
+			shot.CamDir.CameraAngle,
+			shot.CamDir.Transition,
+			strings.Join(characters, "、"),
+			strings.Join(items, "、"),
+			anchorName,
+			anchorDesc,
+		}
+		for col, v := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			_ = f.SetCellValue(sheet, cell, v)
+		}
+	}
+
+	// 描述/台词类文本列加宽，避免默认列宽下内容被截断
+	for _, col := range []string{"B", "C", "D", "E", "K", "L", "N"} {
+		_ = f.SetColWidth(sheet, col, col, 32)
+	}
+
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		return nil, fmt.Errorf("write xlsx: %w", err)
+	}
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + "_shots.xlsx",
+		ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	}, nil
 }

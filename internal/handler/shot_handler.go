@@ -486,7 +486,7 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 
 // Export 多格式导出
 // GET /api/v1/videos/:id/export/:format
-// format: capcut | fcpxml | zip | srt
+// format: capcut | fcpxml | zip | srt | vtt | edl | otio | csv | xlsx | broll
 func (h *VideoHandler) Export(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -522,6 +522,8 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		result, err = h.capcutService.ExportOTIO(video, shots)
 	case "csv":
 		result, err = h.capcutService.ExportCSV(video, shots)
+	case "xlsx":
+		result, err = h.capcutService.ExportXLSX(video, shots)
 	case "broll":
 		novel, _ := h.videoService.GetNovelByID(video.NovelID)
 		result, err = h.capcutService.ExportBRollDraft(video, shots, novel)

@@ -1015,48 +1015,6 @@ func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) e
 	return s.chapterCharacterRepo.Delete(chapterID, characterID)
 }
 
-func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, description string) (*model.Character, error) {
-	prompt := fmt.Sprintf(`根据以下描述生成小说角色档案：%s
-
-请以单个JSON对象格式返回，包含以下字段：
-{
-  "name": "角色名",
-  "role": "protagonist/antagonist/supporting",
-  "description": "连贯段落，涵盖外貌概述、性格特点、背景故事、说话风格，200字以内",
-  "visual_prompt": "专业角色造型描述，最少150字，按顺序覆盖：[1]性别体型 [2]面部骨骼 [3]眼睛 [4]眉毛眼妆 [5]鼻唇 [6]肤色肌感 [7]发型 [8]服装逐层 [9]鞋履 [10]配饰道具 [11]体态 [12]色彩叙事（主色/辅色/点缀色+象征含义）[13]整体廓形（1-3词）[14]标志性造型元素（具体描述）[15]造型逻辑（2句话说明造型与角色内心的关联）。禁止出现画风、质量标签或渲染词汇。"
-}`, description)
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "",
-		StoryboardOverrides{})
-	if err != nil {
-		return nil, err
-	}
-
-	var profile struct {
-		Name         string `json:"name"`
-		Role         string `json:"role"`
-		Description  string `json:"description"`
-		VisualPrompt string `json:"visual_prompt"`
-	}
-	if err := json.Unmarshal([]byte(extractJSONObject(strings.TrimSpace(result))), &profile); err != nil {
-		return &model.Character{
-			UUID:        uuid.New().String(),
-			NovelID:     novelID,
-			Name:        "AI生成角色",
-			Role:        "supporting",
-			Description: result,
-			Status:      "active",
-		}, nil
-	}
-	return &model.Character{
-		UUID:        uuid.New().String(),
-		NovelID:     novelID,
-		Name:        profile.Name,
-		Role:        profile.Role,
-		Description: profile.Description,
-		Status:      "active",
-	}, nil
-}
-
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（按 novel_id+name upsert，仅补填空字段）
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（两阶段：先提名单，再并发生成档案）
 func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Character, error) {
@@ -2666,12 +2624,14 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 	}
 	promptLanguage := "zh"
 	worldviewContext := ""
+	novelContext := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
 			if novel.AIConfig.PromptLanguage != "" {
 				promptLanguage = novel.AIConfig.PromptLanguage
 			}
 			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
+			novelContext = strings.TrimSpace(fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description))
 		}
 	}
 	basePrompt := char.Description
@@ -2683,11 +2643,26 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 	if lookDesc != "" {
 		extraSection = lookDesc
 	}
+	// GenderAnchor：与 GenerateCostumeDesign 合并前保持一致的性别锚定标签，让 face_prompt/
+	// visual_prompt 都以该 tag 开头，提升扩散模型对角色性别的稳定还原。
+	genderAnchor := "1person"
+	switch char.Meta.Gender {
+	case "male":
+		genderAnchor = "1boy"
+	case "female":
+		genderAnchor = "1girl"
+	}
 	sysPrompt, err := renderPrompt("character_visual_prompt", map[string]interface{}{
 		"PromptLanguage":   promptLanguage,
 		"WorldviewContext": worldviewContext,
+		"NovelContext":     novelContext,
 		"BasePrompt":       basePrompt,
 		"ExtraSection":     extraSection,
+		"CharName":         char.Name,
+		"CharRole":         char.Role,
+		"CharAge":          char.Meta.Age,
+		"CharGender":       char.Meta.Gender,
+		"GenderAnchor":     genderAnchor,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render character_visual_prompt: %w", err)
@@ -2868,9 +2843,15 @@ func (s *CharacterService) GenerateChapterImages(
 }
 
 // GenerateCostumeDesign 基于角色描述和世界观背景，AI 生成符合时代背景的统一形象提示词。
-// 提示词语言跟随 novel.AIConfig.PromptLanguage（zh=中文，en=英文）。
-// 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook.VisualPrompt。
-// 对于人类角色，提示词中必须明确标注人种。
+// 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook 的 VisualPrompt/FacePrompt。
+//
+// 复用 GenerateLookVisualPrompt 的同一次 AI 调用（同一模板 character_visual_prompt.j2，已
+// 合并原 character_costume_design.j2 的人种/时代/身份/分层设计规则），不再单独渲染模板、
+// 单独调用 LLM——原先两套独立实现除了都要求"根据角色描述+世界观生成形象提示词"外，
+// 世界观上下文的取材范围、人种/时代规则的详细程度都不一致，且本方法从不产出 face_prompt，
+// 导致只用过"设计"入口（这里）而没点过"形象提示词"入口的角色，永远无法生成面部特写图
+// （见 task_resume.go look_image_gen 里 "该形象还没有面部专用提示词" 的报错）。合并后两个
+// 入口共享同一次生成结果，此方法只负责其特有的落库位置（AppearancePrompt 字段）。
 func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (string, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
@@ -2880,79 +2861,30 @@ func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (st
 		return "", fmt.Errorf("角色描述为空，请先填写角色描述")
 	}
 
-	// 获取小说/世界观上下文及语言设置
-	promptLanguage := "zh"
-	var worldContext string
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
-			worldContext = fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description)
-			if novel.Worldview != nil {
-				if novel.Worldview.Description != "" {
-					worldContext += "\n世界设定：" + novel.Worldview.Description
-				}
-				if novel.Worldview.Culture != "" {
-					worldContext += "\n文化习俗：" + truncateRunes(novel.Worldview.Culture, 400)
-				}
-				if novel.Worldview.Geography != "" {
-					worldContext += "\n地理文明：" + truncateRunes(novel.Worldview.Geography, 200)
-				}
-			}
-		}
-	}
-
-	genderAnchor := "1person"
-	switch char.Meta.Gender {
-	case "male":
-		genderAnchor = "1boy"
-	case "female":
-		genderAnchor = "1girl"
-	}
-
-	sysPrompt, err := renderPrompt("character_costume_design", map[string]interface{}{
-		"PromptLanguage":  promptLanguage,
-		"WorldContext":    worldContext,
-		"CharName":        char.Name,
-		"CharRole":        char.Role,
-		"CharAge":         char.Meta.Age,
-		"CharGender":      char.Meta.Gender,
-		"CharDescription": char.Description,
-		"GenderAnchor":    genderAnchor,
-	})
+	result, err := s.GenerateLookVisualPrompt(tenantID, characterID, "")
 	if err != nil {
-		return "", fmt.Errorf("render character_costume_design: %w", err)
+		return "", err
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
-		StoryboardOverrides{MaxTokens: 1024})
-	if err != nil {
-		return "", fmt.Errorf("AI generation failed: %w", err)
-	}
-	prompt := strings.TrimSpace(result)
-	if prompt == "" {
-		return "", fmt.Errorf("AI returned empty result")
-	}
-
-	// 保存到 Character.AppearancePrompt
-	char.Meta.AppearancePrompt = prompt
+	// 保存到 Character.AppearancePrompt（旧字段，仍有读取路径依赖）
+	char.Meta.AppearancePrompt = result.VisualPrompt
 	if err := s.characterRepo.Update(char); err != nil {
 		logger.Errorf("[GenerateCostumeDesign] update char %d AppearancePrompt: %v", characterID, err)
 	}
 
-	// 同步更新默认 look 的 VisualPrompt（确保 look-based 生成路径也受益）
-	s.upsertDefaultLookVisualPrompt(characterID, char.NovelID, prompt)
-
-	logger.Printf("[GenerateCostumeDesign] charID=%d lang=%s generated %d chars", characterID, promptLanguage, len(prompt))
-	return prompt, nil
-}
-
-// truncateRunes 截断字符串到最多 n 个 rune，防止超长世界观内容稀释 prompt。
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+	// 同步更新默认 look 的 VisualPrompt + FacePrompt（确保 look-based 生成路径也受益，
+	// 包括之前该方法从未提供过的面部特写专用提示词）
+	s.upsertDefaultLookVisualPrompt(characterID, char.NovelID, result.VisualPrompt)
+	if result.FacePrompt != "" && s.lookRepo != nil {
+		if defaultLook, e := s.GetDefaultLook(characterID); e == nil && defaultLook != nil {
+			defaultLook.FacePrompt = result.FacePrompt
+			if e := s.lookRepo.Update(defaultLook); e != nil {
+				logger.Errorf("[GenerateCostumeDesign] update look %d FacePrompt: %v", defaultLook.ID, e)
+			}
+		}
 	}
-	return string(r[:n]) + "..."
+
+	logger.Printf("[GenerateCostumeDesign] charID=%d generated visual=%d chars face=%d chars",
+		characterID, len(result.VisualPrompt), len(result.FacePrompt))
+	return result.VisualPrompt, nil
 }

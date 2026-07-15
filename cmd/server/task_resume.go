@@ -966,35 +966,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// char_profile_gen: re-generate character profile from description
-	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharProfileGen, func(t *model.AsyncTask) {
-			novelID := t.EntityID
-			if novelID == 0 {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			var params struct {
-				Description string `json:"description"`
-			}
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			if params.Description == "" {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			character, err := svcs.CharacterService.GenerateProfile(t.TenantID, novelID, params.Description)
-			if err != nil {
-				logger.Errorf("TaskService resume char_profile_gen %s failed: %v", t.TaskID, err)
-				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"character": character}) //nolint:errcheck
-			}
-		})
-	}
-
 	// voice_preview: two entity_types share this task type:
 	//   - "voice" (entity_id=0): narration-only voice preview, not tied to any character
 	//     (ModelHandler.VoicePreview) — just voice_id/text, no character side effects.
