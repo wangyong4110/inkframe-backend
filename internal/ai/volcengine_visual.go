@@ -128,10 +128,14 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	}
 
 	width, height := parseSizeWH(req.Size)
+	// 即梦AI（Volcengine Jimeng）系列模型对 prompt 有 800 字符的硬性长度限制，超出会被 API
+	// 直接拒绝（code=50200 "prompt can not be more than 800 chars"）。模板层的字数指导只是
+	// 建议，LLM 不总是遵守，这里做最后一道保险，超出时截断而不是让整次生成失败。
+	prompt := truncatePromptRunes(req.Prompt, 800)
 
 	switch reqKey {
 	case VolcModelJimengT2Iv30, VolcModelJimengT2Iv31:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		if req.Size != "" {
 			params["width"] = width
 			params["height"] = height
@@ -151,7 +155,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		}
 
 	case VolcModelText2ImgV3:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		params["width"] = width
 		params["height"] = height
 		if req.CFGScale > 0 {
@@ -165,8 +169,8 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		if img := pickSingleRef(req.ReferenceURL, req.ReferenceImage); img != "" {
 			params["image_input"] = img
 		}
-		if req.Prompt != "" {
-			params["prompt"] = req.Prompt
+		if prompt != "" {
+			params["prompt"] = prompt
 		}
 		if req.NegativePrompt != "" {
 			params["negative_prompt"] = req.NegativePrompt
@@ -175,7 +179,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["height"] = height
 
 	case VolcModelJimengI2Iv30:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		// 输入图（恰好1张，支持 URL 或 base64）。ReferenceURL 优先：调用方在判断所有参考图
 		// 均为可直接访问的 HTTP URL 时会跳过 base64 转换，此时 ReferenceImage 为空，
 		// 必须回退读取 ReferenceURL，否则参考图会被静默丢弃（image_input 缺失）。
@@ -197,7 +201,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		}
 
 	case VolcModelSeedEditV3:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		if req.CFGScale > 0 {
 			// scale 范围 [0,1]（文本描述影响程度）。
 			// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
@@ -216,7 +220,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		}
 
 	case VolcModelDreamO:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		params["width"] = width
 		params["height"] = height
 		if req.CFGScale > 0 {
@@ -242,7 +246,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["height"] = height
 
 	case VolcModelJimengT2Iv40:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		// 输入图（0~10张，仅支持 HTTP/HTTPS URL）
 		// 优先使用 buildReq 预筛的 ReferenceURLs（纯 HTTP URL 列表），避免 ReferenceImages 中
 		// 夹杂本地相对路径（/api/v1/media/...）时被 HTTP 检查过滤、导致后续参考图全部丢失。
@@ -300,7 +304,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		}
 
 	case VolcModelJimengSeedream46:
-		params["prompt"] = req.Prompt
+		params["prompt"] = prompt
 		// 输入图（0~14张，仅支持 HTTP/HTTPS URL）
 		// 优先使用 buildReq 预筛的 ReferenceURLs（纯 HTTP URL 列表），避免 ReferenceImages 中
 		// 夹杂本地相对路径（/api/v1/media/...）时被 HTTP 检查过滤、导致后续参考图全部丢失。
@@ -564,6 +568,18 @@ func ensureMinPixelArea(width, height, minArea int) (int, int) {
 	}
 	scale := math.Sqrt(float64(minArea) / float64(width*height))
 	return int(math.Ceil(float64(width) * scale)), int(math.Ceil(float64(height) * scale))
+}
+
+// truncatePromptRunes 按 Unicode 字符（而非字节）截断 prompt，避免把中文等多字节字符从中间切断。
+// 即梦AI 系列模型对 prompt 有硬性长度上限，超出会被 API 直接拒绝（code=50200），模板层的字数
+// 指导只是建议、LLM 不总是遵守，这里在提交前做最后一道保险。
+func truncatePromptRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	log.Printf("[volcengine-visual] prompt exceeds %d chars (actual %d), truncating", maxRunes, len(runes))
+	return string(runes[:maxRunes])
 }
 
 // ─── AIProvider 接口的剩余方法（不支持）─────────────────────────────────────
