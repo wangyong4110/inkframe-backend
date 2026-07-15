@@ -1006,8 +1006,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	if shot.GenMeta.Prompt != "" {
 		// LLM 生成的 image_prompt 已完整，只在最前端注入项目级画面风格和色调。
+		// 若 image_prompt 自身已经带了这段风格词（LLM 有时会把 ImageStyleHint 原样写进
+		// 开头），此处再无条件 prepend 一次就会导致同一段风格词在 prompt 里出现两次，
+		// 白白占用 800 字符上限的空间——见 promptText 已包含 styleDesc 时跳过注入。
 		var prefix string
-		if styleDesc != "" {
+		if styleDesc != "" && !strings.Contains(promptText, styleDesc) {
 			prefix += styleDesc + ", "
 		}
 		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
