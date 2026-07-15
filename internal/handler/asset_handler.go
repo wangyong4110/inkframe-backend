@@ -20,11 +20,6 @@ type AssetHandler struct {
 	localDir string // 本地存储根目录，默认 "./uploads"
 }
 
-func (h *AssetHandler) WithLocalDir(dir string) *AssetHandler {
-	h.localDir = dir
-	return h
-}
-
 func NewAssetHandler(svc *service.AssetService) *AssetHandler {
 	return &AssetHandler{svc: svc}
 }

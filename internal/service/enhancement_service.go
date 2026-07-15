@@ -187,26 +187,6 @@ func (s *ForeshadowService) AnalyzeFulfillmentOpportunity(novelID uint, currentC
 	return opportunities, nil
 }
 
-// MarkFulfilled 标记伏笔已回收
-func (s *ForeshadowService) MarkFulfilled(novelID uint, foreshadowID uint, fulfillmentChapter *model.Chapter) error {
-	items, err := s.kbRepo.GetByNovel(novelID)
-	if err != nil {
-		return err
-	}
-
-	for _, kb := range items {
-		if kb.ID == foreshadowID {
-			kb.Tags = fmt.Sprintf(`%s, "fulfilled_%d章", "fulfilled_in_%d"`,
-				kb.Tags,
-				fulfillmentChapter.ChapterNo,
-				fulfillmentChapter.ChapterNo,
-			)
-			return s.kbRepo.Update(kb)
-		}
-	}
-
-	return fmt.Errorf("foreshadow not found: %d", foreshadowID)
-}
 
 // ============================================
 // Timeline Service - 时间线管理

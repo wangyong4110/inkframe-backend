@@ -50,7 +50,6 @@ func getNovelChatExtractPrompt() string {
 type NovelHandler struct {
 	novelService          *service.NovelService
 	chapterService        *service.ChapterService
-	foreshadowService     *service.ForeshadowService
 	timelineService       *service.TimelineService
 	qualityControlService *service.QualityControlService
 	taskSvc               *service.TaskService
@@ -63,14 +62,12 @@ type NovelHandler struct {
 func NewNovelHandler(
 	novelService *service.NovelService,
 	chapterService *service.ChapterService,
-	foreshadowService *service.ForeshadowService,
 	timelineService *service.TimelineService,
 	qualityControlService *service.QualityControlService,
 ) *NovelHandler {
 	return &NovelHandler{
 		novelService:          novelService,
 		chapterService:        chapterService,
-		foreshadowService:     foreshadowService,
 		timelineService:       timelineService,
 		qualityControlService: qualityControlService,
 	}
@@ -482,68 +479,6 @@ func (h *NovelHandler) ListOutlineVersions(c *gin.Context) {
 		return
 	}
 	respondOK(c, versions)
-}
-
-// GetForeshadows 获取伏笔列表
-// GET /api/v1/novels/:id/foreshadows
-func (h *NovelHandler) GetForeshadows(c *gin.Context) {
-	novelId, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserID(c)); err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-
-	chapterNo, _ := strconv.Atoi(c.Query("chapter_no"))
-
-	foreshadows, err := h.foreshadowService.CheckForeshadowStatus(uint(novelId), chapterNo)
-	if err != nil {
-		reqLogger(c).Errorf("[NovelHandler] GetForeshadows: novelID=%d err=%v", novelId, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, foreshadows)
-}
-
-// MarkForeshadowFulfilled 标记伏笔已回收
-// POST /api/v1/novels/:id/foreshadows/:foreshadow_id/fulfill
-func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
-	novelId, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserID(c)); err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-
-	foreshadowId, ok := parseID(c, "foreshadow_id")
-	if !ok {
-		return
-	}
-
-	var req struct {
-		ChapterID uint `json:"chapter_id"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	if err := h.foreshadowService.MarkFulfilledByID(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
-		reqLogger(c).Errorf("[NovelHandler] MarkForeshadowFulfilled: novelID=%d foreshadowID=%d err=%v", novelId, foreshadowId, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
 }
 
 // GetTimeline 获取时间线

@@ -664,15 +664,6 @@ func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, pr
 }
 
 // ============================================
-// ForeshadowService adapter methods
-// ============================================
-
-func (s *ForeshadowService) MarkFulfilledByID(novelID, foreshadowID, chapterID uint) error {
-	chapter := &model.Chapter{ID: chapterID}
-	return s.MarkFulfilled(novelID, foreshadowID, chapter)
-}
-
-// ============================================
 // TimelineService adapter methods
 // ============================================
 

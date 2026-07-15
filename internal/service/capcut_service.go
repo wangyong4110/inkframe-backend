@@ -4627,11 +4627,32 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 			}
 		}
 
+		narration, dialogue := shot.Narration, shot.GenMeta.Dialogue
+		// 多段配音（ink_shot_voice_segment）编辑后才是最终实际使用的文案；
+		// 一旦存在分段记录，以分段内容为准（覆盖可能已过期/被清空的 shot.Narration/GenMeta.Dialogue）。
+		if s.segmentRepo != nil {
+			if segs, err := s.segmentRepo.ListByShotID(shot.ID); err == nil && len(segs) > 0 {
+				var narrParts, dialParts []string
+				for _, seg := range segs {
+					if seg.Text == "" {
+						continue
+					}
+					if seg.Speaker == "" {
+						narrParts = append(narrParts, seg.Text)
+					} else {
+						dialParts = append(dialParts, seg.Speaker+"："+seg.Text)
+					}
+				}
+				narration = strings.Join(narrParts, "\n")
+				dialogue = strings.Join(dialParts, "\n")
+			}
+		}
+
 		values := []interface{}{
 			shot.ShotNo,
 			shot.Description,
-			shot.Narration,
-			shot.GenMeta.Dialogue,
+			narration,
+			dialogue,
 			shot.GenMeta.Subtitle,
 			shot.Duration,
 			shot.CamDir.CameraType,

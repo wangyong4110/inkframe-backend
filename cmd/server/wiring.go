@@ -828,7 +828,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
 			services.ChapterService,
-			services.ForeshadowService,
 			services.TimelineService,
 			services.QualityControlService,
 		).WithTaskService(services.TaskService).WithModelService(services.ModelService).
