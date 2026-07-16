@@ -24,25 +24,22 @@ type taskConfig struct {
 	PrimaryModelID uint
 }
 
-// Embed 对文本执行向量嵌入，优先使用 DB 中配置的 embedding 类型提供商，
-// 未配置时回退到 aiManager 默认提供商。调用受 per-provider 并发队列约束。
+// Embed 对文本执行向量嵌入，使用 DB 中配置的 embedding 类型提供商。
+// 调用受 per-provider 并发队列约束。
 func (s *AIService) Embed(ctx context.Context, tenantID uint, text string) ([]float32, error) {
-	if s.providerRepo != nil {
-		if provider, provName, err := s.loadDBProviderByType(tenantID, "embedding"); err == nil && provider != nil {
-			release, acquireErr := s.acquireProviderSlot(ctx, tenantID, provName)
-			if acquireErr != nil {
-				return nil, acquireErr
-			}
-			defer release()
-			return provider.Embed(ctx, text)
-		}
+	if s.providerRepo == nil {
+		return nil, fmt.Errorf("provider repository not configured")
 	}
-	if s.aiManager != nil {
-		if p, err := s.aiManager.GetProvider(""); err == nil {
-			return p.Embed(ctx, text)
-		}
+	provider, provName, err := s.loadDBProviderByType(tenantID, "embedding")
+	if err != nil || provider == nil {
+		return nil, fmt.Errorf("no embedding provider configured")
 	}
-	return nil, fmt.Errorf("no embedding provider configured")
+	release, acquireErr := s.acquireProviderSlot(ctx, tenantID, provName)
+	if acquireErr != nil {
+		return nil, acquireErr
+	}
+	defer release()
+	return provider.Embed(ctx, text)
 }
 
 // Generate 生成内容（使用系统级提供商，tenantID=0）
@@ -58,30 +55,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 // GenerateWithProviderCtx is like GenerateWithProvider but respects an external context.
 // Use this when the caller holds a cancellable context (e.g. async task with cancel support).
 func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, novelID uint, taskType string, prompt string, providerName string, overrides ...StoryboardOverrides) (string, error) {
-	config := taskConfig{Temperature: 0.7, MaxTokens: 0}
-
-	var resolvedModel string
-	var novelGenre string
-	if novelID > 0 && s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.Temperature > 0 {
-				config.Temperature = novel.AIConfig.Temperature
-			}
-			if novel.AIConfig.TopP > 0 {
-				config.TopP = novel.AIConfig.TopP
-			}
-			if novel.AIConfig.MaxTokens > 0 {
-				config.MaxTokens = novel.AIConfig.MaxTokens
-			}
-			if providerName == "" && novel.AIConfig.AIModel != "" {
-				resolvedModel = novel.AIConfig.AIModel
-				if pName := s.resolveProviderFromModel(tenantID, novel.AIConfig.AIModel); pName != "" {
-					providerName = pName
-				}
-			}
-		}
-	}
+	config, providerName, resolvedModel, novelGenre := s.resolveNovelAIConfig(tenantID, novelID, providerName)
 
 	switch taskType {
 	// 结构化提取/审查任务：需要严格 JSON 输出，用低温度
@@ -106,39 +80,9 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	if len(overrides) > 0 {
-		o := overrides[0]
-		if o.MaxTokens > 0 {
-			config.MaxTokens = o.MaxTokens
-		}
-		if o.Temperature > 0 {
-			config.Temperature = o.Temperature
-		}
-		if o.TimeoutSeconds > 0 {
-			config.TimeoutSeconds = o.TimeoutSeconds
-		}
-	}
-
-	// Auto-select from active models when no provider is explicitly requested.
-	if resolvedModel == "" && providerName == "" && s.modelRepo != nil {
-		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
-			selected := selectBalanced(candidates)
-			if selected != nil && selected.Provider != nil {
-				resolvedModel = selected.Name
-				providerName = selected.Provider.Name
-				if config.MaxTokens == 0 && selected.MaxTokens > 0 {
-					config.MaxTokens = selected.MaxTokens
-				}
-			}
-		}
-	}
-
-	// AIModel 级别 MaxTokens（novel.AIConfig.AIModel 路径）
-	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
-		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
-			config.MaxTokens = m.MaxTokens
-		}
-	}
+	// taskType 温度调整必须在 overrides/自动选型之前生效，这样显式 override 才能在最后
+	// 覆盖掉 taskType 的温度下限/上限（与原实现顺序一致：override 优先级最高）。
+	providerName, resolvedModel = s.applyOverridesAndAutoSelect(&config, taskType, tenantID, providerName, resolvedModel, overrides)
 
 	// 任务类型兜底 MaxTokens（仅在配置链全为 0 时生效）。
 	if config.MaxTokens == 0 {
@@ -189,14 +133,16 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	return result, nil
 }
 
-// resolveTaskConfig 提取 GenerateWithProviderCtx 中的配置解析逻辑，供多轮/流式方法复用。
-// 返回已填充好参数的 config、最终 providerName、resolvedModel。
-func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType string, providerName string, overrides []StoryboardOverrides) (taskConfig, string, string) {
-	config := taskConfig{Temperature: 0.7, MaxTokens: 0}
-	resolvedModel := ""
-
+// resolveNovelAIConfig 读取小说级 AI 配置（temperature/topP/maxTokens/model）填入 config；
+// 未显式指定 provider 时，尝试把 novel.AIConfig.AIModel 解析成对应且有凭据的 provider。
+// 由 GenerateWithProviderCtx（额外在此基础上应用 taskType 温度上下限）和 resolveTaskConfig
+// （直接应用 overrides）共用。
+func (s *AIService) resolveNovelAIConfig(tenantID, novelID uint, providerName string) (config taskConfig, resolvedProviderName, resolvedModel, novelGenre string) {
+	config = taskConfig{Temperature: 0.7, MaxTokens: 0}
+	resolvedProviderName = providerName
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			novelGenre = novel.Meta.Genre
 			if novel.AIConfig.Temperature > 0 {
 				config.Temperature = novel.AIConfig.Temperature
 			}
@@ -206,15 +152,25 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 			if novel.AIConfig.MaxTokens > 0 {
 				config.MaxTokens = novel.AIConfig.MaxTokens
 			}
-			if providerName == "" && novel.AIConfig.AIModel != "" {
-				resolvedModel = novel.AIConfig.AIModel
+			if resolvedProviderName == "" && novel.AIConfig.AIModel != "" {
+				// resolvedModel 只有在真正找到该模型对应且有凭据的 provider 时才设置——
+				// 否则会出现"model 名字留着旧值，但 provider 被自动换成别的、完全不
+				// 相关的 provider"的错位请求。找不到时把 resolvedModel 留空，交给下面
+				// "Auto-select from active models" 从该租户已激活的模型里选一个。
 				if pName := s.resolveProviderFromModel(tenantID, novel.AIConfig.AIModel); pName != "" {
-					providerName = pName
+					resolvedModel = novel.AIConfig.AIModel
+					resolvedProviderName = pName
 				}
 			}
 		}
 	}
+	return config, resolvedProviderName, resolvedModel, novelGenre
+}
 
+// applyOverridesAndAutoSelect 应用调用方显式传入的 overrides，然后——若此时仍未锁定
+// provider/model——从该租户已激活的模型里按任务类型自动选一个，最后用解析出的模型的
+// AIModel.MaxTokens 补齐仍为 0 的 config.MaxTokens。
+func (s *AIService) applyOverridesAndAutoSelect(config *taskConfig, taskType string, tenantID uint, providerName, resolvedModel string, overrides []StoryboardOverrides) (string, string) {
 	if len(overrides) > 0 {
 		o := overrides[0]
 		if o.MaxTokens > 0 {
@@ -248,6 +204,14 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 		}
 	}
 
+	return providerName, resolvedModel
+}
+
+// resolveTaskConfig 提取 GenerateWithProviderCtx 中的配置解析逻辑，供多轮/流式方法复用。
+// 返回已填充好参数的 config、最终 providerName、resolvedModel。
+func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType string, providerName string, overrides []StoryboardOverrides) (taskConfig, string, string) {
+	config, providerName, resolvedModel, _ := s.resolveNovelAIConfig(tenantID, novelID, providerName)
+	providerName, resolvedModel = s.applyOverridesAndAutoSelect(&config, taskType, tenantID, providerName, resolvedModel, overrides)
 	return config, providerName, resolvedModel
 }
 
@@ -395,22 +359,15 @@ func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) st
 	return providerName
 }
 
-// GenerateWithVision 使用 Vision AI 分析图像内容
-// 优先使用 anthropic（claude-3），其次 openai（gpt-4o），都失败则用默认 provider
+// GenerateWithVision 使用 Vision AI 分析图像内容。
+// 使用该租户配置的默认 LLM provider（与其他未显式指定 provider 的调用一致），不再硬编码
+// 偏好 anthropic/openai——那样会无视用户在模型管理里为 LLM 任务实际配置的 provider。
+// 若解析出的 provider/模型不支持视觉输入，应让 API 报错，而不是绕开配置去挑一个
+// "看起来支持视觉"的 provider。
 func (s *AIService) GenerateWithVision(tenantID uint, prompt string, imageURLs []string) (string, error) {
-	var provider ai.AIProvider
-	var err error
-	for _, name := range []string{"anthropic", "openai"} {
-		provider, err = s.getTenantProvider(tenantID, name)
-		if err == nil {
-			break
-		}
-	}
+	provider, err := s.getTenantProvider(tenantID, "")
 	if err != nil {
-		provider, err = s.getTenantProvider(tenantID, "")
-		if err != nil {
-			return "", fmt.Errorf("failed to get AI provider for vision: %w", err)
-		}
+		return "", fmt.Errorf("failed to get AI provider for vision: %w", err)
 	}
 
 	req := &ai.GenerateRequest{

@@ -403,6 +403,56 @@ func TestQianwenProvider_AudioGenerate_CosyVoice(t *testing.T) {
 	_ = os.Remove(strings.TrimPrefix(resp.URL, "file://"))
 }
 
+func TestQianwenProvider_AudioGenerate_ExplicitModelNeverOverridden(t *testing.T) {
+	var gotBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fake-mp3-data"))
+	}))
+	defer server.Close()
+
+	// req.Model is explicitly configured by the user and doesn't match the tts/cosyvoice
+	// naming heuristic — it must still be sent as-is, never silently swapped to cosyvoice-v1.
+	p := NewQianwenProvider("key", server.URL, "qwen-plus", 0)
+	resp, err := p.AudioGenerate(context.Background(), &AudioGenerateRequest{
+		Text: "hello", Voice: "longxiaochun", Model: "future-custom-voice-model",
+	})
+	if err != nil {
+		t.Fatalf("AudioGenerate() error: %v", err)
+	}
+	_ = os.Remove(strings.TrimPrefix(resp.URL, "file://"))
+	if gotBody["model"] != "future-custom-voice-model" {
+		t.Errorf("model = %v, want configured request model future-custom-voice-model", gotBody["model"])
+	}
+}
+
+func TestQianwenProvider_AudioGenerate_NonTTSProviderModelErrors(t *testing.T) {
+	// p.model defaults to "qwen-plus" (a text-generation model) when nothing TTS-specific is
+	// configured. This must error, not silently substitute cosyvoice-v1 — never guess a model
+	// the user didn't configure.
+	p := NewQianwenProvider("key", "http://unused.invalid", "", 0)
+	_, err := p.AudioGenerate(context.Background(), &AudioGenerateRequest{Text: "hello", Voice: "longxiaochun"})
+	if err == nil {
+		t.Fatal("expected error when provider's configured model is not a TTS model")
+	}
+	if !strings.Contains(err.Error(), "不是语音合成模型") {
+		t.Errorf("error = %q, want mention of 不是语音合成模型", err.Error())
+	}
+}
+
+func TestQianwenProvider_AudioGenerate_NoModelConfiguredErrors(t *testing.T) {
+	p := NewQianwenProvider("key", "http://unused.invalid", "", 0)
+	p.model = "" // simulate nothing configured at all
+	_, err := p.AudioGenerate(context.Background(), &AudioGenerateRequest{Text: "hello", Voice: "longxiaochun"})
+	if err == nil {
+		t.Fatal("expected error when no model is configured")
+	}
+	if !strings.Contains(err.Error(), "未配置语音模型") {
+		t.Errorf("error = %q, want mention of 未配置语音模型", err.Error())
+	}
+}
+
 // Note: generateQwenTTS (qwen-tts/qwen3-tts models) calls hardcoded DashScope endpoints
 // rather than p.endpoint, so it cannot be exercised against an httptest server without a
 // real DashScope credential. AudioGenerate's model-routing logic (tts vs cosyvoice) is

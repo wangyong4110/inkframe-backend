@@ -176,6 +176,37 @@ func TestAnthropicProvider_Generate_VisionMessage(t *testing.T) {
 	}
 }
 
+func TestAnthropicProvider_GenerateStream_UsesConfiguredModel(t *testing.T) {
+	var gotBody map[string]interface{}
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"type":"message_stop"}`))
+		close(done)
+	}))
+	defer server.Close()
+
+	// p.model is the provider's fallback default; req.Model is what the caller explicitly
+	// configured for this request and must win — GenerateStream must not ignore it like
+	// Generate correctly doesn't.
+	p := NewAnthropicProvider("key", server.URL, "claude-3-haiku-20240307", 0)
+	req := &GenerateRequest{
+		Model:    "claude-3-opus-20240229",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	}
+	ch, err := p.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream() error: %v", err)
+	}
+	for range ch {
+	}
+	<-done
+	if gotBody["model"] != "claude-3-opus-20240229" {
+		t.Errorf("model = %v, want configured request model claude-3-opus-20240229", gotBody["model"])
+	}
+}
+
 func TestAnthropicProvider_Generate_ErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

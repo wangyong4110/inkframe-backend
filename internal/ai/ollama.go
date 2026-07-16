@@ -227,11 +227,11 @@ func (p *OllamaProvider) GenerateStream(ctx context.Context, req *GenerateReques
 	return ch, nil
 }
 
-// Embed 使用本地 embedding 模型生成向量。
-// 若当前默认模型非 embedding 模型，自动尝试 nomic-embed-text。
+// Embed 使用 provider 配置的模型生成向量。
+// p.model 是用户在模型管理里显式配置的模型，必须原样使用；仅当未配置（空）时才回退到 nomic-embed-text。
 func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {
 	model := p.model
-	if !strings.Contains(strings.ToLower(model), "embed") {
+	if model == "" {
 		model = "nomic-embed-text"
 	}
 

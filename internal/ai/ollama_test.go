@@ -234,7 +234,7 @@ func TestOllamaProvider_Embed(t *testing.T) {
 	}
 }
 
-func TestOllamaProvider_Embed_NonEmbedModelFallsBack(t *testing.T) {
+func TestOllamaProvider_Embed_UsesConfiguredModel(t *testing.T) {
 	var gotBody map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
@@ -243,13 +243,35 @@ func TestOllamaProvider_Embed_NonEmbedModelFallsBack(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// p.model is whatever the user explicitly configured in Model Management — must be used
+	// as-is, even if it doesn't look like an embedding model name. Never silently swapped.
 	p := NewOllamaProvider(server.URL, "llama3.2", 0)
 	_, err := p.Embed(context.Background(), "hi")
 	if err != nil {
 		t.Fatalf("Embed() error: %v", err)
 	}
+	if gotBody["model"] != "llama3.2" {
+		t.Errorf("model = %v, want configured model llama3.2 (must not be silently swapped)", gotBody["model"])
+	}
+}
+
+func TestOllamaProvider_Embed_DefaultModelWhenEmpty(t *testing.T) {
+	var gotBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1]}]}`))
+	}))
+	defer server.Close()
+
+	p := NewOllamaProvider(server.URL, "", 0)
+	p.model = "" // simulate nothing configured (constructor defaults empty to llama3.2)
+	_, err := p.Embed(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Embed() error: %v", err)
+	}
 	if gotBody["model"] != "nomic-embed-text" {
-		t.Errorf("model = %v, want fallback nomic-embed-text for non-embed default model", gotBody["model"])
+		t.Errorf("model = %v, want fallback nomic-embed-text when nothing configured", gotBody["model"])
 	}
 }
 

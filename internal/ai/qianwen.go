@@ -555,7 +555,9 @@ func (p *QianwenProvider) wanxImageGenerateCompat(ctx context.Context, start tim
 
 // AudioGenerate 合成语音。
 //
-// 模型选取优先级：req.Model > p.model > "cosyvoice-v1"
+// 模型选取优先级：req.Model > p.model。req.Model 是用户显式配置的值，必须原样使用，
+// 不做命名规则校验、不做降级替换。只有落到 p.model（provider 默认，可能是文本生成模型
+// 如 qwen-plus）时才校验是否像 TTS 模型——校验失败直接报错，绝不静默换成 cosyvoice-v1。
 // 模型路由：
 //   - qwen*tts* 系列 → 调用 DashScope 原生 TTS API（SSE 流式）
 //   - cosyvoice* 及其他 → 调用 OpenAI 兼容 /audio/speech 接口
@@ -564,14 +566,15 @@ func (p *QianwenProvider) wanxImageGenerateCompat(ctx context.Context, start tim
 func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
-	// 模型优先级：请求指定 > 提供商配置 > cosyvoice-v1 兜底
 	model := req.Model
 	if model == "" {
 		model = p.model
-	}
-	// p.model 可能是文本生成模型（如 qwen-plus），此时回退到 TTS 默认
-	if model == "" || (!strings.Contains(strings.ToLower(model), "tts") && !strings.HasPrefix(strings.ToLower(model), "cosyvoice")) {
-		model = "cosyvoice-v1"
+		if model == "" {
+			return nil, fmt.Errorf("千问 TTS: 未配置语音模型，请在模型管理中为该提供商配置一个 TTS 模型（如 cosyvoice-v1 或 qwen-tts）")
+		}
+		if !strings.Contains(strings.ToLower(model), "tts") && !strings.HasPrefix(strings.ToLower(model), "cosyvoice") {
+			return nil, fmt.Errorf("千问 TTS: 提供商配置的模型 %q 不是语音合成模型，请在模型管理中为语音任务单独配置一个 TTS 模型（如 cosyvoice-v1 或 qwen-tts），而不是复用文本生成模型", model)
+		}
 	}
 
 	voice := req.Voice

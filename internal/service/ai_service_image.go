@@ -51,14 +51,6 @@ func (s *AIService) GenerateImage(ctx context.Context, tenantID uint, prompt str
 	}, nil
 }
 
-// knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
-var knownImageCapableProviders = []ai.ImageProviderEntry{
-	{ProviderName: "doubao", Model: "doubao-seedream-4-0-250828", Size: "2048x2048"},
-	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
-	{ProviderName: "openai", Model: "dall-e-3", Size: "1792x1024"},
-	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "2048x2048"},
-}
-
 // activeModelNameFor 从 ink_ai_model 查询指定 provider 在某个模型类型下的第一个激活模型名——
 // 这是用户在模型管理里为该类型实际选择的模型。同一个 provider 可能同时配置多种类型的模型
 // （如 doubao 既是 LLM 也是图像提供商），provider 级别的 effectiveModelName(DefaultModel/
@@ -78,7 +70,6 @@ func (s *AIService) activeModelNameFor(p *model.ModelProvider, tenantID uint, mo
 }
 
 // loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称。
-// 避免 knownImageCapableProviders 硬编码模型与用户实际配置不匹配的问题。
 // volcengine-visual 排在末尾：它需要服务端下载参考图，私有 OSS URL 会导致 403 失败。
 func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
 	if s.providerRepo == nil {
@@ -135,34 +126,12 @@ func (s *AIService) activeImageModelIsSingleIP(tenantID uint) bool {
 }
 
 // loadImageProviderEntries returns the candidate image provider entries to try for
-// tenantID, in priority order. DB is the sole source of truth when providerRepo is
-// wired — this makes deleting/changing a DB provider take effect immediately, without
-// env/config.yaml providers interfering. Falls back to the static aiManager list, then
-// the hardcoded knownImageCapableProviders, only when there is no DB at all.
-// Shared by GenerateImage / GenerateCharacterThreeViewMulti / EditImageWithInstruction —
-// all three try providers in exactly this order.
+// tenantID, in priority order. DB is the sole source of truth (all providers are configured
+// per-tenant via Model Management) — this makes deleting/changing a DB provider take effect
+// immediately. Shared by GenerateImage / GenerateCharacterThreeViewMulti /
+// EditImageWithInstruction — all three try providers in exactly this order.
 func (s *AIService) loadImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
-	if s.providerRepo != nil {
-		return s.loadDBImageProviderEntries(tenantID)
-	}
-	if s.aiManager == nil {
-		return nil
-	}
-	entries := s.aiManager.GetImageProviders()
-	if len(entries) == 0 {
-		entries = knownImageCapableProviders
-	}
-	return entries
-}
-
-// resolveImageProvider returns the AI provider instance for providerName, preferring the
-// tenant's DB-configured credentials when providerRepo is wired, else the static aiManager
-// registration. Shared by the same three callers as loadImageProviderEntries above.
-func (s *AIService) resolveImageProvider(tenantID uint, providerName string) (ai.AIProvider, error) {
-	if s.providerRepo != nil {
-		return s.getTenantProvider(tenantID, providerName)
-	}
-	return s.aiManager.GetProvider(providerName)
+	return s.loadDBImageProviderEntries(tenantID)
 }
 
 // tryImageProviders iterates entries in order, skipping any entry for which skip
@@ -178,18 +147,19 @@ func (s *AIService) tryImageProviders(
 	ctx context.Context, tenantID uint, entries []ai.ImageProviderEntry, refCount int, style string,
 	skip func(ai.ImageProviderEntry) bool,
 	buildReq func(entry ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest,
+	consistencyWeight ...float64,
 ) (resp *ai.ImageResponse, skipped []string, lastErr error) {
 	for _, e := range entries {
 		if skip != nil && skip(e) {
 			skipped = append(skipped, e.ProviderName)
 			continue
 		}
-		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
+		provider, err := s.getTenantProvider(tenantID, e.ProviderName)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		modelName := selectImageModel(e, refCount, style)
+		modelName := selectImageModel(e, refCount, style, consistencyWeight...)
 		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if acquireErr != nil {
 			lastErr = acquireErr
@@ -265,22 +235,13 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	return s.GenerateCharacterThreeViewMulti(ctx, tenantID, providerName, prompt, refs, style, negativePrompt, sizeOverride, 0, consistencyWeight...)
 }
 
-// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图和自定义尺寸。
-// referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
-// size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
-// 若 referenceImages 为空，退化为纯文本生成。
-func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
-	if s.aiManager == nil {
-		return "", fmt.Errorf("AI manager not initialized")
-	}
-
-	weight := 1.0
-	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
-		weight = consistencyWeight[0]
-	}
-	cfgScale := 1.0 + weight*9.0
-
-	// 取第一张图作为 selectImageModel 的存在性判断
+// resolveReferenceImagesForProviders 下载参考图并按需转换为 base64。
+// extFirst/extRefs：转换后的 base64（fetch 失败的图直接丢弃，见函数内注释——不回退到原始
+// URL，因为本服务器都下载不到的图，第三方 AI 服务器同样下载不到）。
+// refURLFirst/refURLSlice：原始可公开访问的 HTTP URL；若发生了 base64 转换，只保留转换
+// 成功的对应项（避免把已过期的签名 URL 传给 Seedream 服务端二次下载导致失败）。
+// 若所有参考图都是 HTTP URL 且候选 provider 都接受 URL（不强制要求 base64），则跳过下载。
+func (s *AIService) resolveReferenceImagesForProviders(ctx context.Context, tenantID uint, providerName string, referenceImages []string) (extFirst string, extRefs []string, refURLFirst string, refURLSlice []string) {
 	firstRef := ""
 	if len(referenceImages) > 0 {
 		firstRef = referenceImages[0]
@@ -314,11 +275,9 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 	}
 	// 提取原始 HTTP URL（同步、零延迟），供支持 URL 的接口优先使用（避免 base64 大小限制）。
 	// 必须在 resolveForExternal 之前完成，因为 buildReq 中 DreamO 优先判断 refURLFirst。
-	refURLFirst := ""
 	if strings.HasPrefix(firstRef, "http://") || strings.HasPrefix(firstRef, "https://") {
 		refURLFirst = firstRef
 	}
-	var refURLSlice []string
 	for _, r := range referenceImages {
 		if strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://") {
 			refURLSlice = append(refURLSlice, r)
@@ -351,7 +310,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 	// 并行下载参考图转 base64（仅在需要时执行；保持原始顺序）。
 	// 旧实现串行下载：N 张图 × 最多 30s/张 = 潜在数分钟阻塞。
 	// 并行后：总耗时 ≈ 最慢的单张图下载时间。
-	extRefs := make([]string, len(referenceImages))
+	extRefs = make([]string, len(referenceImages))
 	if needsBase64 && len(referenceImages) > 0 {
 		var wg sync.WaitGroup
 		for i, r := range referenceImages {
@@ -390,10 +349,50 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 	} else {
 		extRefs = extRefs[:0]
 	}
-	extFirst := ""
 	if len(extRefs) > 0 {
 		extFirst = extRefs[0]
 	}
+	return extFirst, extRefs, refURLFirst, refURLSlice
+}
+
+// resolveNamedImageProvider 在显式指定 providerName 时解析出对应的 entry 和 provider 实例。
+// DB 模式下 DB 是唯一权威来源：查不到就报错，不退化到静态默认模型——那样会让请求偷偷换成
+// 用户在这个租户下从未配置过的模型。纯静态模式（providerRepo 为 nil）走 config.yaml/env
+// 静态注册列表。
+func (s *AIService) resolveNamedImageProvider(tenantID uint, providerName string) (*ai.ImageProviderEntry, ai.AIProvider, error) {
+	var entry *ai.ImageProviderEntry
+	for _, e := range s.loadDBImageProviderEntries(tenantID) {
+		if e.ProviderName == providerName {
+			entry = &e
+			break
+		}
+	}
+	if entry == nil {
+		return nil, nil, fmt.Errorf("image provider %q not configured (or inactive/missing credentials) for this tenant", providerName)
+	}
+	provider, err := s.getTenantProvider(tenantID, providerName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("image provider %q not available: %w", providerName, err)
+	}
+	return entry, provider, nil
+}
+
+// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图和自定义尺寸。
+// referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
+// size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
+// 若 referenceImages 为空，退化为纯文本生成。
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	cfgScale := 1.0 + weight*9.0
+
+	extFirst, extRefs, refURLFirst, refURLSlice := s.resolveReferenceImagesForProviders(ctx, tenantID, providerName, referenceImages)
 
 	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
 		sz := size // 优先使用调用方传入的尺寸（基于 AspectRatio+QualityTier 计算）
@@ -422,46 +421,9 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 	}
 
 	if providerName != "" {
-		var entry *ai.ImageProviderEntry
-		var provider ai.AIProvider
-		var err error
-		if s.providerRepo != nil {
-			// DB 是唯一权威来源：显式指定的 provider 在 DB 里没查到（未配置/未激活/缺凭据/
-			// 不是 image 类型），直接报错，不能退化去用 knownImageCapableProviders/aiManager
-			// 的硬编码默认模型——那样会让请求偷偷换成用户根本没在这个租户下配置过的模型。
-			for _, e := range s.loadDBImageProviderEntries(tenantID) {
-				if e.ProviderName == providerName {
-					entry = &e
-					break
-				}
-			}
-			if entry == nil {
-				return "", fmt.Errorf("image provider %q not configured (or inactive/missing credentials) for this tenant", providerName)
-			}
-			provider, err = s.getTenantProvider(tenantID, providerName)
-		} else {
-			// 纯静态模式（无 DB，即 providerRepo 为 nil）：走 config.yaml/env 静态注册列表。
-			for _, e := range knownImageCapableProviders {
-				if e.ProviderName == providerName {
-					entry = &e
-					break
-				}
-			}
-			if entry == nil {
-				for _, e := range s.aiManager.GetImageProviders() {
-					if e.ProviderName == providerName {
-						entry = &e
-						break
-					}
-				}
-			}
-			if entry == nil {
-				return "", fmt.Errorf("unknown image provider: %s", providerName)
-			}
-			provider, err = s.aiManager.GetProvider(providerName)
-		}
+		entry, provider, err := s.resolveNamedImageProvider(tenantID, providerName)
 		if err != nil {
-			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+			return "", err
 		}
 		modelName := selectImageModel(*entry, len(referenceImages), style, weight)
 		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
@@ -483,16 +445,8 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 	if len(entries) == 0 {
 		return "", fmt.Errorf("no image providers configured")
 	}
-
-	var lastErr error
-	for _, e := range entries {
-		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		modelName := selectImageModel(e, len(referenceImages), style, weight)
-		{
+	resp, _, err := s.tryImageProviders(ctx, tenantID, entries, len(referenceImages), style, nil,
+		func(e ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest {
 			// 日志：打印 extRefs 的类型分布（base64/url/unknown），方便确认参考图是否被正确预处理
 			extRefTypes := make([]string, len(extRefs))
 			for i, r := range extRefs {
@@ -505,29 +459,14 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 				}
 			}
 			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, modelName, len(referenceImages), len(extRefs), extRefTypes)
-		}
-		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
-		if acquireErr != nil {
-			// 槽位耗尽是具体模型的临时限流，不代表这条 fallback 链已经走到头——换下一个 provider
-			// 再试（与 tryImageProviders/GenerateImage/EditImageWithInstruction 的处理方式保持一致）。
-			lastErr = acquireErr
-			continue
-		}
-		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, e.Size, e.ProviderName))
-		release()
-		if err != nil {
-			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
-			lastErr = err
-			continue
-		}
-		if resp.Error != "" {
-			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
-			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
-			continue
-		}
-		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+			return buildReq(modelName, e.Size, e.ProviderName)
+		},
+		weight,
+	)
+	if err != nil {
+		return "", fmt.Errorf("no image provider available: %w", err)
 	}
-	return "", fmt.Errorf("no image provider available: %w", lastErr)
+	return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
 }
 
 // imageStorageHintKey is the context key for ImageStorageHint.

@@ -11,16 +11,12 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
-// GetDefaultProviderName 返回当前默认 provider 名称
+// GetDefaultProviderName 返回当前默认 provider 名称。
+// aiManager 是一个空注册表——所有 provider 均按租户从 DB 加载（见 cmd/server/providers.go
+// initAIModule 的说明"no static registration"），从未调用过 RegisterProvider，因此
+// aiManager.GetProvider(...) 恒定失败，这里恒定返回 "unknown"。
 func (s *AIService) GetDefaultProviderName() string {
-	if s.aiManager == nil {
-		return "unknown"
-	}
-	p, err := s.aiManager.GetProvider("")
-	if err != nil {
-		return "unknown"
-	}
-	return p.GetName()
+	return "unknown"
 }
 
 // getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）。
@@ -28,7 +24,7 @@ func (s *AIService) GetDefaultProviderName() string {
 // 根据类型选择正确的底层构造器。
 func (s *AIService) getTenantProvider(tenantID uint, providerName string, targetType ...string) (ai.AIProvider, error) {
 	if s.providerRepo == nil {
-		return s.aiManager.GetProvider(providerName)
+		return nil, fmt.Errorf("provider repository not configured")
 	}
 
 	tType := ""
@@ -58,7 +54,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 		providers, err = s.providerRepo.ListByTenant(tenantID)
 	}
 	if err != nil {
-		return s.aiManager.GetProvider(providerName)
+		return nil, fmt.Errorf("failed to list providers: %w", err)
 	}
 
 	// 优先租户私有，其次系统级（优先选择有 credentials 的 provider）
@@ -98,22 +94,16 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 	}
 
 	if matched == nil {
-		// DB 中无配置，降级到内存 aiManager
-		p, err := s.aiManager.GetProvider(providerName)
-		if err != nil {
-			// 区分租户无配置与系统无配置，给出有指导意义的错误信息
-			if tenantID > 0 {
-				return nil, fmt.Errorf("tenant %d has no AI providers configured for task type %q; please add one in Model Management", tenantID, providerName)
-			}
-			return nil, fmt.Errorf("no AI provider available for %q: %w", providerName, err)
+		// 区分租户无配置与系统无配置，给出有指导意义的错误信息
+		if tenantID > 0 {
+			return nil, fmt.Errorf("tenant %d has no AI providers configured for task type %q; please add one in Model Management", tenantID, providerName)
 		}
-		return p, nil
+		return nil, fmt.Errorf("no AI provider configured for %q; please add one in Model Management", providerName)
 	}
 
 	// Validate credentials before constructing the provider.
 	if !providerHasCredentials(matched) {
-		logger.Printf("getTenantProvider: DB provider %q missing credentials, falling back to in-memory manager", matched.Name)
-		return s.aiManager.GetProvider(providerName)
+		return nil, fmt.Errorf("provider %q has no credentials configured", matched.Name)
 	}
 
 	// Decrypt stored credentials (AES-GCM; plaintext values pass through unchanged).
@@ -229,8 +219,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 				logger.Printf("getTenantProvider: provider %q type=video — use GetTenantVideoProvider instead", matched.Name)
 				return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 			default:
-				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, klingType)
-				return s.aiManager.GetProvider(providerName)
+				return nil, fmt.Errorf("provider %q (klingai endpoint): cannot determine service type (sfx/voice/image/video) — check the associated AIModel's type", matched.Name)
 			}
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
@@ -249,8 +238,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 			logger.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
 			provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		default:
-			logger.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
-			return s.aiManager.GetProvider(providerName)
+			return nil, fmt.Errorf("provider %q: cannot determine provider type (unrecognized name and no endpoint configured)", matched.Name)
 		}
 	}
 

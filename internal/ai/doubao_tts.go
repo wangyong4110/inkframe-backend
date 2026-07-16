@@ -146,7 +146,7 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	if req.Model != "" {
 		resourceID = req.Model
 	}
-	if resourceID == doubaoSpeechDefaultResourceID && strings.HasSuffix(speaker, "_tob") {
+	if req.Model == "" && resourceID == doubaoSpeechDefaultResourceID && strings.HasSuffix(speaker, "_tob") {
 		resourceID = "doubao-character-tts"
 	}
 
