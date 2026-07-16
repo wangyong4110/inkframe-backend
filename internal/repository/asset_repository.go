@@ -132,8 +132,11 @@ func (r *AssetRepository) Search(p AssetSearchParams) ([]*model.Asset, int64, er
 		q = q.Where("license = ?", p.License)
 	}
 	if p.Q != "" {
+		// title 走前缀/子串匹配（无法走索引，但 title 通常较短）；description 走 FULLTEXT
+		// 自然语言检索（idx_asset_description_ft，见 cmd/server/schema.go），比子串 LIKE
+		// 更快也更贴合"关键词/描述短语匹配"的场景（如 BGM/SFX 按情绪词自动匹配素材）。
 		like := "%" + p.Q + "%"
-		q = q.Where("title LIKE ? OR description LIKE ?", like, like)
+		q = q.Where("title LIKE ? OR MATCH(description) AGAINST(? IN NATURAL LANGUAGE MODE)", like, p.Q)
 	}
 	if p.DominantColor != "" {
 		q = q.Where("dominant_color = ?", p.DominantColor)

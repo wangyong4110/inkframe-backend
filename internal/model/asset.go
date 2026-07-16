@@ -30,8 +30,8 @@ type AssetMediaMeta struct {
 	AspectRatio  string  `json:"aspect_ratio"`
 	ColorPalette string  `json:"color_palette"`
 	Metadata     string  `json:"metadata"`
-	Description  string  `json:"description"`
 	// DominantColor 已迁移至 Asset.DominantColor 独立列（支持 WHERE 检索）
+	// Description 已迁移至 Asset.Description 独立列（支持 FULLTEXT 检索，见 2026-07-16-v1）
 }
 
 // AssetQualityMeta 质量与来源元数据（JSON存储）
@@ -51,14 +51,15 @@ type AssetQualityMeta struct {
 // scope='personal': belongs exclusively to creator_id.
 // scope='public': platform-shared (crawled assets use creator_id=0).
 type Asset struct {
-	ID        uint   `json:"id" gorm:"primaryKey"`
-	Scope     string `json:"scope" gorm:"size:20;default:'personal';index"`
-	TenantID  uint   `json:"tenant_id" gorm:"index"`
-	CreatorID uint   `json:"creator_id" gorm:"index"`
-	Title     string `json:"title" gorm:"size:500;index"`
-	Type      string `json:"type" gorm:"size:20;index"`     // image|video|audio|text
-	SubType   string `json:"sub_type" gorm:"size:30;index"` // shot|character_ref|scene|bgm|sfx|voice|template|stock|cutout
-	Source    string `json:"source" gorm:"size:20;index"`   // platform|crawled|uploaded
+	ID          uint   `json:"id" gorm:"primaryKey"`
+	Scope       string `json:"scope" gorm:"size:20;default:'personal';index"`
+	TenantID    uint   `json:"tenant_id" gorm:"index"`
+	CreatorID   uint   `json:"creator_id" gorm:"index"`
+	Title       string `json:"title" gorm:"size:500;index"`
+	Description string `json:"description" gorm:"type:text"` // FULLTEXT 索引见 cmd/server/schema.go（2026-07-16-v1）
+	Type        string `json:"type" gorm:"size:20;index"`     // image|video|audio|text
+	SubType     string `json:"sub_type" gorm:"size:30;index"` // shot|character_ref|scene|bgm|sfx|voice|template|stock|cutout
+	Source      string `json:"source" gorm:"size:20;index"`   // platform|crawled|uploaded
 
 	// Copyright
 	ExternalID string `json:"external_id" gorm:"size:200;index:idx_external_id"`

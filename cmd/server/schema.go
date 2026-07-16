@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-14-v1"
+const schemaVersion = "2026-07-16-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -91,6 +91,15 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 修正 deepseek-v4 → deepseek-v4-pro（API 已更名，旧记录需要同步）
 	db.Exec("UPDATE ink_ai_model SET model_id = 'deepseek-v4-pro', name = 'DeepSeek V4 Pro' WHERE model_id = 'deepseek-v4'")
+
+	// ink_asset.description 从 JSON blob（asset_media_meta.description）提升为独立列，
+	// 支持 FULLTEXT 检索，不再需要每次查询都做 JSON_EXTRACT + 全表扫描（2026-07-16-v1）。
+	db.Exec("ALTER TABLE ink_asset ADD COLUMN IF NOT EXISTS description TEXT")
+	// 回填旧数据：只在新列为空、且 JSON 里确实有值时才写入，避免覆盖已经迁移过的记录。
+	db.Exec(`UPDATE ink_asset SET description = JSON_UNQUOTE(JSON_EXTRACT(asset_media_meta, '$.description'))
+		WHERE (description IS NULL OR description = '')
+		AND JSON_EXTRACT(asset_media_meta, '$.description') IS NOT NULL`)
+	ensureAssetDescriptionFulltextIndex(db)
 
 	// 补全缺失索引（幂等，已存在则跳过）
 	ensureCriticalIndexes(db)
@@ -202,5 +211,33 @@ func ensureCriticalIndexes(db *gorm.DB) {
 		} else {
 			logger.Infof("ensureCriticalIndexes: added index %s.%s", idx.table, idx.name)
 		}
+	}
+}
+
+// ensureAssetDescriptionFulltextIndex 幂等地给 ink_asset.description 加 FULLTEXT 索引。
+// 单独处理（而非塞进 ensureCriticalIndexes 的 idxDef 表）：FULLTEXT 是第三种索引类型，
+// idxDef 目前只用 unique bool 区分 INDEX/UNIQUE INDEX，加个字段就要改动全部现有条目。
+func ensureAssetDescriptionFulltextIndex(db *gorm.DB) {
+	const table, name = "ink_asset", "idx_asset_description_ft"
+	var tblCnt int64
+	db.Raw(
+		"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+		table,
+	).Scan(&tblCnt)
+	if tblCnt == 0 {
+		return
+	}
+	var cnt int64
+	db.Raw(
+		"SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?",
+		table, name,
+	).Scan(&cnt)
+	if cnt > 0 {
+		return
+	}
+	if err := db.Exec("ALTER TABLE `" + table + "` ADD FULLTEXT INDEX `" + name + "` (description)").Error; err != nil {
+		logger.Errorf("ensureAssetDescriptionFulltextIndex: %v", err)
+	} else {
+		logger.Infof("ensureAssetDescriptionFulltextIndex: added fulltext index %s.%s", table, name)
 	}
 }

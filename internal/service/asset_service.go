@@ -2033,15 +2033,15 @@ func (s *AssetService) crawlNASA(ctx context.Context, job *model.CrawlJob) (impo
 			}
 
 			asset := &model.Asset{
-				Scope:      model.AssetScopePublic,
-				Title:      d.Title,
-				Type:       assetType,
-				Source:     "crawled",
-				ExternalID: externalID,
-				License:    "PD",
-				Status:     model.AssetStatusActive,
+				Scope:       model.AssetScopePublic,
+				Title:       d.Title,
+				Description: d.Description,
+				Type:        assetType,
+				Source:      "crawled",
+				ExternalID:  externalID,
+				License:     "PD",
+				Status:      model.AssetStatusActive,
 				MediaMeta: model.AssetMediaMeta{
-					Description:  d.Description,
 					StorageURL:   storageURL,
 					ThumbnailURL: thumbURL,
 					SourceURL:    fmt.Sprintf("https://images.nasa.gov/details/%s", url.PathEscape(d.NasaID)),
