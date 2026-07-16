@@ -29,14 +29,13 @@ type KlingTTSProvider struct {
 }
 
 const (
-	klingTTSDefaultEndpoint  = "https://api-beijing.klingai.com"
-	klingTTSPollInterval     = 2 * time.Second
-	klingTTSMaxWait          = 5 * time.Minute
-	klingTTSDefaultVoiceID   = "zh_female_story"
-	klingTTSDefaultLanguage  = "zh"
-	klingTTSMinSpeed         = 0.8
-	klingTTSMaxSpeed         = 2.0
-	klingTTSDefaultSpeed     = 1.0
+	klingTTSDefaultEndpoint = "https://api-beijing.klingai.com"
+	klingTTSPollInterval    = 2 * time.Second
+	klingTTSMaxWait         = 5 * time.Minute
+	klingTTSDefaultLanguage = "zh"
+	klingTTSMinSpeed        = 0.8
+	klingTTSMaxSpeed        = 2.0
+	klingTTSDefaultSpeed    = 1.0
 )
 
 // klingTTSTaskResult 查询结果中的 task_result
@@ -114,7 +113,7 @@ func (p *KlingTTSProvider) ImageGenerate(ctx context.Context, req *ImageGenerate
 // AudioGenerate 提交语音合成任务并同步等待完成，返回音频 URL。
 //
 // req.Text:     待合成文本（最多 1000 字符）
-// req.Voice:    音色 ID（如 "zh_female_story"），留空使用默认
+// req.Voice:    音色 ID（如 "zh_female_story"），必填——留空会报错
 // req.Language: 语言（"zh" 或 "en"），留空默认 "zh"
 // req.Speed:    语速（0.8~2.0），留空/0 默认 1.0
 func (p *KlingTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {

@@ -2751,6 +2751,21 @@ func (s *CharacterService) GenerateChapterImages(
 			defer wg.Done()
 			charFailed := false
 
+			// 已有面部参考图 + 三视图时跳过：无需再花一次 LLM 提取 + 两次图片生成的成本去
+			// 重新生成用户已经拥有的图片。
+			if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil &&
+				existingLook.Portrait != "" && existingLook.ThreeViewSheet != "" {
+				mu.Lock()
+				succeeded++
+				done++
+				cur := done
+				mu.Unlock()
+				if progressFn != nil && total > 0 {
+					progressFn(cur * 99 / total)
+				}
+				return
+			}
+
 			baseDesc := char.Description
 			promptText, renderErr := renderPrompt("chapter_character_appearance", map[string]interface{}{
 				"CharacterName":        char.Name,

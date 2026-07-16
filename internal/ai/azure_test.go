@@ -257,26 +257,6 @@ func TestAzureProvider_Generate_NoChoices(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_Generate_MaxTokensCap(t *testing.T) {
-	var gotBody map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
-	}))
-	defer server.Close()
-
-	p := NewAzureProvider("key", server.URL, "dep", "", 0)
-	p.maxTokensCap = 100
-	_, err := p.Generate(context.Background(), &GenerateRequest{Messages: []ChatMessage{{Role: "user", Content: "hi"}}, MaxTokens: 500})
-	if err != nil {
-		t.Fatalf("Generate() error: %v", err)
-	}
-	if gotBody["max_tokens"] != float64(100) {
-		t.Errorf("max_tokens = %v, want capped to 100", gotBody["max_tokens"])
-	}
-}
-
 func TestAzureProvider_GenerateStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}

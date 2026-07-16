@@ -215,11 +215,6 @@ func Test_doubaoResourceErr(t *testing.T) {
 	if err.Error() != "resource mismatch" {
 		t.Errorf("Error() = %q, want %q", err.Error(), "resource mismatch")
 	}
-	// doubaoResourceMismatchErr is a type alias — verify assignability.
-	var alias *doubaoResourceMismatchErr = err
-	if alias.Error() != "resource mismatch" {
-		t.Errorf("alias Error() = %q, want %q", alias.Error(), "resource mismatch")
-	}
 }
 
 // ── DoubaoSpeechV1Provider ──

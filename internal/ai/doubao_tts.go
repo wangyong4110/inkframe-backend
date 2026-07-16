@@ -123,9 +123,6 @@ type doubaoResourceErr struct{ msg string }
 
 func (e *doubaoResourceErr) Error() string { return e.msg }
 
-// doubaoResourceMismatchErr 保持向后兼容（别名）
-type doubaoResourceMismatchErr = doubaoResourceErr
-
 // doubaoSpeechResourceFallbacks 当 resource ID 与 speaker 不匹配时的备选顺序。
 var doubaoSpeechResourceFallbacks = []string{
 	doubaoSpeechDefaultResourceID, // seed-tts-2.0
@@ -306,7 +303,7 @@ func (p *DoubaoSpeechProvider) buildDoubaoSpeechBody(req *AudioGenerateRequest, 
 }
 
 // doDoubaoSpeechRequest 执行一次 TTS HTTP 请求并收集流式音频数据。
-// 当 API 返回 55000000 时返回 *doubaoResourceMismatchErr 以便调用方重试。
+// 当 API 返回 55000000 时返回 *doubaoResourceErr 以便调用方重试。
 func (p *DoubaoSpeechProvider) doDoubaoSpeechRequest(ctx context.Context, body []byte, resourceID string) (audioData []byte, totalTextWords int, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", doubaoSpeechTTSEndpoint, bytes.NewReader(body))
 	if err != nil {

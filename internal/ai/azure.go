@@ -25,7 +25,6 @@ type AzureProvider struct {
 	defaultDeployment string // optional; used when req.Model is empty
 	apiVersion        string
 	client            *http.Client
-	maxTokensCap      int // upper bound for max_tokens; 0 = no cap
 }
 
 // NewAzureProvider creates an Azure OpenAI provider.
@@ -60,7 +59,6 @@ func NewAzureProvider(apiKey, endpoint, defaultDeployment, apiVersion string, ti
 		defaultDeployment: defaultDeployment,
 		apiVersion:        apiVersion,
 		client:            &http.Client{Timeout: timeout},
-		// maxTokensCap defaults to 0 (no cap); model management MaxTokens is the authoritative limit
 	}
 }
 
@@ -283,11 +281,7 @@ func (p *AzureProvider) buildChatRequest(req *GenerateRequest) map[string]interf
 		"messages": messages,
 	}
 	if req.MaxTokens > 0 {
-		tok := req.MaxTokens
-		if p.maxTokensCap > 0 && tok > p.maxTokensCap {
-			tok = p.maxTokensCap
-		}
-		payload["max_tokens"] = tok
+		payload["max_tokens"] = req.MaxTokens
 	}
 	if req.Temperature > 0 {
 		payload["temperature"] = req.Temperature

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/crypto"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -389,7 +390,16 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		vp := ai.NewVolcengineVisualProvider(provider.APIKey, provider.APISecretKey)
+		apiKey, apiSecretKey := provider.APIKey, provider.APISecretKey
+		if s.aiService != nil {
+			if k, err := crypto.Decrypt(apiKey, s.aiService.encKey); err == nil {
+				apiKey = strings.TrimSpace(k)
+			}
+			if k, err := crypto.Decrypt(apiSecretKey, s.aiService.encKey); err == nil {
+				apiSecretKey = strings.TrimSpace(k)
+			}
+		}
+		vp := ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
 		if testErr = vp.HealthCheck(ctx); testErr != nil {
 			dbStatus = "down"
 		}
@@ -443,7 +453,16 @@ func (s *ModelService) RunHealthChecks() error {
 func (s *ModelService) checkProviderHealth(ctx context.Context, p *model.ModelProvider) (string, error) {
 	// AK/SK 双密钥的图像/视频提供商：用 VolcengineVisualProvider.HealthCheck（轻量级 GET 验证）
 	if p.Name == ai.ProviderNameVolcengineVisual || p.Name == ai.ProviderNameJimengVideo {
-		vp := ai.NewVolcengineVisualProvider(p.APIKey, p.APISecretKey)
+		apiKey, apiSecretKey := p.APIKey, p.APISecretKey
+		if s.aiService != nil {
+			if k, err := crypto.Decrypt(apiKey, s.aiService.encKey); err == nil {
+				apiKey = strings.TrimSpace(k)
+			}
+			if k, err := crypto.Decrypt(apiSecretKey, s.aiService.encKey); err == nil {
+				apiSecretKey = strings.TrimSpace(k)
+			}
+		}
+		vp := ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
 		if err := vp.HealthCheck(ctx); err != nil {
 			return "down", err
 		}
