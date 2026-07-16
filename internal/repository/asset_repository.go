@@ -106,15 +106,22 @@ func (r *AssetRepository) Search(p AssetSearchParams) ([]*model.Asset, int64, er
 	case model.AssetScopePublic:
 		q = q.Where("scope = ?", model.AssetScopePublic)
 	case model.AssetScopePersonal:
-		q = q.Where("scope = ? AND creator_id = ?", model.AssetScopePersonal, p.CallerID)
+		// "个人素材库" = 我创建的所有素材，不按当前 scope 筛——共享审核通过后 scope 会从
+		// personal 变成 public（见 AssetService.autoReviewShare），但素材还是我创建的，
+		// 理应继续能在这里看到并管理，不能因为共享成功了就从个人库里消失。
+		q = q.Where("creator_id = ?", p.CallerID)
 	default: // "all" or empty
 		q = q.Where("scope = ? OR (scope = ? AND creator_id = ?)",
 			model.AssetScopePublic, model.AssetScopePersonal, p.CallerID)
 	}
 
-	// Status filter
+	// Status filter："个人素材库"要能看到审核中/已拒绝/已撤回的素材（前端 statusBadge
+	// 已经为这几种状态准备了展示样式），只排除回收站（trash，删除后走单独的回收站视图）；
+	// 其余场景（公共库/全部）维持只看 active，不展示别人未通过审核或已撤回的素材。
 	if p.Status != "" {
 		q = q.Where("status = ?", p.Status)
+	} else if p.Scope == model.AssetScopePersonal {
+		q = q.Where("status != ?", model.AssetStatusTrash)
 	} else {
 		q = q.Where("status = ?", model.AssetStatusActive)
 	}
