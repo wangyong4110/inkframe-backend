@@ -10,7 +10,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
-// ItemHandler 物品处理器
+// ItemHandler 道具处理器
 type ItemHandler struct {
 	itemService *service.ItemService
 	chapterSvc  *service.ChapterService
@@ -76,7 +76,7 @@ func (h *ItemHandler) CreateItem(c *gin.Context) {
 
 // GenerateItemInfo POST /novels/:id/items/ai-generate
 // body: {name(required), hint(optional，作者已填写的初步描述)}
-// 根据物品名称 AI 生成完整档案，仅返回结果供"添加物品"弹窗一键填充，不落库。
+// 根据道具名称 AI 生成完整档案，仅返回结果供"添加道具"弹窗一键填充，不落库。
 func (h *ItemHandler) GenerateItemInfo(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
@@ -100,7 +100,7 @@ func (h *ItemHandler) GenerateItemInfo(c *gin.Context) {
 	respondOK(c, gin.H{"description": description, "visual_prompt": visualPrompt})
 }
 
-// checkItemTenant 校验物品归属当前租户（通过关联小说）。
+// checkItemTenant 校验道具归属当前租户（通过关联小说）。
 // 返回 false 时已写入错误响应。
 func (h *ItemHandler) checkItemTenant(c *gin.Context, novelID uint) bool {
 	if h.novelSvc == nil {
@@ -177,7 +177,7 @@ func (h *ItemHandler) DeleteItem(c *gin.Context) {
 	respondOK(c, gin.H{"message": "item deleted"})
 }
 
-// BatchDeleteItems 批量删除物品
+// BatchDeleteItems 批量删除道具
 // DELETE /api/v1/novels/:id/items
 func (h *ItemHandler) BatchDeleteItems(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
@@ -200,7 +200,7 @@ func (h *ItemHandler) BatchDeleteItems(c *gin.Context) {
 	respondOK(c, gin.H{"deleted": len(req.IDs)})
 }
 
-// AIExtractFromNovel AI从章节内容提取物品（异步任务）
+// AIExtractFromNovel AI从章节内容提取道具（异步任务）
 // POST /api/v1/novels/:id/items/ai-extract
 func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
@@ -212,17 +212,17 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 	if !h.checkItemTenant(c, uint(novelID)) {
 		return
 	}
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeItemExtract, "AI提取物品", "novel", uint(novelID))
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeItemExtract, "AI提取道具", "novel", uint(novelID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeItemExtract 的
 	// 执行函数在 cmd/server/task_resume.go，只依赖 t.TenantID/t.EntityID，无需额外 SetParams）。
-	respondAccepted(c, task.TaskID, "物品提取任务已提交")
+	respondAccepted(c, task.TaskID, "道具提取任务已提交")
 }
 
-// BatchGenerateImages 批量为小说所有物品生成图像（异步任务）
+// BatchGenerateImages 批量为小说所有道具生成图像（异步任务）
 // POST /api/v1/novels/:id/items/batch-images
 func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
@@ -238,7 +238,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_batch" 分支反序列化下面存的字段
 	// 调用同一个 h.itemService.BatchGenerateImages）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "批量生成物品图片", "novel", uint(novelID), map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "批量生成道具图片", "novel", uint(novelID), map[string]interface{}{
 		"source":   "item_batch",
 		"provider": req.Provider,
 		"force":    req.Force,
@@ -247,10 +247,10 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondAccepted(c, task.TaskID, "物品图片批量生成任务已提交")
+	respondAccepted(c, task.TaskID, "道具图片批量生成任务已提交")
 }
 
-// GenerateItemImage 生成物品图像（异步任务）
+// GenerateItemImage 生成道具图像（异步任务）
 // POST /api/v1/items/:id/images
 // 立即返回 202 + task_id，轮询 GET /items/:id/images/:task_id 获取结果
 func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
@@ -272,7 +272,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_single" 分支反序列化下面存的字段
 	// 调用同一个 h.itemService.GenerateItemImage）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "物品图像生成", "item", itemID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "道具图像生成", "item", itemID, map[string]interface{}{
 		"source":   "item_single",
 		"ref_url":  refURL,
 		"provider": provider,
@@ -284,7 +284,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "图像生成任务已提交")
 }
 
-// GenerateChapterItemImages 仅为本章绑定的选定物品生成图像（异步任务），不影响该小说的其他物品。
+// GenerateChapterItemImages 仅为本章绑定的选定道具生成图像（异步任务），不影响该小说的其他道具。
 // POST /api/v1/novels/:id/chapters/:chapter_no/items/generate-images
 func (h *ItemHandler) GenerateChapterItemImages(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
@@ -320,7 +320,7 @@ func (h *ItemHandler) GenerateChapterItemImages(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_chapter" 分支反序列化下面存的
 	// novel_id/item_ids/provider 调用同一个 h.itemService.GenerateChapterImages）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "章节物品图片生成", "chapter", chapter.ID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "章节道具图片生成", "chapter", chapter.ID, map[string]interface{}{
 		"source":   "item_chapter",
 		"novel_id": novelID,
 		"item_ids": req.ItemIDs,
@@ -330,7 +330,7 @@ func (h *ItemHandler) GenerateChapterItemImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondAccepted(c, task.TaskID, "物品图片生成任务已提交")
+	respondAccepted(c, task.TaskID, "道具图片生成任务已提交")
 }
 
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items
@@ -445,7 +445,7 @@ func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
 	respondOK(c, gin.H{"items": items, "count": len(items)})
 }
 
-// UploadItemImage 上传物品图片到 OSS，保存 URL 到 item.ImageURL
+// UploadItemImage 上传道具图片到 OSS，保存 URL 到 item.ImageURL
 // POST /api/v1/items/:id/image/upload
 func (h *ItemHandler) UploadItemImage(c *gin.Context) {
 	if h.storageSvc == nil {
@@ -468,7 +468,7 @@ func (h *ItemHandler) UploadItemImage(c *gin.Context) {
 	respondOK(c, gin.H{"url": imgURL, "item": item})
 }
 
-// UploadItemReference 上传物品参考图到 OSS，保存 URL 到 item.ReferenceImageURL
+// UploadItemReference 上传道具参考图到 OSS，保存 URL 到 item.ReferenceImageURL
 // POST /api/v1/items/:id/reference/upload
 func (h *ItemHandler) UploadItemReference(c *gin.Context) {
 	if h.storageSvc == nil {

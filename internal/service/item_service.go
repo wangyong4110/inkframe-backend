@@ -15,7 +15,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
-// EffectiveItem 有效物品（合并项目级和章节级覆盖）
+// EffectiveItem 有效道具（合并项目级和章节级覆盖）
 type EffectiveItem struct {
 	model.Item
 	ChapterOverride   *model.ChapterItem `json:"chapter_override,omitempty"`
@@ -23,7 +23,7 @@ type EffectiveItem struct {
 	EffectiveOwner    string             `json:"effective_owner"`
 }
 
-// ItemService 物品服务
+// ItemService 道具服务
 type ItemService struct {
 	itemRepo        *repository.ItemRepository
 	chapterItemRepo *repository.ChapterItemRepository
@@ -52,15 +52,15 @@ func (s *ItemService) WithNovelRepo(r *repository.NovelRepository) *ItemService 
 	return s
 }
 
-// CreateItem 创建项目级物品。
-// novel_id+name 有唯一索引（uniq_item_novel_name），而删除物品是软删除（deleted_at 置位，
+// CreateItem 创建项目级道具。
+// novel_id+name 有唯一索引（uniq_item_novel_name），而删除道具是软删除（deleted_at 置位，
 // 行仍占用这个唯一索引）——如果不检查就直接 Create，删除后用同名重新创建会撞唯一索引报
 // MySQL 1062 错误。这里先查一次（含软删除记录）：命中软删除记录就恢复并用新请求覆盖字段，
 // 命中活跃记录则返回明确的重名错误，而不是让原始 SQL 错误往上抛。
 func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*model.Item, error) {
 	if existing, err := s.itemRepo.FindByNovelAndNameUnscoped(novelID, req.Name); err == nil && existing != nil {
 		if !existing.DeletedAt.Valid {
-			return nil, fmt.Errorf("物品「%s」已存在", req.Name)
+			return nil, fmt.Errorf("道具「%s」已存在", req.Name)
 		}
 		if err := s.itemRepo.RestoreByID(existing.ID); err != nil {
 			return nil, fmt.Errorf("restore soft-deleted item: %w", err)
@@ -74,8 +74,8 @@ func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*m
 		if existing.Status == "" {
 			existing.Status = "active"
 		}
-		// 清空旧的图片字段：用户是在创建一个"新"物品（只是复用了同名的旧行），不应该带着
-		// 已删除物品残留的参考图/生成图，否则画面和新填的描述对不上。
+		// 清空旧的图片字段：用户是在创建一个"新"道具（只是复用了同名的旧行），不应该带着
+		// 已删除道具残留的参考图/生成图，否则画面和新填的描述对不上。
 		existing.ImageURL = ""
 		existing.ReferenceImageURL = ""
 		return existing, s.itemRepo.Update(existing)
@@ -97,22 +97,22 @@ func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*m
 	return item, s.itemRepo.Create(item)
 }
 
-// GetItem 获取物品详情
+// GetItem 获取道具详情
 func (s *ItemService) GetItem(id uint) (*model.Item, error) {
 	return s.itemRepo.GetByID(id)
 }
 
-// ListItems 列出项目下所有物品
+// ListItems 列出项目下所有道具
 func (s *ItemService) ListItems(novelID uint) ([]*model.Item, error) {
 	return s.itemRepo.ListByNovel(novelID)
 }
 
-// ListItemsPaged 分页列出项目下的物品，返回数据列表和总数
+// ListItemsPaged 分页列出项目下的道具，返回数据列表和总数
 func (s *ItemService) ListItemsPaged(novelID uint, page, pageSize int) ([]*model.Item, int64, error) {
 	return s.itemRepo.ListByNovelPaged(novelID, page, pageSize)
 }
 
-// UpdateItem 更新物品
+// UpdateItem 更新道具
 func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.Item, error) {
 	item, err := s.itemRepo.GetByID(id)
 	if err != nil {
@@ -145,7 +145,7 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	return item, s.itemRepo.Update(item)
 }
 
-// BatchDeleteItems 批量删除物品，仅删除属于指定小说的物品
+// BatchDeleteItems 批量删除道具，仅删除属于指定小说的道具
 func (s *ItemService) BatchDeleteItems(novelID uint, ids []uint) error {
 	if len(ids) == 0 {
 		return nil
@@ -153,7 +153,7 @@ func (s *ItemService) BatchDeleteItems(novelID uint, ids []uint) error {
 	return s.itemRepo.BatchDeleteByNovel(novelID, ids)
 }
 
-// DeleteItem 删除物品及其所有章节覆盖记录
+// DeleteItem 删除道具及其所有章节覆盖记录
 func (s *ItemService) DeleteItem(id uint) error {
 	if err := s.itemRepo.DeleteChapterItemsByItem(id); err != nil {
 		return err
@@ -161,7 +161,7 @@ func (s *ItemService) DeleteItem(id uint) error {
 	return s.itemRepo.Delete(id)
 }
 
-// GenerateItemImage 为物品生成图像
+// GenerateItemImage 为道具生成图像
 // generateItemImageCore is the shared AI call for item image generation.
 // It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
 // and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
@@ -171,7 +171,7 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 		if promptLanguage == "en" {
 			prompt = fmt.Sprintf("%s, %s, fantasy item illustration, fine details, concept art", item.Name, item.Description)
 		} else {
-			prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
+			prompt = fmt.Sprintf("%s，%s，奇幻道具插画，精细细节，概念艺术", item.Name, item.Description)
 		}
 	}
 	aiRefURL := item.ReferenceImageURL
@@ -188,7 +188,7 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if promptLanguage == "en" {
 		suffix = ", item design, white background, studio lighting, " + universalQualityTags
 	} else {
-		suffix = "，物品设计，白色背景，摄影棚光效，" + universalQualityTags
+		suffix = "，道具设计，白色背景，摄影棚光效，" + universalQualityTags
 	}
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+suffix, aiRefURL, imageStyle, itemNegPrompt, sizeOverride)
@@ -229,9 +229,9 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	return item, s.itemRepo.Update(item)
 }
 
-// AIExtractFromNovel 使用 AI 从章节内容中提取物品（按 novel_id+name upsert）
-// BatchGenerateImages 批量为小说的物品生成图像。
-// force=false：跳过已有图片的物品；force=true：全量重新生成（风格变更时使用）。
+// AIExtractFromNovel 使用 AI 从章节内容中提取道具（按 novel_id+name upsert）
+// BatchGenerateImages 批量为小说的道具生成图像。
+// force=false：跳过已有图片的道具；force=true：全量重新生成（风格变更时使用）。
 // 并发度由 AIService.imageSem 统一管控（系统设置 image_concurrency）。
 func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	items, err := s.itemRepo.ListByNovel(novelID)
@@ -307,7 +307,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	return succeeded, failed, nil
 }
 
-// GenerateChapterImages 仅为本章绑定的选定物品生成图像，不影响该小说的其他物品。
+// GenerateChapterImages 仅为本章绑定的选定道具生成图像，不影响该小说的其他道具。
 // itemIDs 与 novelID 做交集校验，避免跨小说/租户的越权生成。
 func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
 	all, e := s.itemRepo.ListByNovel(novelID)
@@ -401,7 +401,7 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 		}
 	}
 	if summariesText == "" {
-		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要物品道具。", novelGenre, novelTitle)
+		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要道具道具。", novelGenre, novelTitle)
 	}
 
 	existing, _ := s.itemRepo.ListByNovel(novelID)
@@ -428,7 +428,7 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 		return nil, fmt.Errorf("render extract_items: %w", err)
 	}
 	if existingJSON != "" {
-		itemsPrompt += "\n\n注意：已有物品如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
+		itemsPrompt += "\n\n注意：已有道具如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
 	}
 
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_items", itemsPrompt, "",
@@ -497,7 +497,7 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 	return upserted, nil
 }
 
-// UpsertChapterItem 创建或更新章节级物品覆盖
+// UpsertChapterItem 创建或更新章节级道具覆盖
 func (s *ItemService) UpsertChapterItem(novelID, chapterID, itemID uint, req *model.UpsertChapterItemRequest) (*model.ChapterItem, error) {
 	// Validate that the base item belongs to the novel before writing the override.
 	item, err := s.itemRepo.GetByID(itemID)
@@ -524,13 +524,13 @@ func (s *ItemService) UpsertChapterItem(novelID, chapterID, itemID uint, req *mo
 	return saved, nil
 }
 
-// DeleteChapterItem 删除章节级物品覆盖（回退到项目级）
+// DeleteChapterItem 删除章节级道具覆盖（回退到项目级）
 func (s *ItemService) DeleteChapterItem(chapterID, itemID uint) error {
 	return s.chapterItemRepo.Delete(chapterID, itemID)
 }
 
-// ListEffectiveItems 获取章节的有效物品列表。
-// 只返回已通过 AI 提取或手动绑定（ink_chapter_item 有记录）的物品，
+// ListEffectiveItems 获取章节的有效道具列表。
+// 只返回已通过 AI 提取或手动绑定（ink_chapter_item 有记录）的道具，
 // 章节级覆盖字段（location/owner）优先于项目级默认值。
 func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*EffectiveItem, error) {
 	// 只取本章绑定的 ChapterItem 记录
@@ -550,7 +550,7 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 		ciMap[ci.ItemID] = ci
 	}
 
-	// 批量获取项目级物品
+	// 批量获取项目级道具
 	items, err := s.itemRepo.ListByIDs(itemIDs)
 	if err != nil {
 		return nil, err
@@ -577,8 +577,8 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 	return result, nil
 }
 
-// extractItemsFromContent 从章节内容中提取物品（纯 AI 提取，不操作 DB）
-// extractItemsFromContent 单章物品提取的共享核心：渲染 extract_chapter_items.j2、调用 LLM、解析
+// extractItemsFromContent 从章节内容中提取道具（纯 AI 提取，不操作 DB）
+// extractItemsFromContent 单章道具提取的共享核心：渲染 extract_chapter_items.j2、调用 LLM、解析
 // JSON。同时供 AIExtractAllFromNovel（分析流水线，逐章并发调用，不落库，由调用方合并去重后
 // 统一入库）和 AIExtractChapterItems（章节页面手动触发，单章调用，自己落库）复用——此前这两处
 // 各自写了一份几乎相同的渲染+调用+解析代码，只有 userPrompt/MaxTokens 等细节不同。
@@ -629,7 +629,7 @@ func (s *ItemService) extractItemsFromContent(
 	return valid, nil
 }
 
-// AIExtractAllFromNovel 逐章并发提取物品：先并发 AI 提取，再统一去重、入库
+// AIExtractAllFromNovel 逐章并发提取道具：先并发 AI 提取，再统一去重、入库
 func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novelID uint) ([]*model.Item, error) {
 	logger.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
@@ -653,7 +653,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 		}
 	}
 
-	// 已有物品名单（用于 AI prompt 去重提示）
+	// 已有道具名单（用于 AI prompt 去重提示）
 	existing, _ := s.itemRepo.ListByNovel(novelID)
 	existingNames := make([]string, 0, len(existing))
 	byName := make(map[string]*model.Item, len(existing))
@@ -708,7 +708,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 	}
 	wg.Wait()
 
-	// 合并：统计每个物品出现在多少章节，只保留 ≥2 章的物品
+	// 合并：统计每个道具出现在多少章节，只保留 ≥2 章的道具
 	type itemEntry struct {
 		item      analysisItemJSON
 		chapterCt int
@@ -737,7 +737,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 			}
 		}
 	}
-	// 已存在 DB 的物品跳过，新物品只保留出现在 ≥2 章的
+	// 已存在 DB 的道具跳过，新道具只保留出现在 ≥2 章的
 	var allItems []analysisItemJSON
 	for key, e := range itemMap {
 		if byName[key] != nil {
@@ -779,7 +779,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 	return upserted, nil
 }
 
-// AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item
+// AIExtractChapterItems 从单章内容中提取道具，写入 ink_item + ink_chapter_item
 func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, userPrompt string) ([]*model.Item, error) {
 	logger.Printf("[ItemService] AIExtractChapterItems: novelID=%d chapterID=%d", novelID, chapterID)
 	chapter, err := s.chapterRepo.GetByID(chapterID)
@@ -860,8 +860,8 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	return created, nil
 }
 
-// GenerateItemInfo 根据物品名称（及用户可选的草稿描述提示）AI 生成完整的物品档案。
-// 用于"添加物品"弹窗的一键填充：仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateItem 创建。
+// GenerateItemInfo 根据道具名称（及用户可选的草稿描述提示）AI 生成完整的道具档案。
+// 用于"添加道具"弹窗的一键填充：仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateItem 创建。
 func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint string) (description, visualPrompt string, err error) {
 	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
 

@@ -83,7 +83,7 @@ func (CharacterStateSnapshot) TableName() string {
 	return "ink_character_state_snapshot"
 }
 
-// Item 物品（项目级别，贯穿整部小说）
+// Item 道具（项目级别，贯穿整部小说）
 type Item struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
 	NovelID uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:uniq_item_novel_name,priority:1"`
@@ -108,14 +108,14 @@ type Item struct {
 
 func (Item) TableName() string { return "ink_item" }
 
-// ChapterItem 章节级别的物品状态（覆盖项目级别）
+// ChapterItem 章节级别的道具状态（覆盖项目级别）
 type ChapterItem struct {
 	ID        uint `json:"id" gorm:"primaryKey"`
 	ItemID    uint `json:"item_id" gorm:"uniqueIndex:uniq_chapter_item;not null"`
 	ChapterID uint `json:"chapter_id" gorm:"uniqueIndex:uniq_chapter_item;not null"`
 	NovelID   uint `json:"novel_id" gorm:"index;not null"`
 
-	Location  string `json:"location" gorm:"size:200"` // 本章节中物品所在位置（覆盖项目级）
+	Location  string `json:"location" gorm:"size:200"` // 本章节中道具所在位置（覆盖项目级）
 	Owner     string `json:"owner" gorm:"size:100"`    // 本章节中持有者（覆盖项目级）
 	Condition string `json:"condition" gorm:"size:50"` // intact/damaged/broken/destroyed
 	Notes     string `json:"notes" gorm:"type:text"`   // 本章节备注

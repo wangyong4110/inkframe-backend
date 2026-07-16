@@ -15,7 +15,7 @@
 5. actual_payoff_chapter_no：实际兑现的章节号（整数，若尚未兑现则填 0）
 6. status 只能是：planted（已埋下/待兑现）/ paid_off（已兑现）/ abandoned（已放弃）
 7. level 只能是：main（主线伏笔，影响全局走向）/ sub（支线伏笔，影响局部情节）/ detail（细节伏笔，小道具/小情节）
-8. foreshadow_type 只能是：prop（道具/物品）/ dialogue（对话台词）/ behavior（角色行为/选择）/ scene（场景/环境描写）/ prophecy（预言/梦境/异象）
+8. foreshadow_type 只能是：prop（道具/道具）/ dialogue（对话台词）/ behavior（角色行为/选择）/ scene（场景/环境描写）/ prophecy（预言/梦境/异象）
 9. tags：2~4 个关键词，逗号分隔（如 "身世之谜,神秘组织"）
 10. confidence：AI对这条伏笔是作者刻意设计的把握度，填 high（90%+把握）/ medium（60-90%）/ low（<60%，可能是笔者无意描写）
 11. character_names：与该伏笔直接相关的角色名，逗号分隔（如 "主角,反派"）；无直接相关角色则填空字符串
@@ -28,7 +28,7 @@
 - detail（细节）：小道具、细节描写，烘托气氛或小彩蛋
 
 **foreshadow_type 类型判断标准：**
-- prop：利用特定物品暗示未来（如神秘剑谱、古籍、信物）
+- prop：利用特定道具暗示未来（如神秘剑谱、古籍、信物）
 - dialogue：通过对话、旁白提前点题（如"你终将后悔"）
 - behavior：角色的异常举止预示未来走向（如偷偷练功、改变习惯）
 - scene：环境/场景描写暗示（如血月、枯树、异象）

@@ -444,7 +444,7 @@ var jsonOnlyTaskTypes = map[string]bool{
 	"chapter_review": true, "extract_items": true,
 	"chapter_end_state": true, // 章末状态快照：纯 JSON，抑制推理模型思维链
 	"outline":           true, // 大纲生成：强制纯 JSON，防止 DeepSeek 输出思考过程或缺失冒号
-	// 角色/物品/世界观提取——均输出 JSON，需抑制推理模型的思维链输出
+	// 角色/道具/世界观提取——均输出 JSON，需抑制推理模型的思维链输出
 	"extract_characters":          true,
 	"extract_character_names":     true,
 	"consolidate_character_names": true,

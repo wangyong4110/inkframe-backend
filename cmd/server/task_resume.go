@@ -163,20 +163,26 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					appearance = defaultLook.VisualPrompt
 				}
 				gender := service.InferGenderTag(appearance, char.Description)
-				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, params.Style, gender, "", params.Provider)
+				facePrompt := ""
+				if defaultLook != nil {
+					facePrompt = defaultLook.FacePrompt
+				}
+				sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, facePrompt, params.Style, gender, "", params.Provider)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
 					return
 				}
 				svcs.TaskService.UpdateProgress(t.TaskID, 99) //nolint:errcheck
-				threeURL := img.URL
-				lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &threeURL}
+				lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &sheet.SheetURL}
+				if sheet.PortraitURL != "" {
+					lookReq.Portrait = &sheet.PortraitURL
+				}
 				var updatedLook *model.CharacterLook
 				if defaultLook != nil {
 					updatedLook, err = svcs.CharacterService.UpdateLook(defaultLook.ID, lookReq)
 				} else {
 					updatedLook, err = svcs.CharacterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
-						Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, ThreeViewSheet: threeURL,
+						Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, ThreeViewSheet: sheet.SheetURL, Portrait: sheet.PortraitURL,
 					})
 				}
 				if err != nil {
@@ -185,7 +191,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 					"look":      updatedLook,
-					"generated": map[string]string{"sheet": img.URL},
+					"generated": map[string]string{"sheet": sheet.SheetURL, "portrait": sheet.PortraitURL},
 				})
 				return
 			}
@@ -1139,41 +1145,18 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			style := svcs.CharacterService.GetNovelImageStyle(char.NovelID)
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
 			tenantID := t.TenantID
-			var updatedLook *model.CharacterLook
-			switch params.Type {
-			case "portrait":
-				// FacePrompt 与 visualPrompt 由 GenerateLookVisualPrompt 同一次 AI 调用独立产出
-				// （只含身份+面部+发型），不从 visualPrompt 派生/兜底——为空说明该形象还没有
-				// 用新流程生成过文案，需要用户先点"AI 更新"。
-				if facePrompt == "" {
-					svcs.TaskService.Fail(t.TaskID, "该形象还没有面部专用提示词，请先点击「AI 更新」生成形象文案") //nolint:errcheck
-					return
-				}
-				// Step 1: generate face portrait from the dedicated face prompt (no reference needed)
-				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, facePrompt, style, "", "", params.Provider)
-				if err != nil {
-					logger.Errorf("TaskService resume look_image_gen %s portrait failed: %v", t.TaskID, err)
-					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-					return
-				}
-				imageURL := img.URL
-				updateReq := &model.UpdateCharacterLookRequest{Portrait: &imageURL}
-				updatedLook, _ = svcs.CharacterService.UpdateLook(lookID, updateReq)
-			case "three_view", "":
-				// Step 2: generate three-view sheet using portrait as face reference
-				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.Portrait, params.Provider)
-				if err != nil {
-					logger.Errorf("TaskService resume look_image_gen %s three_view failed: %v", t.TaskID, err)
-					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-					return
-				}
-				imageURL := img.URL
-				updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
-				updatedLook, _ = svcs.CharacterService.UpdateLook(lookID, updateReq)
-			default:
-				svcs.TaskService.Fail(t.TaskID, "type must be 'three_view' or 'portrait'") //nolint:errcheck
+			// 三视图与面部参考图不再分两步生成——一次调用同时产出，第4格(面部特写)自动裁剪为 Portrait。
+			sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, facePrompt, style, "", look.Portrait, params.Provider)
+			if err != nil {
+				logger.Errorf("TaskService resume look_image_gen %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
+			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &sheet.SheetURL}
+			if sheet.PortraitURL != "" {
+				updateReq.Portrait = &sheet.PortraitURL
+			}
+			updatedLook, _ := svcs.CharacterService.UpdateLook(lookID, updateReq)
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"look": updatedLook}) //nolint:errcheck
 		})
 	}

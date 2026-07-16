@@ -699,6 +699,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		sceneType = "exterior"
 	}
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
+		"Name":          anchor.Name,
 		"Description":   description,
 		"PromptLock":    anchor.PromptLock,
 		"SceneType":     sceneType,

@@ -815,7 +815,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 物品信息注入：从 GenMeta.Items 提取物品名+持有者+位置，注入 image_prompt 前缀
+	// 道具信息注入：从 GenMeta.Items 提取道具名+持有者+位置，注入 image_prompt 前缀
 	if shot.GenMeta.Items != "" {
 		var shotItems []struct {
 			Name     string `json:"name"`
@@ -843,9 +843,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 物品参考图：当分镜 prompt 中提及某个物品名称时，收集其 ReferenceImageURL。
-	// 有角色时（DreamO 模式）：物品图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
-	// 无角色时（Text2ImgV3 模式）：可加入物品图作为视觉参考。
+	// 道具参考图：当分镜 prompt 中提及某个道具名称时，收集其 ReferenceImageURL。
+	// 有角色时（DreamO 模式）：道具图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
+	// 无角色时（Text2ImgV3 模式）：可加入道具图作为视觉参考。
 	var itemRefImages []string
 	var itemRefNames []string // 与 itemRefImages 严格并行，用于参考图编号替换
 	if s.itemRepo != nil {
@@ -925,7 +925,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
 
-	// allRefImages 组装：角色图 + 物品图 + 场景锚定图。
+	// allRefImages 组装：角色图 + 道具图 + 场景锚定图。
 	// 各 provider 按自身能力取用：
 	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
 	//   - 单图 API（Wanx、kling-image 等）由 provider 自身实现只取第一张（角色图优先）。
@@ -1068,7 +1068,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = truncated
 	}
 
-	// 参考图说明：在 prompt 最前面追加"参考图N对应角色/物品/场景名"的说明，
+	// 参考图说明：在 prompt 最前面追加"参考图N对应角色/道具/场景名"的说明，
 	// 使模型能将参考图位置与名称对应，避免误判为同一对象的多视角导致角色重复。
 	// 不改写 prompt 正文中的原始名称，仅前置说明文本。
 	// promptForFallback 保留追加说明前的版本，用于无参考图降级（此时参考图序号说明无意义）。
@@ -1103,8 +1103,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 有参考图时（DreamO）：consistencyWeight 控制 IP-Adapter 强度（0.75 → scale≈7.75）。
 	imageConsistencyWeight := charConsistencyWeight
 	if len(cappedPortraits) == 0 {
-		// 无角色参考图时（含仅有场景锚点/物品参考图的情况）：
-		// 场景/物品图不适合 DreamO 角色 IP-Adapter 嵌入，降级为文生图 CFG 权重（< 0.7 → SeedEditV3；无参考图 → Text2ImgV3）。
+		// 无角色参考图时（含仅有场景锚点/道具参考图的情况）：
+		// 场景/道具图不适合 DreamO 角色 IP-Adapter 嵌入，降级为文生图 CFG 权重（< 0.7 → SeedEditV3；无参考图 → Text2ImgV3）。
 		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）。
 		imageConsistencyWeight = (qualityCFG - 1.0) / 9.0
 	}
@@ -1162,7 +1162,7 @@ var chineseNumerals = []string{
 	"十一", "十二", "十三", "十四", "十五",
 }
 
-// buildRefAnnotation 根据"参考图序号→角色/物品/场景名"的映射，生成前置于 prompt 正文的
+// buildRefAnnotation 根据"参考图序号→角色/道具/场景名"的映射，生成前置于 prompt 正文的
 // 参考图说明文本；中文提示词用 [图N]（如"参考图说明：[图一]李白，..."），英文提示词用 [Image-N]。
 // 不改写 prompt 正文中的原始名称，只生成前缀；图片生成和视频生成共用此方法。
 func buildRefAnnotation(nameToRefIdx map[string]int, isEn bool) string {
@@ -1202,7 +1202,7 @@ func buildRefAnnotation(nameToRefIdx map[string]int, isEn bool) string {
 			". Each reference image is a DIFFERENT unique individual/object/scene. Do NOT duplicate any character — each appears exactly once."
 	}
 	return "参考图说明：" + strings.Join(mappings, "，") +
-		"。每张参考图各对应不同的独立角色/物品/场景，每个角色只出现一次，不得重复。"
+		"。每张参考图各对应不同的独立角色/道具/场景，每个角色只出现一次，不得重复。"
 }
 
 // isEnglishPrompt 判断字符串是否以英文为主（英文字母占比 > 40%）。
@@ -1850,7 +1850,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	// 参考图说明：在 videoPromptFinal 最前面追加"参考图N对应角色/物品/场景名"的说明，
+	// 参考图说明：在 videoPromptFinal 最前面追加"参考图N对应角色/道具/场景名"的说明，
 	// 使模型能将参考图位置与名称对应，不改写 prompt 正文中的原始名称。
 	// 参考图顺序：absRef(index 1) → absExtras[0](index 2) → absExtras[1](index 3) …
 	// "场景参考"（前一镜末帧）无对应名称，跳过；角色名和场景锚点名参与说明。

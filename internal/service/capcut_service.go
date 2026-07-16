@@ -4545,7 +4545,7 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 }
 
 // ExportXLSX 导出分镜脚本为 Excel（.xlsx），供制片/审片人员离线查阅：
-// 基础信息（镜号/画面描述/台词字幕/时长/镜头方向）+ 角色物品清单 + 场景锚点信息。
+// 基础信息（镜号/画面描述/台词字幕/时长/镜头方向）+ 角色道具清单 + 场景锚点信息。
 func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportXLSX: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
@@ -4568,7 +4568,7 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 	headers := []string{
 		"镜号", "画面描述", "旁白", "台词", "字幕", "时长(秒)",
 		"镜头类型", "景别", "机位角度", "转场",
-		"角色", "物品", "场景锚点", "场景描述",
+		"角色", "道具", "场景锚点", "场景描述",
 	}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)

@@ -217,7 +217,7 @@ type StoryboardShot struct {
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 
-	// 物品绑定（序列化为 JSON 数组）
+	// 道具绑定（序列化为 JSON 数组）
 	ItemIDs JSONUintSlice `json:"item_ids" gorm:"type:json"`
 
 	// 摄像机方向与风格（JSON）

@@ -1,10 +1,10 @@
-请从以下章节内容中提取本章出现的物品/道具，生成物品档案。
+请从以下章节内容中提取本章出现的道具/道具，生成道具档案。
 
 # 小说信息
 - 标题：《{{ NovelTitle }}》
 - 类型：{{ Genre }}
 
-# 已有物品（不要重复提取）
+# 已有道具（不要重复提取）
 {% for name in ExistingNames %}- {{ name }}
 {% endfor %}
 
@@ -12,20 +12,20 @@
 {{ Content }}
 
 # 要求
-1. 提取本章中**被明确命名且在故事中有一定重要性**的物品（武器、宝物、道具、文件、器物等）；不要求多次出现，一次出现但对情节有影响即可提取
+1. 提取本章中**被明确命名且在故事中有一定重要性**的道具（武器、宝物、道具、文件、器物等）；不要求多次出现，一次出现但对情节有影响即可提取
 2. **明确排除**：普通家居用品（门、锁、碗、桌椅、门栓等）、无名路人道具、纯环境摆设、完全不影响情节的一次性道具
-3. 不要重复已有物品列表中的物品
-4. 不超过8个；若本章确实无符合条件的物品，输出空数组 []
+3. 不要重复已有道具列表中的道具
+4. 不超过8个；若本章确实无符合条件的道具，输出空数组 []
 5. category 只能是：weapon / treasure / tool / document / artifact / other
 {% if PromptLanguage == "en" %}
 6. appearance (English): visual description — material and texture, primary color, form and dimensions, surface details; used for image generation
 7. description (English): item function and significance in the story (1-2 sentences)
 {% else %}
 6. appearance：外观描述，包含材质与质感、主色调、形态尺寸、表面特征；此字段会用于图像生成
-7. description：物品在故事中的作用与意义（1-2句）
+7. description：道具在故事中的作用与意义（1-2句）
 {% endif %}
 8. visual_prompt：英文图像生成提示词，词数80-150词，且严格不超过700个字符（部分图像模型会直接拒绝过长的提示词），必须包含：
-   - 物品类型与名称（如 ancient iron scissors, magical jade pendant）
+   - 道具类型与名称（如 ancient iron scissors, magical jade pendant）
    - 材质：精确描述（如 "forged from old iron, slightly rusted surface"）
    - 颜色：主色调 + 光效（如 "dull grey-black with faint metallic sheen"）
    - 形态：尺寸感与形状细节（如 "palm-sized, curved blades, ring handles"）
@@ -39,7 +39,7 @@
 # 输出格式（JSON 数组）
 [
   {
-    "name": "物品名",
+    "name": "道具名",
     "category": "weapon",
     "appearance": "一柄古朴的长剑，剑身刻有符文",
     "description": "主角的传家宝剑，能斩断任何束缚，是本章突破境界的关键道具",

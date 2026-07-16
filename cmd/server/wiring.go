@@ -425,7 +425,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
 
-	// 物品 / 技能 / 场景锚点
+	// 道具 / 技能 / 场景锚点
 	itemSvc := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiSvc).
 		WithNovelRepo(repos.NovelRepo)
 	skillSvc := service.NewSkillService(repos.SkillRepo, aiSvc).

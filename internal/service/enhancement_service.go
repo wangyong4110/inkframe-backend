@@ -51,7 +51,7 @@ func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID,
 	prompt := fmt.Sprintf(`请从以下章节内容中识别并提取伏笔/预示/悬念，返回JSON数组格式：
 
 伏笔类型说明：
-- object: 神秘物品（如：古老的玉佩、血脉传承）
+- object: 神秘道具（如：古老的玉佩、血脉传承）
 - person: 神秘人物（如：黑袍人、神秘师父）
 - event: 重大事件预示（如：大劫将至、天下大乱）
 - ability: 能力预示（如：隐藏的血脉、特殊体质）

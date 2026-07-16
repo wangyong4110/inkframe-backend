@@ -112,13 +112,13 @@ func (s *NovelAnalysisService) WithLookRepo(r *repository.CharacterLookRepositor
 	return s
 }
 
-// WithItemRepo 注入物品仓库（可选，支持物品提取步骤）
+// WithItemRepo 注入道具仓库（可选，支持道具提取步骤）
 func (s *NovelAnalysisService) WithItemRepo(itemRepo *repository.ItemRepository) *NovelAnalysisService {
 	s.itemRepo = itemRepo
 	return s
 }
 
-// WithItemService 注入物品服务（可选，启用逐章并发提取）
+// WithItemService 注入道具服务（可选，启用逐章并发提取）
 func (s *NovelAnalysisService) WithItemService(svc *ItemService) *NovelAnalysisService {
 	s.itemService = svc
 	return s
@@ -266,9 +266,9 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}
 	task.setProgress(20)
 
-	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/伏笔 (20→70) ──
+	// ── Phase 2: 并发提取 角色/道具/世界观/剧情点/伏笔 (20→70) ──
 	// 场景锚点单独后台 goroutine 处理（见下方），超时由模型管理的"请求超时"配置控制。
-	task.setStep("正在同步提取角色、物品、世界观、剧情点、伏笔...")
+	task.setStep("正在同步提取角色、道具、世界观、剧情点、伏笔...")
 	{
 		type phaseTask struct {
 			name string
@@ -278,7 +278,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			{"角色", func() error {
 				return s.stepExtractCharacters(ctx, task, tenantID, novel, chapters)
 			}},
-			{"物品", func() error {
+			{"道具", func() error {
 				if s.itemRepo == nil {
 					return nil
 				}
@@ -384,7 +384,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		}
 	}
 
-	// ── Phase 4.5: 补跑物品/场景/设置提取（后台执行，不阻塞主流水线进度）──
+	// ── Phase 4.5: 补跑道具/场景/设置提取（后台执行，不阻塞主流水线进度）──
 	// 这些都是辅助性提取，不影响核心产物（大纲/章节），放后台避免 AI 慢响应卡住流水线。
 	logger.Printf("NovelAnalysis[%d]: Phase4.5 check: phase4Created=%v", novel.ID, phase4Created)
 	if phase4Created {
@@ -429,7 +429,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: skipped (all fields present)", novel.ID)
 		}
 
-		// ── 4.5.2 补跑物品提取 ──
+		// ── 4.5.2 补跑道具提取 ──
 		logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: checking", novel.ID)
 		if s.itemRepo != nil && s.itemService != nil {
 			existingItems, itemListErr := s.itemRepo.ListByNovel(novel.ID)
@@ -438,7 +438,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			}
 			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: existing=%d", novel.ID, len(existingItems))
 			if len(existingItems) == 0 {
-				task.setStep("正在补充提取物品...")
+				task.setStep("正在补充提取道具...")
 				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: calling AIExtractAllFromNovel", novel.ID)
 				if items, err := s.itemService.AIExtractAllFromNovel(bgCtx, tenantID, novel.ID); err != nil {
 					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: extraction failed (non-fatal): %v", novel.ID, err)
@@ -1263,12 +1263,12 @@ func (s *NovelAnalysisService) fail(task *AnalysisTask, msg string) {
 	logger.Errorf("[NovelAnalysis] fail: %s", msg)
 }
 
-// stepExtractItems 逐章并发提取物品信息
+// stepExtractItems 逐章并发提取道具信息
 func (s *NovelAnalysisService) stepExtractItems(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
 	logger.Printf("[NovelAnalysis] stepExtractItems: novelID=%d", novel.ID)
-	// 若已有物品则跳过
+	// 若已有道具则跳过
 	existing, listErr := s.itemRepo.ListByNovel(novel.ID)
 	if listErr != nil {
 		logger.Warnf("[NovelAnalysis] stepExtractItems: list existing items failed (will proceed with extraction): %v", listErr)

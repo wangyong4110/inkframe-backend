@@ -333,7 +333,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/crawl/status", cfg.ImportHandler.GetCrawlStatus)
 			novels.POST("/:id/crawl/resume", cfg.ImportHandler.ResumeCrawl)
 
-			// 物品（项目级）
+			// 道具（项目级）
 			if cfg.ItemHandler != nil {
 				novels.GET("/:id/items", cfg.ItemHandler.ListItems)
 				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
@@ -341,7 +341,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/items/ai-extract", cfg.ItemHandler.AIExtractFromNovel)
 				novels.POST("/:id/items/ai-generate", cfg.ItemHandler.GenerateItemInfo)
 				novels.POST("/:id/items/batch-images", cfg.ItemHandler.BatchGenerateImages)
-				// 章节级物品（有效列表 + 覆盖 + AI提取）
+				// 章节级道具（有效列表 + 覆盖 + AI提取）
 				novels.GET("/:id/chapters/:chapter_no/items", cfg.ItemHandler.ListEffectiveItems)
 				novels.POST("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.UpsertChapterItem)
 				novels.DELETE("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.DeleteChapterItem)
@@ -417,7 +417,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 		}
 
-		// 物品（单个物品操作）
+		// 道具（单个道具操作）
 		if cfg.ItemHandler != nil {
 			items := v1.Group("/items")
 			{
@@ -666,7 +666,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 			// 分镜绑定角色
 			videos.PUT("/:id/shots/:shot_id/characters", cfg.VideoHandler.SetShotCharacters)
-			// 分镜绑定物品
+			// 分镜绑定道具
 			videos.PUT("/:id/shots/:shot_id/items", cfg.VideoHandler.SetShotItems)
 			// 绑定变化后手动同步提示词
 			videos.POST("/:id/shots/:shot_id/regenerate-prompt", cfg.VideoHandler.RegenerateShotPrompt)

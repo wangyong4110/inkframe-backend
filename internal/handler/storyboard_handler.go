@@ -285,7 +285,7 @@ func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
 	respondOK(c, nil)
 }
 
-// SetShotItems 手动绑定分镜物品
+// SetShotItems 手动绑定分镜道具
 // PUT /api/v1/videos/:id/shots/:shot_id/items
 func (h *VideoHandler) SetShotItems(c *gin.Context) {
 	shotID, ok := parseID(c, "shot_id")
@@ -306,8 +306,8 @@ func (h *VideoHandler) SetShotItems(c *gin.Context) {
 	respondOK(c, nil)
 }
 
-// RegenerateShotPrompt 根据分镜当前绑定的角色/物品/场景重新生成图像/视频提示词。
-// 用于绑定/解绑角色、物品、场景锚点后手动同步——绑定操作本身不会自动重写叙事文本提示词。
+// RegenerateShotPrompt 根据分镜当前绑定的角色/道具/场景重新生成图像/视频提示词。
+// 用于绑定/解绑角色、道具、场景锚点后手动同步——绑定操作本身不会自动重写叙事文本提示词。
 // POST /api/v1/videos/:id/shots/:shot_id/regenerate-prompt
 func (h *VideoHandler) RegenerateShotPrompt(c *gin.Context) {
 	videoID, ok := parseID(c, "id")

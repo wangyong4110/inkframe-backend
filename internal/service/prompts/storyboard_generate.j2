@@ -259,10 +259,10 @@
 {% if WorldState.CharStates %}- 角色最新状态（必须延续，除非原文有明确变化）：{% for cs in WorldState.CharStates %}{{ cs.Name }}{% if cs.Action %}正在「{{ cs.Action }}」{% endif %}{% if cs.Expression %}，表情{{ cs.Expression }}{% endif %}{% if not forloop.Last %}；{% endif %}{% endfor %}
 
 {% endif %}
-{% if WorldState.ItemStates %}- 物品持有状态（必须延续，角色不得无故失去或获得物品）：{% for it in WorldState.ItemStates %}{{ it.Name }}{% if it.Holder %}（持有人：{{ it.Holder }}）{% endif %}{% if not forloop.Last %}；{% endif %}{% endfor %}
+{% if WorldState.ItemStates %}- 道具持有状态（必须延续，角色不得无故失去或获得道具）：{% for it in WorldState.ItemStates %}{{ it.Name }}{% if it.Holder %}（持有人：{{ it.Holder }}）{% endif %}{% if not forloop.Last %}；{% endif %}{% endfor %}
 
 {% endif %}
-⚠️ 强制要求：本段开篇须延续以上状态，不得无故改变地点、时段、天气、角色状态或物品持有关系；若原文有明确的地点/时间切换，必须按四级时间转场规则插入过渡镜头。
+⚠️ 强制要求：本段开篇须延续以上状态，不得无故改变地点、时段、天气、角色状态或道具持有关系；若原文有明确的地点/时间切换，必须按四级时间转场规则插入过渡镜头。
 
 {% endif %}
 {% if PrevShots %}
@@ -311,8 +311,8 @@
 {% endfor %}
 {% endif %}
 {% if Items %}
-【本章物品/道具】
-⚠️ 规则：当某物品在画面中出现时，`items` 数组填写其精确名称，并指出持有者（holder）和位置（location）。未出现则填 `[]`。
+【本章道具/道具】
+⚠️ 规则：当某道具在画面中出现时，`items` 数组填写其精确名称，并指出持有者（holder）和位置（location）。未出现则填 `[]`。
 {% for item in Items %}- {{ item.Name }}{% if item.Owner %}（持有者：{{ item.Owner }}）{% endif %}{% if item.Location %}（位置：{{ item.Location }}）{% endif %}{% if item.Description %}：{{ item.Description }}{% endif %}
 {% endfor %}
 {% endif %}
@@ -433,11 +433,11 @@
   - 无角色时填 []
   ⚠️ 强制要求：characters[] 中每个角色的 position/pose/action/expression 必须与 image_prompt 中 [角色区块] 的描述完全一致——这两处是同一信息的结构化与文本化双重记录，不得矛盾或遗漏。
 
-▸ items（物品列表）——该镜头画面中出现的物品
-  - 格式：[{"name":"<物品列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<物品在此镜头的位置，无则留空>"}]
-  - 无物品时填 []
-  - name 必须使用【本章物品/道具】列表中的精确名称
-  - 仅填写画面中真实出现的物品，不得填写背景道具或未在画面中出现的物品
+▸ items（道具列表）——该镜头画面中出现的道具
+  - 格式：[{"name":"<道具列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<道具在此镜头的位置，无则留空>"}]
+  - 无道具时填 []
+  - name 必须使用【本章道具/道具】列表中的精确名称
+  - 仅填写画面中真实出现的道具，不得填写背景道具或未在画面中出现的道具
 
 【sfx_tags 填写规则】
 sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字段：
@@ -633,7 +633,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "weather": "clear",
     "lighting": "diffuse",
     "characters": [],
-    "items": [{"name":"<物品列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<物品在画面中的位置>"}],
+    "items": [{"name":"<道具列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<道具在画面中的位置>"}],
     "transition": "cut",
     "transition_out": "固定机位极近景保持静止；链环完成8度顺时针旋转后复位；石粉细粒落入裂缝阴影；画面凝滞在深沉静默中",
     "transition_in": "接续摇镜终点的静止保持，镜头硬切俯冲至地面极近景，石板裂缝从下方充满画框——切换本身即是过渡",

@@ -132,7 +132,7 @@ func (r *WorldviewRepository) DeleteEntitiesByWorldview(worldviewID uint) error 
 	return r.db.Where("worldview_id = ?", worldviewID).Delete(&model.WorldviewEntity{}).Error
 }
 
-// ItemRepository 物品仓库
+// ItemRepository 道具仓库
 type ItemRepository struct {
 	db *gorm.DB
 }
@@ -159,7 +159,7 @@ func (r *ItemRepository) FindByNovelAndNameUnscoped(novelID uint, name string) (
 	return &item, nil
 }
 
-// RestoreByID 恢复软删除的物品（清空 deleted_at）。
+// RestoreByID 恢复软删除的道具（清空 deleted_at）。
 func (r *ItemRepository) RestoreByID(id uint) error {
 	return r.db.Unscoped().Model(&model.Item{}).
 		Where("id = ?", id).
@@ -216,12 +216,12 @@ func (r *ItemRepository) Delete(id uint) error {
 	return r.db.Delete(&model.Item{}, id).Error
 }
 
-// DeleteChapterItemsByItem 删除物品的所有章节覆盖记录
+// DeleteChapterItemsByItem 删除道具的所有章节覆盖记录
 func (r *ItemRepository) DeleteChapterItemsByItem(itemID uint) error {
 	return r.db.Where("item_id = ?", itemID).Delete(&model.ChapterItem{}).Error
 }
 
-// BatchDeleteByNovel 批量删除属于指定小说的物品（WHERE novel_id = ? AND id IN (?)）
+// BatchDeleteByNovel 批量删除属于指定小说的道具（WHERE novel_id = ? AND id IN (?)）
 func (r *ItemRepository) BatchDeleteByNovel(novelID uint, ids []uint) error {
 	if len(ids) == 0 {
 		return nil
@@ -229,7 +229,7 @@ func (r *ItemRepository) BatchDeleteByNovel(novelID uint, ids []uint) error {
 	return r.db.Where("novel_id = ? AND id IN ?", novelID, ids).Delete(&model.Item{}).Error
 }
 
-// GetByTitleAndNovel 按名称和小说 ID 查找物品（用于去重检查）
+// GetByTitleAndNovel 按名称和小说 ID 查找道具（用于去重检查）
 func (r *ItemRepository) GetByTitleAndNovel(title string, novelID uint) (*model.Item, error) {
 	var item model.Item
 	if err := r.db.Where("name = ? AND novel_id = ?", title, novelID).First(&item).Error; err != nil {

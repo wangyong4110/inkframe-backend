@@ -423,7 +423,7 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeImageGen:             "图像",
 		TaskTypeThreeView:            "三视图",
 		TaskTypeCharGen:              "角色生成",
-		TaskTypeItemExtract:          "物品提取",
+		TaskTypeItemExtract:          "道具提取",
 		TaskTypePlotExtract:          "情节提取",
 		TaskTypeAssetGen:             "素材",
 		TaskTypeSceneAnchorExtract:   "场景提取",

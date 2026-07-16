@@ -145,7 +145,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 			len([]rune(content)), minChapterLength)
 	}
 
-	// 并行预取角色、场景锚点、情节点、物品（避免多次串行 DB 查询）
+	// 并行预取角色、场景锚点、情节点、道具（避免多次串行 DB 查询）
 	tenantID := s.videoTenantID(video)
 	var characters []*model.Character
 	var anchors []*model.SceneAnchor
@@ -222,7 +222,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 				}
 			}()
 		}
-		// 并行预取有效物品（合并项目级+章节级覆盖）
+		// 并行预取有效道具（合并项目级+章节级覆盖）
 		if s.itemRepo != nil && novelID > 0 {
 			wgPre.Add(1)
 			go func() {
@@ -549,7 +549,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	}
 	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
 	s.autoMatchShotCharacters(shots, characters)
-	// 物品自动关联：按 shot.GenMeta.Items JSON 中的名称匹配小说物品
+	// 道具自动关联：按 shot.GenMeta.Items JSON 中的名称匹配小说道具
 	s.autoMatchShotItems(shots, effectiveItems)
 	if progressFn != nil {
 		progressFn(95)
@@ -880,7 +880,7 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
 }
 
-// autoMatchShotItems 按多来源匹配小说物品，写入 ItemIDs。
+// autoMatchShotItems 按多来源匹配小说道具，写入 ItemIDs。
 // 优先级：① shot.GenMeta.Items JSON → ② shot.Description/Narration 关键词扫描。
 // 已有 ItemIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items []*EffectiveItem) {
@@ -1087,7 +1087,7 @@ func extractSceneField(sceneJSON, field string) string {
 
 // extractWorldStateFromShots 从末尾分镜中提取跨段世界状态快照（P1b + C3）。
 // 返回的 map 包含 Location / TimeOfDay / Weather / Characters / CharStates / ItemStates，
-// 供下一段 prompt 注入，保证角色状态和物品持有的跨段一致性。
+// 供下一段 prompt 注入，保证角色状态和道具持有的跨段一致性。
 func extractWorldStateFromShots(shots []*model.StoryboardShot) map[string]interface{} {
 	if len(shots) == 0 {
 		return nil
@@ -1164,7 +1164,7 @@ func extractWorldStateFromShots(shots []*model.StoryboardShot) map[string]interf
 		}
 	}
 
-	// C3: 收集末尾几镜的物品持有状态（以最后一次出现的持有信息为准）
+	// C3: 收集末尾几镜的道具持有状态（以最后一次出现的持有信息为准）
 	type itemStateEntry struct {
 		Name   string
 		Holder string
@@ -1212,7 +1212,7 @@ func extractWorldStateFromShots(shots []*model.StoryboardShot) map[string]interf
 		"Weather":    weather,
 		"Characters": charNames,
 		"CharStates": charStates, // C3: 角色最新动作/表情状态
-		"ItemStates": itemStates, // C3: 物品最新持有状态
+		"ItemStates": itemStates, // C3: 道具最新持有状态
 	}
 }
 
@@ -1440,7 +1440,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		})
 	}
 
-	// 物品（最多 10 个，优先匹配内容中出现的物品）
+	// 道具（最多 10 个，优先匹配内容中出现的道具）
 	itemsData := make([]map[string]interface{}, 0, 10)
 	if len(items) > 0 {
 		contentLower := strings.ToLower(content)
@@ -1624,7 +1624,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			}
 		}
 
-		// 将物品信息序列化为 JSON 存储
+		// 将道具信息序列化为 JSON 存储
 		var itemsJSON string
 		if len(r.Items) > 0 {
 			if b, err := json.Marshal(r.Items); err == nil {
@@ -2172,8 +2172,8 @@ func (s *VideoService) SetShotItems(shotID uint, ids []uint) error {
 	return s.storyboardRepo.Update(shot)
 }
 
-// RegenerateShotPrompt 根据分镜当前绑定的角色/物品/场景，重新生成 image_prompt 和 video_prompt。
-// 背景：绑定/解绑角色、物品、场景锚点只更新结构化字段（CharacterIDs/ItemIDs/SceneAnchorID），
+// RegenerateShotPrompt 根据分镜当前绑定的角色/道具/场景，重新生成 image_prompt 和 video_prompt。
+// 背景：绑定/解绑角色、道具、场景锚点只更新结构化字段（CharacterIDs/ItemIDs/SceneAnchorID），
 // GenMeta.Prompt/MotionPrompt 是分镜脚本生成时 LLM 一次性写死的叙事文本，不会随绑定变化自动
 // 重写——导致"改了绑定但生成结果没变"。这个方法把旧提示词连同当前绑定一起喂给 LLM 重新改写，
 // 而不是简单的关键词替换（中文语法下增删人名很容易改出病句），由调用方（前端在用户手动点击
@@ -2220,7 +2220,7 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 	if len(charNames) > 0 {
 		characterList = strings.Join(charNames, "、")
 	}
-	itemList := "无绑定物品"
+	itemList := "无绑定道具"
 	if len(itemNames) > 0 {
 		itemList = strings.Join(itemNames, "、")
 	}

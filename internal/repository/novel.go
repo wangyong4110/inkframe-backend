@@ -432,7 +432,7 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 		if e := tryExec(`DELETE FROM ink_character_state_snapshot WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
 			return e
 		}
-		// ── 5. 章节物品关联（通过 item.novel_id）
+		// ── 5. 章节道具关联（通过 item.novel_id）
 		if e := tryExec(`DELETE FROM ink_chapter_item WHERE item_id IN (SELECT id FROM ink_item WHERE novel_id = ?)`, id); e != nil {
 			return e
 		}

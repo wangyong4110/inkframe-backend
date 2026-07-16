@@ -1,9 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +20,9 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
 
@@ -927,7 +936,7 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 }
 
 // ListEffectiveCharacters 获取章节有效角色列表：
-// 仅返回明确绑定到本章节的角色（与物品/场景行为一致）。
+// 仅返回明确绑定到本章节的角色（与道具/场景行为一致）。
 // 未绑定任何角色时返回空列表；分镜生成等下游服务已内置"无绑定则退回小说全量"的降级逻辑。
 func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*EffectiveCharacter, error) {
 	overrideMap := make(map[uint]*model.ChapterCharacter)
@@ -1686,36 +1695,23 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			}
 			gender := InferGenderTag(charAppearance, char.Description)
 
-			// ── Step 1: 生成面部参考图（Portrait）────────────────────────────────
-			// 先生成 Portrait，作为三视图的面部一致性锚点。
-			// 条件：force=true 或尚无 Portrait。
-			var newPortraitURL string
-			if force || look == nil || look.Portrait == "" {
-				portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, "", provider)
-				if portraitErr != nil {
-					logger.Errorf("[CharacterService] BatchGenerateImages: portrait gen for char %d (%s) failed: %v", char.ID, char.Name, portraitErr)
-					// Portrait 失败不阻断三视图，降级无参考图生成
-				} else {
-					newPortraitURL = portraitImg.URL
-					logger.Printf("[CharacterService] BatchGenerateImages: portrait generated for char %d (%s)", char.ID, char.Name)
-				}
-			}
-
-			// ── Step 2: 生成三视图（以 Portrait 为面部参考）──────────────────────
-			// 优先使用刚生成的 Portrait；若 Portrait 生成失败，则用已有的作为降级参考。
-			faceRef := newPortraitURL
-			if faceRef == "" && look != nil {
+			// ── 一次生成三视图+面部参考图（同框合图，第4格自动裁剪为 Portrait）──
+			faceRef := ""
+			facePrompt := ""
+			if look != nil {
 				faceRef = look.Portrait
+				facePrompt = look.FacePrompt
 			}
 
-			var newThreeURL string
-			if force || look == nil || look.ThreeViewSheet == "" {
-				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
-				if threeErr != nil {
-					logger.Errorf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
+			var newThreeURL, newPortraitURL string
+			if force || look == nil || look.ThreeViewSheet == "" || look.Portrait == "" {
+				sheet, sheetErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, facePrompt, imageStyle, gender, faceRef, provider)
+				if sheetErr != nil {
+					logger.Errorf("[CharacterService] BatchGenerateImages: character sheet gen for char %d (%s) failed: %v", char.ID, char.Name, sheetErr)
 					charFailed = true
 				} else {
-					newThreeURL = threeImg.URL
+					newThreeURL = sheet.SheetURL
+					newPortraitURL = sheet.PortraitURL
 				}
 			}
 
@@ -2199,9 +2195,20 @@ func condenseVisualPrompt(s string, maxWords int) string {
 	return strings.TrimRight(strings.Join(words[:cutIdx], " "), ", ")
 }
 
-// GenerateThreeViewSheet 生成标准三视图角色参考图（正面/侧面/背面，3格横版布局，1200x720）。
-// ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
-func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+// GeneratedCharacterSheet 是合并生成（三视图 + 面部特写同框，见 GenerateThreeViewSheet）的结果。
+// PortraitURL 由 SheetURL 第 4 格自动裁剪而来，裁剪失败时为空（非致命，调用方应降级用 SheetURL 做参考）。
+type GeneratedCharacterSheet struct {
+	SheetURL    string
+	PortraitURL string
+	Description string
+}
+
+// GenerateThreeViewSheet 生成角色参考图：正面/侧面/背面/面部特写，4格横版布局
+// （AI 生成 1600x720，本地合成顶部 80px 角色名留白条后最终为 1600x800）。
+// 一次 AI 调用同时产出三视图与面部参考图（不再单独生成 Portrait）——
+// 生成结果经 composeCharacterSheet 合成角色名标注，并从面部特写格裁出独立 Portrait URL，
+// 供分镜生成时做一致性参考。ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
+func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, facePrompt, style, gender, referenceImage, provider string) (*GeneratedCharacterSheet, error) {
 	genderTag, genderNeg := resolveGenderInfo(gender)
 	qualityTokens := resolveStyleQualityTokens(style)
 
@@ -2210,29 +2217,30 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		aiRef = ""
 	}
 
-	// Prompt 结构设计原则（扩散模型 cross-attention 权重随 token 位置递减）：
-	//   1. 任务类型 + 跨格一致性  ← 最高权重，奠定模型理解基础
-	//   2. 风格 + 质量            ← 全局属性，影响整体渲染
-	//   3. 白色背景               ← 全局约束
-	//   4. 性别 / 物种            ← 角色类型锚点
-	//   5. 外貌描述               ← 角色特征（需要足够权重，放在布局细节之前）
-	//   6. 布局细节（分格描述）   ← 结构约束，模型已知是三视图后补充细节即可
+	// facePrompt 为面部特写专用提示词（CharacterLook.FacePrompt）；为空时降级用完整外观描述。
+	faceDesc := facePrompt
+	if faceDesc == "" {
+		faceDesc = appearance
+	}
+	condensedFace := condenseVisualPrompt(faceDesc, 40)
 
-	// 人形角色布局：A-pose + 侧面解剖约束
+	// 人形角色布局：3 格全身（A-pose + 侧面解剖约束）+ 第 4 格面部特写
 	layoutDetails :=
-		"three equal-width panels side by side, horizontal wide format, " +
-			"LEFT PANEL front view: facing camera directly, symmetrical, neutral expression, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"CENTER PANEL 90-degree side profile: pure side view facing left, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"RIGHT PANEL back view: facing away from camera, back of head visible, no face visible, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"A-pose arms 30-45 degrees from sides, same ground baseline, same character height in all panels, no cropping"
+		"four equal-width panels side by side, horizontal wide format, " +
+			"PANEL 1 front view: facing camera directly, symmetrical, neutral expression, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"PANEL 2 90-degree side profile: pure side view facing left, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"PANEL 3 back view: facing away from camera, back of head visible, no face visible, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"PANEL 4 face close-up headshot: front-facing, head and shoulders only, face and hair fill the frame, neutral expression, " + condensedFace + ", " +
+			"A-pose arms 30-45 degrees from sides in panels 1-3, same ground baseline in panels 1-3, same character height in panels 1-3, no cropping in panels 1-3"
 
-	// 动物角色布局：去掉 A-pose 手臂指令，改用通用姿态
+	// 动物角色布局：去掉 A-pose 手臂指令，第 4 格改为面部/头部特写
 	animalLayoutDetails :=
-		"three equal-width panels side by side, horizontal wide format, " +
-			"LEFT PANEL front view: facing camera directly, full body from head to toe, entire figure visible, neutral pose, " +
-			"CENTER PANEL 90-degree side profile: pure side view, full body from head to toe, entire figure visible, " +
-			"RIGHT PANEL back view: facing away from camera, full body from head to toe, entire figure visible, " +
-			"same ground baseline, same character scale in all panels, no cropping"
+		"four equal-width panels side by side, horizontal wide format, " +
+			"PANEL 1 front view: facing camera directly, full body from head to toe, entire figure visible, neutral pose, " +
+			"PANEL 2 90-degree side profile: pure side view, full body from head to toe, entire figure visible, " +
+			"PANEL 3 back view: facing away from camera, full body from head to toe, entire figure visible, " +
+			"PANEL 4 head close-up: front-facing head only, face and head fill the frame, " + condensedFace + ", " +
+			"same ground baseline in panels 1-3, same character scale in panels 1-3, no cropping in panels 1-3"
 
 	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）。
 	// appearance 此处已是完整外观描述（含服装/鞋履/配饰），由 GenerateLookVisualPrompt
@@ -2249,42 +2257,6 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	activeLayoutDetails := layoutDetails
 	if animal {
 		activeLayoutDetails = animalLayoutDetails
-	}
-
-	// 跨格一致性标识（最高权重，放最前）
-	consistencyHead := "character design turnaround sheet, front view side view back view, " +
-		"identical character in all panels: same face same hairstyle same outfit same body proportions, "
-
-	var prompt string
-	if style == "realistic" || style == "real_person" {
-		var genderPrefix string
-		if !animal {
-			genderPrefix = map[string]string{
-				"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
-			}[gender]
-		}
-		sheetStyle := "photorealistic character design reference, even studio lighting"
-		if style == "real_person" {
-			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
-		}
-		prompt = consistencyHead +
-			sheetStyle + ", " + qualityTokens + ", " +
-			"pure white background, solid white background, white studio backdrop, " +
-			genderPrefix +
-			condensedAppearance + ", " +
-			activeLayoutDetails
-	} else {
-		styleDesc := resolveStyleIllustrationDesc(style)
-		genderPrefix := ""
-		if genderTag != "" {
-			genderPrefix = genderTag + ", "
-		}
-		prompt = consistencyHead +
-			styleDesc + ", " + qualityTokens + ", " +
-			"pure white background, solid white background, white studio backdrop, " +
-			genderPrefix +
-			condensedAppearance + ", " +
-			activeLayoutDetails
 	}
 
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
@@ -2305,33 +2277,166 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	rendered, tplErr := renderPrompt("image_three_view_sheet", map[string]interface{}{
-		"StyleType":          styleType,
-		"StyleDesc":          resolveStyleIllustrationDesc(style),
-		"QualityTokens":      qualityTokens,
-		"GenderPrefix":       genderPrefix,
-		"GenderNeg":          genderNeg,
+		"StyleType":           styleType,
+		"StyleDesc":           resolveStyleIllustrationDesc(style),
+		"QualityTokens":       qualityTokens,
+		"GenderPrefix":        genderPrefix,
+		"GenderNeg":           genderNeg,
 		"CondensedAppearance": condensedAppearance,
-		"LayoutDetails":      activeLayoutDetails,
-		"IsAnimal":           animal,
+		"LayoutDetails":       activeLayoutDetails,
+		"IsAnimal":            animal,
 	})
 	if tplErr != nil {
 		return nil, fmt.Errorf("render image_three_view_sheet: %w", tplErr)
 	}
 	prompt, negativePrompt := splitImagePrompt(rendered)
 
-	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）。
-	// 一致性权重设为 0.4（低权重）：三视图合图需要 prompt 主导布局结构，
+	// AI 只负责生成四格本体（正面/侧面/背面/面部特写，各占 characterSheetPanelWidthPx 宽），
+	// 不要求 AI 预留名称留白——扩散模型对"留出精确像素空白"这类指令服从度不可靠。
+	// 顶部的角色名留白条由 composeCharacterSheet 在生成后用程序拼接（100%可控的画布合成，
+	// 不依赖 AI 配合），避免依赖 AI 遵循留白指令导致文字与内容重叠或裁剪错位。
+	// 一致性权重设为 0.4（低权重）：合图需要 prompt 主导布局结构，
 	// DreamO（weight>=0.7）以参考图为主会压制多面板布局 prompt 导致所有格都生成正面图。
 	// 0.4 → selectImageModel 选 SeedEditV3（volcengine-visual 路径），prompt 主导效果更好。
+	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetPanelHeightPx)
 	refs := []string{}
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1200x720", 0, 0.4)
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, size, 0, 0.4)
 	if err != nil {
 		return nil, err
 	}
-	return &GeneratedCharacterImage{URL: url, Description: name + " character turnaround sheet (front/side/back)"}, nil
+
+	sheetURL, portraitURL, composeErr := s.composeCharacterSheet(ctx, url, name)
+	if composeErr != nil {
+		logger.Errorf("GenerateThreeViewSheet: %s compose (name stamp + face crop) failed, using raw sheet without name label: %v", name, composeErr)
+		sheetURL = url
+	}
+	return &GeneratedCharacterSheet{
+		SheetURL:    sheetURL,
+		PortraitURL: portraitURL,
+		Description: name + " character sheet (front/side/back/face)",
+	}, nil
+}
+
+const (
+	characterSheetPanelWidthPx  = 400
+	characterSheetPanelCount    = 4
+	characterSheetPanelHeightPx = 720
+	characterSheetNameMarginPx  = 80
+	characterSheetCanvasWidth   = characterSheetPanelWidthPx * characterSheetPanelCount
+	characterSheetFontPath      = "assets/fonts/YShiNewHeiGGJ-Regular.ttf"
+	characterSheetFontSizePt    = 36
+)
+
+var (
+	characterSheetFontOnce sync.Once
+	characterSheetFont     *opentype.Font
+	characterSheetFontErr  error
+)
+
+// loadCharacterSheetFont 懒加载并缓存内置中文字体（角色名标注用），避免每次生成都重新解析字体文件。
+func loadCharacterSheetFont() (*opentype.Font, error) {
+	characterSheetFontOnce.Do(func() {
+		data, readErr := os.ReadFile(characterSheetFontPath)
+		if readErr != nil {
+			characterSheetFontErr = fmt.Errorf("read font %s: %w", characterSheetFontPath, readErr)
+			return
+		}
+		f, parseErr := opentype.Parse(data)
+		if parseErr != nil {
+			characterSheetFontErr = fmt.Errorf("parse font %s: %w", characterSheetFontPath, parseErr)
+			return
+		}
+		characterSheetFont = f
+	})
+	return characterSheetFont, characterSheetFontErr
+}
+
+// drawCenteredText 把 text 用给定字号（pt）水平垂直居中绘制到 dst 图像的指定矩形区域。
+func drawCenteredText(dst draw.Image, area image.Rectangle, text string, sizePt float64) error {
+	f, err := loadCharacterSheetFont()
+	if err != nil {
+		return err
+	}
+	face, err := opentype.NewFace(f, &opentype.FaceOptions{Size: sizePt, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		return fmt.Errorf("create font face: %w", err)
+	}
+	defer face.Close()
+
+	drawer := &font.Drawer{Dst: dst, Src: image.NewUniform(color.Black), Face: face}
+	textWidth := drawer.MeasureString(text).Ceil()
+	fm := face.Metrics()
+	textHeight := (fm.Ascent + fm.Descent).Ceil()
+	x := area.Min.X + (area.Dx()-textWidth)/2
+	y := area.Min.Y + (area.Dy()+textHeight)/2 - fm.Descent.Ceil()
+	drawer.Dot = fixed.P(x, y)
+	drawer.DrawString(text)
+	return nil
+}
+
+// composeCharacterSheet 下载 AI 生成的原始四格合图（正/侧/背/面部特写，无留白），
+// 拼接出一张顶部带 characterSheetNameMarginPx 像素白色留白条的新画布，程序把角色名
+// 居中绘制在留白条上（见 drawCenteredText 注释：不依赖扩散模型渲染文字），原图整体下移
+// 拼接进画布下半部分——留白条完全由代码合成、不依赖 AI 配合，避免文字与画面内容重叠或错位。
+// 再从面部特写格（第4格，位置由代码固定计算，不受 AI 实际留白影响）裁出独立 Portrait；
+// 两者各自重新编码上传，返回最终 URL。失败时非致命——调用方应降级使用原始 rawURL 作为 sheet，Portrait 留空。
+func (s *ImageGenerationService) composeCharacterSheet(ctx context.Context, rawURL, name string) (sheetURL, portraitURL string, err error) {
+	if s.aiService == nil || s.aiService.storageSvc == nil || rawURL == "" {
+		return "", "", fmt.Errorf("compose unavailable: storage service or sheet URL missing")
+	}
+	data, err := s.aiService.downloadImageBytes(ctx, rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("download raw sheet: %w", err)
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", "", fmt.Errorf("decode raw sheet: %w", err)
+	}
+
+	srcBounds := src.Bounds()
+	canvasRect := image.Rect(0, 0, srcBounds.Dx(), characterSheetNameMarginPx+srcBounds.Dy())
+	canvas := image.NewRGBA(canvasRect)
+	draw.Draw(canvas, canvasRect, image.NewUniform(color.White), image.Point{}, draw.Src)
+	panelsRect := image.Rect(0, characterSheetNameMarginPx, canvasRect.Max.X, canvasRect.Max.Y)
+	draw.Draw(canvas, panelsRect, src, srcBounds.Min, draw.Src)
+
+	marginRect := image.Rect(0, 0, canvasRect.Max.X, characterSheetNameMarginPx)
+	if drawErr := drawCenteredText(canvas, marginRect, name, characterSheetFontSizePt); drawErr != nil {
+		logger.Errorf("composeCharacterSheet: draw name failed (sheet keeps blank margin): %v", drawErr)
+	}
+
+	var sheetBuf bytes.Buffer
+	if err := jpeg.Encode(&sheetBuf, canvas, &jpeg.Options{Quality: 92}); err != nil {
+		return "", "", fmt.Errorf("encode composed sheet: %w", err)
+	}
+	uploadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sheetKey := fmt.Sprintf("images/%s.jpg", uuid.New().String())
+	sheetURL, err = s.aiService.storageSvc.Upload(uploadCtx, sheetKey, bytes.NewReader(sheetBuf.Bytes()), int64(sheetBuf.Len()), "image/jpeg")
+	if err != nil {
+		return "", "", fmt.Errorf("upload composed sheet: %w", err)
+	}
+
+	panelWidth := canvasRect.Dx() / characterSheetPanelCount
+	faceX0 := canvasRect.Min.X + panelWidth*(characterSheetPanelCount-1)
+	faceRect := image.Rect(faceX0, characterSheetNameMarginPx, canvasRect.Max.X, canvasRect.Max.Y)
+	faceCrop := canvas.SubImage(faceRect)
+
+	var faceBuf bytes.Buffer
+	if err := jpeg.Encode(&faceBuf, faceCrop, &jpeg.Options{Quality: 92}); err != nil {
+		return sheetURL, "", fmt.Errorf("encode face crop: %w", err)
+	}
+	faceUploadCtx, faceCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer faceCancel()
+	faceKey := fmt.Sprintf("images/face-%s.jpg", uuid.New().String())
+	portraitURL, err = s.aiService.storageSvc.Upload(faceUploadCtx, faceKey, bytes.NewReader(faceBuf.Bytes()), int64(faceBuf.Len()), "image/jpeg")
+	if err != nil {
+		return sheetURL, "", fmt.Errorf("upload face crop: %w", err)
+	}
+	return sheetURL, portraitURL, nil
 }
 
 // GeneratePortrait 基于三视图（threeViewURL 作为 DreamO 参考图）生成单张角色正面半身像。
@@ -2811,22 +2916,22 @@ func (s *CharacterService) GenerateChapterImages(
 							lookUpdateReq := &model.UpdateCharacterLookRequest{}
 							needUpdate := false
 
-							// 使用现有 portrait 作为参考（如有）
+							// 使用现有 portrait/face_prompt 作为参考（如有）
 							existingPortrait := ""
-							if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil && existingLook.Portrait != "" {
+							existingFacePrompt := ""
+							if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil {
 								existingPortrait = existingLook.Portrait
+								existingFacePrompt = existingLook.FacePrompt
 							}
-							if threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, imageStyle, gender, existingPortrait, provider); threeErr == nil {
-								lookUpdateReq.ThreeViewSheet = &threeImg.URL
+							// 一次调用同时生成三视图+面部参考图（同框合图，第4格自动裁剪为 Portrait）
+							if sheet, sheetErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, existingFacePrompt, imageStyle, gender, existingPortrait, provider); sheetErr == nil {
+								lookUpdateReq.ThreeViewSheet = &sheet.SheetURL
 								needUpdate = true
-								// 三视图生成后自动生成 Portrait（DreamO 单人正面像效果最好）
-								if portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, appearance, imageStyle, gender, threeImg.URL, provider); portraitErr == nil {
-									lookUpdateReq.Portrait = &portraitImg.URL
-								} else {
-									logger.Errorf("[CharacterService] GenerateChapterImages portrait for char %d (%s): %v", char.ID, char.Name, portraitErr)
+								if sheet.PortraitURL != "" {
+									lookUpdateReq.Portrait = &sheet.PortraitURL
 								}
 							} else {
-								logger.Errorf("[CharacterService] GenerateChapterImages three-view char %d (%s): %v", char.ID, char.Name, threeErr)
+								logger.Errorf("[CharacterService] GenerateChapterImages character sheet for char %d (%s): %v", char.ID, char.Name, sheetErr)
 							}
 
 							if needUpdate {
