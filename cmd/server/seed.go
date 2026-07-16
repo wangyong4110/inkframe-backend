@@ -188,7 +188,7 @@ func seedAIModels(db *gorm.DB) {
 		// V1 HTTP 接口仅支持经典 BV 系列和月亮系列音色，不支持 _uranus_bigtts 系列（需用 V3）
 		{"doubao-speech-v1", "豆包语音 V1（字节跳动）", "https://openspeech.bytedance.com/api/v1", true},
 		{"baidu-tts", "百度", "https://tsn.baidu.com", true},
-		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", true},
+		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", false},
 		{"tencent-tts", "腾讯云", "https://tts.tencentcloudapi.com", true},
 		// 音效
 		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false},
