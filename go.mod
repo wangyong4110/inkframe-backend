@@ -22,7 +22,6 @@ require (
 	github.com/xuri/excelize/v2 v2.9.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.44.0
-	golang.org/x/image v0.23.0
 	golang.org/x/net v0.47.0
 	golang.org/x/text v0.31.0
 	gorm.io/driver/mysql v1.5.2
@@ -101,6 +100,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/arch v0.6.0 // indirect
 	golang.org/x/exp v0.0.0-20231226003508-02704c960a9b // indirect
+	golang.org/x/image v0.23.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect

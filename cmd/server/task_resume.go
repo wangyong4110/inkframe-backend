@@ -1771,13 +1771,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// image_upscale: 高清放大（需从 ParamsJSON 读 image_url/scale/method）
+	// image_upscale: 高清放大（AI 增强，需从 ParamsJSON 读 image_url/scale）
 	if svcs.AIService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageUpscale, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				ImageURL string `json:"image_url"`
 				Scale    int    `json:"scale"`
-				Method   string `json:"method"`
 				NovelID  uint   `json:"novel_id"`
 			}
 			if t.ParamsJSON != "" {
@@ -1790,11 +1789,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			if params.Scale <= 0 {
 				params.Scale = 2
 			}
-			if params.Method == "" {
-				params.Method = "bicubic"
-			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			newURL, err := svcs.AIService.UpscaleImage(ctx, t.TenantID, params.NovelID, params.ImageURL, params.Scale, params.Method)
+			newURL, err := svcs.AIService.UpscaleImage(ctx, t.TenantID, params.NovelID, params.ImageURL, params.Scale)
 			if err != nil {
 				logger.Errorf("TaskService resume image_upscale %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, "高清处理失败: "+err.Error()) //nolint:errcheck

@@ -50,15 +50,13 @@ func (h *ImageHandler) EditImage(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "图片编辑任务已提交")
 }
 
-// UpscaleImage POST /images/upscale（异步任务）
-// Body: { image_url, scale?, method?, novel_id? }
-// method: "bicubic"（默认，CatmullRom 插值，秒级完成）| "ai"（AI 增强，质量更好，需要 AI 配额）
+// UpscaleImage POST /images/upscale（异步任务，AI 增强放大）
+// Body: { image_url, scale?, novel_id? }
 // scale: integer multiplier, default 2, max 8.
 func (h *ImageHandler) UpscaleImage(c *gin.Context) {
 	var body struct {
 		ImageURL string `json:"image_url" binding:"required"`
 		Scale    int    `json:"scale"`
-		Method   string `json:"method"` // "bicubic" or "ai"
 		NovelID  uint   `json:"novel_id"`
 	}
 	if !bindJSON(c, &body) {
@@ -67,20 +65,11 @@ func (h *ImageHandler) UpscaleImage(c *gin.Context) {
 	if body.Scale <= 0 {
 		body.Scale = 2
 	}
-	if body.Method == "" {
-		body.Method = "bicubic"
-	}
-
-	taskName := "高清放大（算法）"
-	if body.Method == "ai" {
-		taskName = "高清放大（AI）"
-	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageUpscale, taskName, "novel", body.NovelID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageUpscale, "高清放大（AI）", "novel", body.NovelID, map[string]interface{}{
 		"image_url": body.ImageURL,
 		"scale":     body.Scale,
-		"method":    body.Method,
 		"novel_id":  body.NovelID,
 	})
 	if err != nil {
