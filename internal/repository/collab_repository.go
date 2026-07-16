@@ -68,12 +68,6 @@ func (r *NovelMemberRepository) Delete(novelID, userID uint) error {
 	return r.db.Where("novel_id = ? AND user_id = ?", novelID, userID).Delete(&model.NovelMember{}).Error
 }
 
-func (r *NovelMemberRepository) CountByNovel(novelID uint) (int64, error) {
-	var count int64
-	err := r.db.Model(&model.NovelMember{}).Where("novel_id = ? AND status = 'active'", novelID).Count(&count).Error
-	return count, err
-}
-
 // EditingLockRepository
 type EditingLockRepository struct{ db *gorm.DB }
 

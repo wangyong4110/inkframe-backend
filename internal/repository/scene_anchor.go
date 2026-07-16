@@ -93,10 +93,6 @@ func (r *ChapterSceneAnchorRepository) Delete(chapterID, sceneAnchorID uint) err
 		Delete(&model.ChapterSceneAnchor{}).Error
 }
 
-func (r *ChapterSceneAnchorRepository) DeleteByAnchor(sceneAnchorID uint) error {
-	return r.db.Where("scene_anchor_id = ?", sceneAnchorID).Delete(&model.ChapterSceneAnchor{}).Error
-}
-
 // ─── SceneConsistencyLogRepository 场景一致性日志仓库 ────────────────────────
 
 type SceneConsistencyLogRepository struct{ db *gorm.DB }

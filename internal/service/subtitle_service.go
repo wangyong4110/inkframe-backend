@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -103,12 +102,6 @@ func (s *SubtitleService) GenerateASS(shots []model.StoryboardShot, fontName str
 		currentTime = endTime
 	}
 	return sb.String()
-}
-
-// ExportASS 将分镜列表导出为 ASS 字幕文件
-func (s *SubtitleService) ExportASS(shots []model.StoryboardShot, fontName, outputPath string) error {
-	content := s.GenerateASS(shots, fontName)
-	return os.WriteFile(outputPath, []byte(content), 0644)
 }
 
 // BurnSubtitles 使用 FFmpeg 将 ASS 字幕烧录到视频文件中。

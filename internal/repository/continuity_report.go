@@ -23,7 +23,3 @@ func (r *ContinuityReportRepository) ListByChapter(chapterID uint) ([]*model.Con
 	return recs, r.db.Where("chapter_id = ?", chapterID).Order("created_at desc").Find(&recs).Error
 }
 
-func (r *ContinuityReportRepository) LatestByChapter(chapterID uint) (*model.ContinuityReportRecord, error) {
-	var rec model.ContinuityReportRecord
-	return &rec, r.db.Where("chapter_id = ?", chapterID).Order("created_at desc").First(&rec).Error
-}

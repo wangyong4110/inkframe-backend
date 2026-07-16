@@ -44,7 +44,7 @@ type LipSyncResult struct {
 //  2. 分镜 ImageURL
 //
 // 结果视频 URL 写回 shot.VideoURL；任务 ID 写到 shot.TaskMeta.ShotTaskID（"lipsync:" 前缀）。
-func (s *VideoService) GenerateLipSyncVideoWithReq(videoID, shotID uint, req LipSyncRequest) (*LipSyncResult, error) {
+func (s *VideoService) GenerateLipSyncVideoWithReq(ctx context.Context, videoID, shotID uint, req LipSyncRequest) (*LipSyncResult, error) {
 	shot, err := s.storyboardRepo.GetByID(shotID)
 	if err != nil {
 		return nil, fmt.Errorf("lipsync: get shot %d: %w", shotID, err)
@@ -88,7 +88,7 @@ func (s *VideoService) GenerateLipSyncVideoWithReq(videoID, shotID uint, req Lip
 	logger.Printf("GenerateLipSyncVideo: shot %d image=%s audio=%s", shotID, imageURL, audioURL)
 
 	// 提交任务
-	task, err := provider.GenerateLipSync(context.Background(), &ai.LipSyncRequest{
+	task, err := provider.GenerateLipSync(ctx, &ai.LipSyncRequest{
 		ImageURL: imageURL,
 		AudioURL: audioURL,
 		Model:    req.Model,
@@ -117,7 +117,7 @@ func (s *VideoService) GenerateLipSyncVideoWithReq(videoID, shotID uint, req Lip
 
 // PollLipSyncUntilDone 轮询口型对齐任务直到完成，将结果 VideoURL 写入分镜。
 // 通常在后台 goroutine 中调用。
-func (s *VideoService) PollLipSyncUntilDone(videoID, shotID uint) error {
+func (s *VideoService) PollLipSyncUntilDone(ctx context.Context, videoID, shotID uint) error {
 	shot, err := s.storyboardRepo.GetByID(shotID)
 	if err != nil {
 		return fmt.Errorf("lipsync poll: get shot: %w", err)
@@ -144,13 +144,18 @@ func (s *VideoService) PollLipSyncUntilDone(videoID, shotID uint) error {
 	defer ticker.Stop()
 
 	for {
-		<-ticker.C
+		select {
+		case <-ctx.Done():
+			s.markShotFailed(shot.ID, "lipsync: cancelled")
+			return ctx.Err()
+		case <-ticker.C:
+		}
 		if time.Now().After(deadline) {
 			s.markShotFailed(shot.ID, "lipsync: polling timeout")
 			return fmt.Errorf("lipsync poll: timeout after %v", lipSyncPollTimeout)
 		}
 
-		ts, err := provider.GetLipSyncStatus(context.Background(), taskID)
+		ts, err := provider.GetLipSyncStatus(ctx, taskID)
 		if err != nil {
 			logger.Errorf("PollLipSyncUntilDone: shot %d status error: %v", shotID, err)
 			continue
@@ -158,17 +163,17 @@ func (s *VideoService) PollLipSyncUntilDone(videoID, shotID uint) error {
 
 		switch ts.Status {
 		case "completed":
-			videoURL, err := provider.GetLipSyncURL(context.Background(), taskID)
+			videoURL, err := provider.GetLipSyncURL(ctx, taskID)
 			if err != nil {
 				s.markShotFailed(shot.ID, "lipsync: get URL: "+err.Error())
 				return fmt.Errorf("lipsync poll: get URL: %w", err)
 			}
 			// Persist CDN video to OSS so it survives expiry.
 			localPath := fmt.Sprintf("%s/inkframe-lipsync-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixMilli())
-			if dlErr := downloadFileCtx(context.Background(), videoURL, localPath); dlErr != nil {
+			if dlErr := downloadFileCtx(ctx, videoURL, localPath); dlErr != nil {
 				logger.Warnf("PollLipSyncUntilDone: download shot %d failed (%v), storing CDN URL", shotID, dlErr)
 			} else {
-				if ossURL := s.uploadClipToStorage(context.Background(), shot, localPath); ossURL != "" {
+				if ossURL := s.uploadClipToStorage(ctx, shot, localPath); ossURL != "" {
 					videoURL = ossURL
 				} else {
 					logger.Warnf("PollLipSyncUntilDone: OSS upload shot %d failed, storing CDN URL", shotID)

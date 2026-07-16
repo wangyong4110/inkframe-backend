@@ -70,10 +70,3 @@ func (r *IgnoredReviewIssueRepository) Delete(id uint) error {
 	return r.db.Unscoped().Delete(&model.IgnoredReviewIssue{}, id).Error
 }
 
-func (r *IgnoredReviewIssueRepository) ExistsByHash(entityType string, entityID uint, hash string) bool {
-	var count int64
-	r.db.Model(&model.IgnoredReviewIssue{}).
-		Where("entity_type = ? AND entity_id = ? AND issue_hash = ?", entityType, entityID, hash).
-		Count(&count)
-	return count > 0
-}

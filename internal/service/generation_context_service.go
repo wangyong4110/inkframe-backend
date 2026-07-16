@@ -58,8 +58,8 @@ func (s *StoryboardService) GenerateStoryboardCtx(ctx context.Context, videoID, 
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查
-func (s *StoryboardService) ReviewStoryboard(tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
-	return s.videoService.ReviewStoryboard(tenantID, videoID, provider, previousScore)
+func (s *StoryboardService) ReviewStoryboard(ctx context.Context, tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
+	return s.videoService.ReviewStoryboard(ctx, tenantID, videoID, provider, previousScore)
 }
 
 // OptimizeStoryboardFromReview 根据审查报告一键优化分镜

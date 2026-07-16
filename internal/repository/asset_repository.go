@@ -200,21 +200,9 @@ func (r *AssetRepository) resolveTagSlugs(names []string) []uint {
 	return ids
 }
 
-func (r *AssetRepository) FindByPHashSimilar(phash string, _ int) ([]*model.Asset, error) {
-	// Simple exact-match; Hamming distance filtering is done in-memory by the service.
-	var assets []*model.Asset
-	err := r.db.Where("phash != '' AND phash = ?", phash).Limit(10).Find(&assets).Error
-	return assets, err
-}
-
 func (r *AssetRepository) IncrUseCount(id uint) error {
 	return r.db.Model(&model.Asset{}).Where("id = ?", id).
 		UpdateColumn("use_count", gorm.Expr("use_count + 1")).Error
-}
-
-func (r *AssetRepository) IncrLikeCount(id uint, delta int) error {
-	return r.db.Model(&model.Asset{}).Where("id = ?", id).
-		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
 }
 
 func (r *AssetRepository) ExistsByExternalID(externalID string) (bool, error) {
@@ -240,22 +228,6 @@ func (r *AssetRepository) ListPublicAll() ([]*model.Asset, error) {
 	err := r.db.Where("scope = ? AND status = ?", model.AssetScopePublic, model.AssetStatusActive).
 		Find(&assets).Error
 	return assets, err
-}
-
-func (r *AssetRepository) SearchByColor(hexColor string, _ int, scope string, callerID uint, page, size int) ([]*model.Asset, int64, error) {
-	q := r.db.Model(&model.Asset{}).Where("dominant_color = ? AND status = ?", hexColor, model.AssetStatusActive)
-	if scope == model.AssetScopePublic {
-		q = q.Where("scope = ?", model.AssetScopePublic)
-	} else if scope == model.AssetScopePersonal {
-		q = q.Where("scope = ? AND creator_id = ?", model.AssetScopePersonal, callerID)
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var assets []*model.Asset
-	err := q.Offset((page - 1) * size).Limit(size).Find(&assets).Error
-	return assets, total, err
 }
 
 // ─── TagRepository ────────────────────────────────────────────────────────────
@@ -302,21 +274,9 @@ func (r *TagRepository) RemoveFromAsset(assetID, tagID uint) error {
 	return r.db.Where("asset_id = ? AND tag_id = ?", assetID, tagID).Delete(&model.AssetTagMap{}).Error
 }
 
-func (r *TagRepository) ListByAsset(assetID uint) ([]*model.Tag, error) {
-	var tags []*model.Tag
-	err := r.db.Joins("JOIN ink_asset_tag_map m ON m.tag_id = ink_tag.id").
-		Where("m.asset_id = ?", assetID).Find(&tags).Error
-	return tags, err
-}
-
 func (r *TagRepository) IncrUseCount(tagID uint) error {
 	return r.db.Model(&model.Tag{}).Where("id = ?", tagID).
 		UpdateColumn("use_count", gorm.Expr("use_count + 1")).Error
-}
-
-func (r *TagRepository) RecalcUseCounts() error {
-	return r.db.Exec(`UPDATE ink_tag t SET use_count =
-		(SELECT COUNT(*) FROM ink_asset_tag_map m WHERE m.tag_id = t.id)`).Error
 }
 
 // ─── AssetVersionRepository ───────────────────────────────────────────────────
@@ -339,13 +299,6 @@ func (r *AssetVersionRepository) GetByVersionNo(assetID uint, versionNo int) (*m
 	var v model.AssetVersion
 	err := r.db.Where("asset_id = ? AND version_no = ?", assetID, versionNo).First(&v).Error
 	return &v, err
-}
-
-func (r *AssetVersionRepository) MaxVersionNo(assetID uint) (int, error) {
-	var max int
-	err := r.db.Model(&model.AssetVersion{}).Where("asset_id = ?", assetID).
-		Select("COALESCE(MAX(version_no), 0)").Scan(&max).Error
-	return max, err
 }
 
 // CreateVersionAtomic assigns the next version_no and creates the record in a single
@@ -379,12 +332,6 @@ func (r *AssetCollectionRepository) Create(c *model.AssetCollection) error {
 func (r *AssetCollectionRepository) GetByID(id uint) (*model.AssetCollection, error) {
 	var c model.AssetCollection
 	return &c, r.db.First(&c, id).Error
-}
-
-func (r *AssetCollectionRepository) Update(c *model.AssetCollection) error { return r.db.Save(c).Error }
-
-func (r *AssetCollectionRepository) Delete(id uint) error {
-	return r.db.Delete(&model.AssetCollection{}, id).Error
 }
 
 func (r *AssetCollectionRepository) ListByCreator(creatorID uint) ([]*model.AssetCollection, error) {
@@ -483,19 +430,6 @@ func NewAssetUsageRepository(db *gorm.DB) *AssetUsageRepository {
 }
 
 func (r *AssetUsageRepository) Create(u *model.AssetUsage) error { return r.db.Create(u).Error }
-
-func (r *AssetUsageRepository) ListByAsset(assetID uint, page, pageSize int) ([]*model.AssetUsage, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 50
-	}
-	var us []*model.AssetUsage
-	err := r.db.Where("asset_id = ?", assetID).Order("used_at DESC").
-		Offset((page - 1) * pageSize).Limit(pageSize).Find(&us).Error
-	return us, err
-}
 
 // ─── CrawlJobRepository ───────────────────────────────────────────────────────
 
@@ -629,11 +563,6 @@ func (r *SearchLogRepository) ListGaps(scope string, limit int) ([]struct {
 		}{r.Query, r.Count}
 	}
 	return result, err
-}
-
-func (r *SearchLogRepository) CleanOlderThan(days int) error {
-	cutoff := time.Now().AddDate(0, 0, -days)
-	return r.db.Where("searched_at < ?", cutoff).Delete(&model.SearchLog{}).Error
 }
 
 // ─── TenantQuotaRepository ────────────────────────────────────────────────────

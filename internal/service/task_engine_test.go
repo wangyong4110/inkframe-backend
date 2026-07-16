@@ -60,7 +60,7 @@ func TestTaskEngine_WakeDispatchesQuickly(t *testing.T) {
 
 	var calls atomic.Int32
 	done := make(chan struct{}, 1)
-	svc.RegisterResumeHandler(testTaskType, func(task *model.AsyncTask) {
+	svc.RegisterResumeHandler(testTaskType, func(_ context.Context, task *model.AsyncTask) {
 		calls.Add(1)
 		_ = svc.Complete(task.TaskID, nil)
 		done <- struct{}{}
@@ -102,7 +102,7 @@ func TestTaskEngine_PollFallbackCatchesMissedWake(t *testing.T) {
 
 	var calls atomic.Int32
 	done := make(chan struct{}, 1)
-	svc.RegisterResumeHandler(testTaskType, func(task *model.AsyncTask) {
+	svc.RegisterResumeHandler(testTaskType, func(_ context.Context, task *model.AsyncTask) {
 		calls.Add(1)
 		_ = svc.Complete(task.TaskID, nil)
 		done <- struct{}{}
@@ -138,7 +138,7 @@ func TestTaskEngine_ConcurrentWakeAndPollExecuteOnce(t *testing.T) {
 
 	var calls atomic.Int32
 	var completions atomic.Int32
-	svc.RegisterResumeHandler(testTaskType, func(task *model.AsyncTask) {
+	svc.RegisterResumeHandler(testTaskType, func(_ context.Context, task *model.AsyncTask) {
 		calls.Add(1)
 		time.Sleep(20 * time.Millisecond) // widen the window a real race would need to hit
 		_ = svc.Complete(task.TaskID, nil)
@@ -186,7 +186,7 @@ func TestTaskEngine_CancelBeforeDispatchPreventsExecution(t *testing.T) {
 	svc, _ := newTestTaskService(t)
 
 	var calls atomic.Int32
-	svc.RegisterResumeHandler(testTaskType, func(task *model.AsyncTask) {
+	svc.RegisterResumeHandler(testTaskType, func(_ context.Context, task *model.AsyncTask) {
 		calls.Add(1)
 		_ = svc.Complete(task.TaskID, nil)
 	})
@@ -227,7 +227,7 @@ func TestTaskEngine_ConcurrencyLimitPerTenantType(t *testing.T) {
 	var running atomic.Int32
 	var maxObservedConcurrent atomic.Int32
 	var totalCompleted atomic.Int32
-	svc.RegisterResumeHandler(testTaskType, func(task *model.AsyncTask) {
+	svc.RegisterResumeHandler(testTaskType, func(_ context.Context, task *model.AsyncTask) {
 		n := running.Add(1)
 		for {
 			max := maxObservedConcurrent.Load()

@@ -20,9 +20,7 @@ import (
 // GenerateImage 调用AI生成图像。DB 是唯一权威来源（同 GenerateCharacterThreeView 的 auto 分支）：
 // 按 tenantID 加载已配置的 IMAGE 类型 provider，依次尝试直到成功；无 providerRepo 时退回静态
 // aiManager（config.yaml/env 静态注册场景）。
-func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
-	ctx := context.Background()
-
+func (s *AIService) GenerateImage(ctx context.Context, tenantID uint, prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
 	entries := s.loadImageProviderEntries(tenantID)
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("no image providers configured")

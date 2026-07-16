@@ -375,7 +375,7 @@ func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []ui
 	return succeeded, failed, nil
 }
 
-func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
+func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID uint) ([]*model.Item, error) {
 	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
@@ -431,7 +431,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 		itemsPrompt += "\n\n注意：已有物品如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", itemsPrompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_items", itemsPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)

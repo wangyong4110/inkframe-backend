@@ -389,9 +389,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				// 钩子链
 				novels.GET("/:id/hooks", cfg.DramaticHandler.ListHooks)
 				novels.POST("/:id/hooks", cfg.DramaticHandler.CreateHook)
-				// 爽点
-				novels.GET("/:id/satisfaction-points", cfg.DramaticHandler.ListSatisfactionPoints)
-				novels.POST("/:id/satisfaction-points", cfg.DramaticHandler.CreateSatisfactionPoint)
 				// 冲突弧
 				novels.GET("/:id/conflict-arcs", cfg.DramaticHandler.ListConflictArcs)
 				novels.POST("/:id/conflict-arcs", cfg.DramaticHandler.CreateConflictArc)
@@ -509,11 +506,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				hooks.DELETE("/:id", cfg.DramaticHandler.DeleteHook)
 				hooks.PUT("/:id/fulfill", cfg.DramaticHandler.FulfillHook)
 				hooks.PUT("/:id/payoff-quality", cfg.DramaticHandler.RateHookPayoff)
-			}
-			sps := v1.Group("/satisfaction-points")
-			{
-				sps.PUT("/:id", cfg.DramaticHandler.UpdateSatisfactionPoint)
-				sps.DELETE("/:id", cfg.DramaticHandler.DeleteSatisfactionPoint)
 			}
 			arcs := v1.Group("/conflict-arcs")
 			{

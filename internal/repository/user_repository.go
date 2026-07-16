@@ -97,12 +97,6 @@ func (r *TenantRepository) GetByID(id uint) (*model.Tenant, error) {
 	return &tenant, err
 }
 
-func (r *TenantRepository) GetByCode(code string) (*model.Tenant, error) {
-	var tenant model.Tenant
-	err := r.db.Where("code = ?", code).First(&tenant).Error
-	return &tenant, err
-}
-
 func (r *TenantRepository) IncrUsedUsers(tenantID uint) error {
 	return r.db.Model(&model.Tenant{}).Where("id = ?", tenantID).
 		UpdateColumn("used_users", gorm.Expr("used_users + 1")).Error
@@ -113,13 +107,6 @@ func (r *TenantRepository) DecrUsedUsers(tenantID uint) error {
 		UpdateColumn("used_users", gorm.Expr("used_users - 1")).Error
 }
 
-// SyncUsedUsers 从 tenant_users 表实际行数重算 used_users（修复漂移）。
-func (r *TenantRepository) SyncUsedUsers(tenantID uint) error {
-	return r.db.Exec(
-		`UPDATE tenants SET used_users = (SELECT COUNT(*) FROM tenant_users WHERE tenant_id = ? AND deleted_at IS NULL) WHERE id = ?`,
-		tenantID, tenantID,
-	).Error
-}
 
 func (r *TenantRepository) List(page, pageSize int) ([]*model.Tenant, int64, error) {
 	var tenants []*model.Tenant

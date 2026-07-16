@@ -59,28 +59,6 @@ func (r *TaskRepository) DeleteOldCompleted(before time.Time) error {
 		Delete(&model.AsyncTask{}).Error
 }
 
-// ListDistinctActiveTenants returns distinct tenant IDs that have pending tasks.
-// Used by per-tenant fairness scheduler to round-robin across tenants.
-func (r *TaskRepository) ListDistinctActiveTenants() ([]uint, error) {
-	var tenantIDs []uint
-	err := r.db.Model(&model.AsyncTask{}).
-		Select("DISTINCT tenant_id").
-		Where("status = ?", "pending").
-		Pluck("tenant_id", &tenantIDs).Error
-	return tenantIDs, err
-}
-
-// ListOrphaned returns pending/running tasks of the given types not updated since `before`.
-// Used to find resumable tasks after server restart.
-func (r *TaskRepository) ListOrphaned(before time.Time, types []string) ([]*model.AsyncTask, error) {
-	var tasks []*model.AsyncTask
-	err := r.db.Where(
-		"status IN ? AND updated_at < ? AND type IN ?",
-		[]string{"pending", "running"}, before, types,
-	).Find(&tasks).Error
-	return tasks, err
-}
-
 // MarkStaleRunning marks pending/running tasks not updated since `before` as failed.
 // Used to recover orphaned tasks after server restart or goroutine timeout.
 func (r *TaskRepository) MarkStaleRunning(before time.Time) (int64, error) {

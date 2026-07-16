@@ -792,7 +792,7 @@ type GenerateOutlineRequest struct {
 }
 
 // GenerateOutline 生成大纲
-func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineRequest) (*OutlineResult, error) {
+func (s *NovelService) GenerateOutline(ctx context.Context, tenantID uint, req *GenerateOutlineRequest) (*OutlineResult, error) {
 	outlineStart := time.Now()
 	recordOutline := func(status string) {
 		metrics.OutlineGenerationTotal.WithLabelValues(status).Inc()
@@ -849,7 +849,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	}
 
 	// 调用AI生成（使用租户提供商）
-	result, err := s.aiService.GenerateWithProvider(tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)
 	if err != nil {
 		recordOutline("error")
 		return nil, err

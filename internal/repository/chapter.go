@@ -446,16 +446,6 @@ func (r *ChapterVersionRepository) CreateAtomic(version *model.ChapterVersion) e
 	})
 }
 
-// GetLatest 获取最新版本
-func (r *ChapterVersionRepository) GetLatest(chapterID uint) (*model.ChapterVersion, error) {
-	var version model.ChapterVersion
-	if err := r.db.Where("chapter_id = ?", chapterID).
-		Order("version_no DESC").
-		First(&version).Error; err != nil {
-		return nil, err
-	}
-	return &version, nil
-}
 
 // GetVersion 获取指定版本
 func (r *ChapterVersionRepository) GetVersion(chapterID uint, versionNo int) (*model.ChapterVersion, error) {

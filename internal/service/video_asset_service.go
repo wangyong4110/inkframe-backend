@@ -250,7 +250,7 @@ func alignShotDurationToTTS(currentDuration float64, audioURL string) float64 {
 }
 
 // GenerateSegmentAudio 为单条语音段落生成 TTS 音频
-func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVoice string) error {
+func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, tenantID uint, defaultVoice string) error {
 	logger.Printf("[TTS] GenerateSegmentAudio: start segID=%d tenantID=%d defaultVoice=%q", segID, tenantID, defaultVoice)
 	if s.segmentRepo == nil {
 		logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR segment repository not initialized", segID)
@@ -327,7 +327,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d calling TTS voice=%q speed=%.2f style=%q language=%q", segID, voice, speed, style, seg.Language)
 
-	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style, seg.Language)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style, seg.Language)
 	if err != nil {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
 		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
@@ -446,7 +446,7 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 }
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后写入 ShotVoiceSegment 并更新 shot.Duration
-func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
+func (s *VideoService) GenerateShotAudio(ctx context.Context, shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
 	logger.Printf("[TTS] GenerateShotAudio: start shotID=%d shotNo=%d videoID=%d tenantID=%d narrationVoice=%q",
 		shot.ID, shot.ShotNo, shot.VideoID, tenantID, narrationVoice)
 
@@ -463,7 +463,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 				}
 			}
 			logger.Printf("[TTS] GenerateShotAudio: shotID=%d has %d segments without audio, delegating to generateShotAudioFromSegments", shot.ID, len(segs))
-			return s.generateShotAudioFromSegments(shot, segs, tenantID, narrationVoice)
+			return s.generateShotAudioFromSegments(ctx, shot, segs, tenantID, narrationVoice)
 		}
 	}
 
@@ -495,7 +495,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
 	logger.Printf("[TTS] GenerateShotAudio: shotID=%d resolved voice=%q speed=%.2f style=%q", shot.ID, voice, speed, style)
 
-	localAudioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
+	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
 	if err != nil {
 		logger.Errorf("[TTS] GenerateShotAudio: shotID=%d TTS FAILED voice=%q textLen=%d error: %v",
 			shot.ID, voice, len([]rune(text)), err)
@@ -513,7 +513,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	// 上传到持久存储（持久化音频避免本地 /tmp 文件重启后消失）
 	if s.storageSvc != nil {
-		persistURL, uploadErr := s.uploadAudioToStorage(context.Background(), shot, audioURL)
+		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
 		if uploadErr != nil {
 			logger.Errorf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
@@ -608,7 +608,7 @@ func formatSRTTimecode(secs float64) string {
 // generateShotAudioFromSegments generates TTS for each segment that lacks audio,
 // then stitches all segment audio files into a single track using ffmpeg and
 // uploads the result to storage, and updates shot.Duration.
-func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot, segs []*model.ShotVoiceSegment, tenantID uint, defaultVoice string) error {
+func (s *VideoService) generateShotAudioFromSegments(ctx context.Context, shot *model.StoryboardShot, segs []*model.ShotVoiceSegment, tenantID uint, defaultVoice string) error {
 	logger.Printf("[TTS] generateShotAudioFromSegments: start shotID=%d shotNo=%d segCount=%d tenantID=%d defaultVoice=%q",
 		shot.ID, shot.ShotNo, len(segs), tenantID, defaultVoice)
 
@@ -619,7 +619,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 			pending++
 			logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d generating segID=%d seqNo=%d speaker=%q textLen=%d",
 				shot.ID, seg.ID, seg.SeqNo, seg.Speaker, len([]rune(seg.Text)))
-			if err := s.GenerateSegmentAudio(seg.ID, tenantID, defaultVoice); err != nil {
+			if err := s.GenerateSegmentAudio(ctx, seg.ID, tenantID, defaultVoice); err != nil {
 				logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR segID=%d TTS failed: %v", shot.ID, seg.ID, err)
 			}
 		} else {
@@ -688,7 +688,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		return fmt.Errorf("generateShotAudioFromSegments: write list: %w", err)
 	}
 	stitchedPath := filepath.Join(tmpDir, fmt.Sprintf("shot_%d_stitched.mp3", shot.ID))
-	out, ffmpegErr := runFFmpegCtx(context.Background(),
+	out, ffmpegErr := runFFmpegCtx(ctx,
 		"-y", "-f", "concat", "-safe", "0", "-i", listFile,
 		"-c", "copy", stitchedPath,
 	)
@@ -708,7 +708,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 	audioURL := "file://" + stitchedPath
 	if s.storageSvc != nil && len(stitchedData) > 0 {
 		key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
-		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(stitchedData), int64(len(stitchedData)), "audio/mpeg"); e == nil {
+		if ossURL, e := s.storageSvc.Upload(ctx, key, bytes.NewReader(stitchedData), int64(len(stitchedData)), "audio/mpeg"); e == nil {
 			audioURL = ossURL
 		} else {
 			logger.Errorf("generateShotAudioFromSegments: OSS upload failed for shot %d: %v", shot.ID, e)

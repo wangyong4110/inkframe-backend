@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -136,15 +135,6 @@ func (r *NovelRepository) GetByIDFromDB(id uint) (*model.Novel, error) {
 	return &novel, nil
 }
 
-// GetByUUID 根据UUID获取小说
-func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
-	var novel model.Novel
-	if err := r.db.Preload("Worldview").Preload("VideoConfig").Where("uuid = ?", uuid).First(&novel).Error; err != nil {
-		return nil, err
-	}
-	return &novel, nil
-}
-
 // FindByTitle 按标题和 tenantID 查找小说（用于导入去重）
 func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel, error) {
 	var novel model.Novel
@@ -153,21 +143,6 @@ func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel
 		return nil, err
 	}
 	return &novel, nil
-}
-
-// SearchByTitle 按标题模糊搜索小说（限当前租户，防止跨租户数据泄露）
-func (r *NovelRepository) SearchByTitle(title string, tenantID uint, limit int) ([]*model.Novel, error) {
-	var novels []*model.Novel
-	if limit <= 0 {
-		limit = 20
-	}
-	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(title)
-	pattern := "%" + escaped + "%"
-	err := r.db.Where("title LIKE ? AND tenant_id = ?", pattern, tenantID).
-		Order("updated_at DESC").
-		Limit(limit).
-		Find(&novels).Error
-	return novels, err
 }
 
 // List 获取小说列表
@@ -425,15 +400,6 @@ func applyNovelField(novel *model.Novel, key string, value interface{}) {
 	}
 }
 
-// Delete 软删除小说（不删关联数据）
-func (r *NovelRepository) Delete(id uint) error {
-	if err := r.db.Delete(&model.Novel{}, id).Error; err != nil {
-		return err
-	}
-	r.invalidateCache(id)
-	return nil
-}
-
 // DeleteWithCascade 物理删除小说及其全部关联数据（在事务中按依赖顺序执行）
 func (r *NovelRepository) DeleteWithCascade(id uint) error {
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -604,38 +570,6 @@ func (r *NovelRepository) SyncPublishedCount(novelID uint) error {
 	return nil
 }
 
-// SyncAllStats 在单个事务中原子地重新计算并更新小说的章节数、总字数和已发布章节数。
-func (r *NovelRepository) SyncAllStats(novelID uint) error {
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		var result struct {
-			Count int
-			Words int
-		}
-		if err := tx.Model(&model.Chapter{}).
-			Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
-			Where("novel_id = ?", novelID).
-			Scan(&result).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
-			"chapter_count": result.Count,
-			"total_words":   result.Words,
-		}).Error; err != nil {
-			return err
-		}
-		sub := tx.Model(&model.Chapter{}).
-			Select("COUNT(*)").
-			Where("novel_id = ? AND is_published = TRUE", novelID)
-		return tx.Model(&model.Novel{}).Where("id = ?", novelID).
-			Update("published_count", sub).Error
-	})
-	if err != nil {
-		return err
-	}
-	r.invalidateCache(novelID)
-	return nil
-}
-
 // invalidateCache 清除缓存
 func (r *NovelRepository) invalidateCache(id uint) {
 	if r.cache != nil {
@@ -767,12 +701,6 @@ func (r *NovelRepository) IncrNovelViewCount(id uint) error {
 	return nil
 }
 
-// IncrNovelLikeCount 点赞数 delta（+1 或 -1，写入 ink_content_stats）
-func (r *NovelRepository) IncrNovelLikeCount(id uint, delta int) error {
-	r.incrStat(id, "like_count", gorm.Expr("GREATEST(0, like_count + ?)", delta))
-	return nil
-}
-
 // IncrNovelCommentCount 评论数 delta（写入 ink_content_stats）
 func (r *NovelRepository) IncrNovelCommentCount(id uint, delta int) error {
 	r.incrStat(id, "comment_count", gorm.Expr("GREATEST(0, comment_count + ?)", delta))
@@ -813,36 +741,6 @@ func (r *NovelRepository) ListPublicNovelsForHotCalc() ([]NovelHotCalcRow, error
 		LIMIT 10000`).
 		Scan(&rows).Error
 	return rows, err
-}
-
-// HydrateNovelStats 批量填充小说统计字段（ViewCount/LikeCount/CommentCount）
-func (r *NovelRepository) HydrateNovelStats(novels []*model.Novel) {
-	if len(novels) == 0 {
-		return
-	}
-	ids := make([]uint, 0, len(novels))
-	for _, n := range novels {
-		ids = append(ids, n.ID)
-	}
-	var rows []struct {
-		EntityID     uint
-		ViewCount    int
-		LikeCount    int
-		CommentCount int
-	}
-	r.db.Raw(`SELECT entity_id, view_count, like_count, comment_count
-		FROM ink_content_stats WHERE entity_type = 'novel' AND entity_id IN ?`, ids).Scan(&rows)
-	statsMap := make(map[uint]struct{ v, l, c int }, len(rows))
-	for _, row := range rows {
-		statsMap[row.EntityID] = struct{ v, l, c int }{row.ViewCount, row.LikeCount, row.CommentCount}
-	}
-	for _, n := range novels {
-		if s, ok := statsMap[n.ID]; ok {
-			n.ViewCount = s.v
-			n.LikeCount = s.l
-			n.CommentCount = s.c
-		}
-	}
 }
 
 // ─── NovelLikeRepository ────────────────────────────────────────────────────
@@ -941,10 +839,6 @@ func (r *NovelCommentRepository) GetByID(id uint) (*model.NovelComment, error) {
 		return nil, err
 	}
 	return &model.NovelComment{ID: ec.ID, NovelID: ec.EntityID, UserID: ec.UserID, Content: ec.Content, ParentID: ec.ParentID, CreatedAt: ec.CreatedAt, UpdatedAt: ec.UpdatedAt}, nil
-}
-
-func (r *NovelCommentRepository) Delete(id uint) error {
-	return r.db.Where("entity_type = 'novel' AND id = ?", id).Delete(&model.EntityComment{}).Error
 }
 
 // DeleteWithReplies deletes a comment and all its direct replies atomically.

@@ -45,11 +45,6 @@ func (r *OutlineReviewRepository) ListByNovel(novelID uint) ([]*model.OutlineRev
 	return reviews, r.db.Where("novel_id = ?", novelID).Order("chapter_no ASC").Find(&reviews).Error
 }
 
-// DeleteByNovel 删除小说所有章节审查结果
-func (r *OutlineReviewRepository) DeleteByNovel(novelID uint) error {
-	return r.db.Where("novel_id = ?", novelID).Delete(&model.OutlineReview{}).Error
-}
-
 // NovelOutlineSynthesisRepository 小说整体大纲综合报告仓库
 type NovelOutlineSynthesisRepository struct {
 	db *gorm.DB

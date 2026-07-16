@@ -128,10 +128,6 @@ func (r *RewriteBibleRepository) DeleteByProjectID(projectID uint) error {
 	return r.db.Where("project_id = ?", projectID).Delete(&model.RewriteBible{}).Error
 }
 
-func (r *RewriteBibleRepository) Update(b *model.RewriteBible) error {
-	return r.db.Save(b).Error
-}
-
 func (r *RewriteBibleRepository) UpdateFields(projectID uint, fields map[string]interface{}) error {
 	return r.db.Model(&model.RewriteBible{}).Where("project_id = ?", projectID).Updates(fields).Error
 }

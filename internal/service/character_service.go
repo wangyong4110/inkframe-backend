@@ -81,6 +81,7 @@ type charNameEntry struct {
 // extractCharNamesFromContent 从单章内容中提取角色名单（纯 AI 提取，不操作 DB）
 // existingNamesJSON：已知角色的 JSON 数组字符串，传入后 AI 会复用已有名称而非产生别名
 func (s *CharacterService) extractCharNamesFromContent(
+	ctx context.Context,
 	tenantID, novelID uint,
 	novelTitle, genre, content, existingNamesJSON string,
 ) ([]charNameEntry, error) {
@@ -94,7 +95,7 @@ func (s *CharacterService) extractCharNamesFromContent(
 		return nil, fmt.Errorf("render extract_character_names: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_character_names", prompt, "")
 	if err != nil {
 		logger.Errorf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
 		return nil, err
@@ -124,6 +125,7 @@ func (s *CharacterService) extractCharNamesFromContent(
 
 // extractCharacterNamesFromChapters Phase 1：逐章并发提取角色名单，合并去重
 func (s *CharacterService) extractCharacterNamesFromChapters(
+	ctx context.Context,
 	tenantID, novelID uint,
 	novelTitle, genre string,
 	chapters []*model.Chapter,
@@ -177,7 +179,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 			if content == "" {
 				content = c.Summary
 			}
-			entries, err := s.extractCharNamesFromContent(tenantID, novelID, novelTitle, genre, content, existingNamesJSON)
+			entries, err := s.extractCharNamesFromContent(ctx, tenantID, novelID, novelTitle, genre, content, existingNamesJSON)
 			results[idx] = chResult{entries, err}
 		}(i, ch)
 	}
@@ -201,7 +203,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 
 	// 合并后若仍有多条记录，用 AI 做一次别名整合（消除跨章产生的同一角色不同名）
 	if len(merged) > 1 {
-		if consolidated, err := s.consolidateCharacterNames(tenantID, novelID, novelTitle, merged); err == nil && len(consolidated) > 0 {
+		if consolidated, err := s.consolidateCharacterNames(ctx, tenantID, novelID, novelTitle, merged); err == nil && len(consolidated) > 0 {
 			logger.Printf("[CharacterService] consolidateCharacterNames: %d → %d entries", len(merged), len(consolidated))
 			merged = consolidated
 		} else if err != nil {
@@ -213,6 +215,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 
 // consolidateCharacterNames 用 AI 合并别名，消除跨章节提取产生的同一角色多名问题
 func (s *CharacterService) consolidateCharacterNames(
+	ctx context.Context,
 	tenantID, novelID uint,
 	novelTitle string,
 	entries []charNameEntry,
@@ -228,7 +231,7 @@ func (s *CharacterService) consolidateCharacterNames(
 	if err != nil {
 		return nil, fmt.Errorf("render consolidate_character_names: %w", err)
 	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "consolidate_character_names", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "consolidate_character_names", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI call: %w", err)
 	}
@@ -300,6 +303,7 @@ func (s *CharacterService) extractCharacterNameList(
 
 // generateOneCharacterProfile 阶段二：为单个角色生成完整档案
 func (s *CharacterService) generateOneCharacterProfile(
+	ctx context.Context,
 	tenantID, novelID uint,
 	novelTitle, genre, promptLanguage, worldviewContext string,
 	entry charNameEntry,
@@ -320,7 +324,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "generate_character_profile", prompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		logger.Errorf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
@@ -1017,7 +1021,7 @@ func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) e
 
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（按 novel_id+name upsert，仅补填空字段）
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（两阶段：先提名单，再并发生成档案）
-func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Character, error) {
+func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelID uint) ([]*model.Character, error) {
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -1050,7 +1054,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	}
 
 	// ── 阶段一：逐章并发提取角色名单，合并去重 ──────────────────────────────
-	nameList, err := s.extractCharacterNamesFromChapters(tenantID, novelID, novelTitle, novelGenre, chapters)
+	nameList, err := s.extractCharacterNamesFromChapters(ctx, tenantID, novelID, novelTitle, novelGenre, chapters)
 	if err != nil {
 		return nil, fmt.Errorf("phase 1 (extract names per chapter): %w", err)
 	}
@@ -1085,7 +1089,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, e, shortSummaries)
+			p, err := s.generateOneCharacterProfile(ctx, tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, e, shortSummaries)
 			results[idx] = profileResult{p, err}
 		}(i, entry)
 	}
@@ -1244,7 +1248,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 
 // ReanalyzeCharacter 重新分析并生成单个角色的信息（description / visual_prompt）。
 // 基于小说全部章节摘要，调用与 AIBatchGenerate 相同的 generateOneCharacterProfile 逻辑。
-func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*model.Character, error) {
+func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, characterID uint) (*model.Character, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
 		return nil, fmt.Errorf("character not found: %w", err)
@@ -1288,7 +1292,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 		Brief: char.Description,
 	}
 
-	profile, err := s.generateOneCharacterProfile(tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, entry, shortSummaries)
+	profile, err := s.generateOneCharacterProfile(ctx, tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, entry, shortSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("AI reanalyze: %w", err)
 	}
@@ -1327,7 +1331,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 
 // AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联。
 // 复用与主角色分析相同的 description/visual_prompt/音色推荐逻辑，保证次要角色档案质量一致。
-func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint, userPrompt string) ([]*model.Character, error) {
+func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, novelID, chapterID uint, userPrompt string) ([]*model.Character, error) {
 	logger.Printf("[CharacterService] AIExtractMinorChars: tenantID=%d novelID=%d chapterID=%d", tenantID, novelID, chapterID)
 
 	// 序列化同一 novel 的并发提取，防止两个任务同时读到空的 existingNames 而重复创建角色。
@@ -1404,7 +1408,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		logger.Errorf("[CharacterService] AIExtractMinorChars: AI call failed: %v", err)
@@ -1860,14 +1864,14 @@ type GeneratedCharacterImage struct {
 	Description string `json:"description"`
 }
 
-func (s *ImageGenerationService) GenerateCharacterImage(tenantID uint, req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
+func (s *ImageGenerationService) GenerateCharacterImage(ctx context.Context, tenantID uint, req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
 		Prompt:   fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
 		Size:     "1024x1024",
 		Steps:    50,
 		CFGScale: 7.5,
 	}
-	image, err := s.aiService.GenerateImage(tenantID, options.Prompt, options)
+	image, err := s.aiService.GenerateImage(ctx, tenantID, options.Prompt, options)
 	if err != nil {
 		return nil, err
 	}
@@ -2617,7 +2621,7 @@ type LookVisualPromptResult struct {
 
 // GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像 Prompt。
 // 语言跟随小说 PromptLanguage 设置：zh 输出中文，en 输出英文。
-func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, lookDesc string) (*LookVisualPromptResult, error) {
+func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantID, characterID uint, lookDesc string) (*LookVisualPromptResult, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
 		return nil, err
@@ -2667,7 +2671,7 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 	if err != nil {
 		return nil, fmt.Errorf("render character_visual_prompt: %w", err)
 	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, char.NovelID, "character_profile", sysPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return nil, err
@@ -2852,7 +2856,7 @@ func (s *CharacterService) GenerateChapterImages(
 // 导致只用过"设计"入口（这里）而没点过"形象提示词"入口的角色，永远无法生成面部特写图
 // （见 task_resume.go look_image_gen 里 "该形象还没有面部专用提示词" 的报错）。合并后两个
 // 入口共享同一次生成结果，此方法只负责其特有的落库位置（AppearancePrompt 字段）。
-func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (string, error) {
+func (s *CharacterService) GenerateCostumeDesign(ctx context.Context, tenantID, characterID uint) (string, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
 		return "", fmt.Errorf("character not found: %w", err)
@@ -2861,7 +2865,7 @@ func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (st
 		return "", fmt.Errorf("角色描述为空，请先填写角色描述")
 	}
 
-	result, err := s.GenerateLookVisualPrompt(tenantID, characterID, "")
+	result, err := s.GenerateLookVisualPrompt(ctx, tenantID, characterID, "")
 	if err != nil {
 		return "", err
 	}

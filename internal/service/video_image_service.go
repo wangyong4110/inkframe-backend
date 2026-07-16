@@ -2555,7 +2555,7 @@ func (s *VideoService) resolveImageURLToLocalFile(imageURL, prefix string) (stri
 //	章节 ID 未知时降级：videos/{uuid}.mp4
 
 // runSlideshowPipeline 异步处理图片解说模式的所有分镜，完成后自动拼接
-func (s *VideoService) runSlideshowPipeline(videoID uint) {
+func (s *VideoService) runSlideshowPipeline(ctx context.Context, videoID uint) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		logger.Errorf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
@@ -2582,7 +2582,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		audioWg.Add(1)
 		go func(sh *model.StoryboardShot) {
 			defer audioWg.Done()
-			if err := s.GenerateShotAudio(sh, s.videoTenantID(video), narrationVoice); err != nil {
+			if err := s.GenerateShotAudio(ctx, sh, s.videoTenantID(video), narrationVoice); err != nil {
 				logger.Errorf("runSlideshowPipeline: audio gen failed for shot %d: %v", sh.ShotNo, err)
 			}
 		}(shot)
@@ -2592,7 +2592,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 }
 
 // GenerateAllShotVideos 提交所有待生成分镜的视频任务
-func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
+func (s *VideoService) GenerateAllShotVideos(ctx context.Context, videoID uint) error {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return err
@@ -2615,9 +2615,9 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		}
 		logger.Printf("GenerateAllShotVideos: videoID=%d → slideshow fallback (no video provider)", videoID)
 		// 同步执行以确保调用方（handler goroutine）等待完成后再标记任务结束
-		s.runSlideshowPipeline(videoID)
+		s.runSlideshowPipeline(ctx, videoID)
 		// 拼接所有 completed 分镜
-		if _, stitchErr := s.StitchVideoCtx(context.Background(), videoID); stitchErr != nil {
+		if _, stitchErr := s.StitchVideoCtx(ctx, videoID); stitchErr != nil {
 			logger.Errorf("GenerateAllShotVideos: slideshow stitch failed videoID=%d: %v", videoID, stitchErr)
 		}
 		return nil
@@ -2650,7 +2650,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			continue
 		}
 		// TTS audio in parallel
-		go s.GenerateShotAudio(shot, s.videoTenantID(video), narrationVoice) //nolint:errcheck
+		go s.GenerateShotAudio(ctx, shot, s.videoTenantID(video), narrationVoice) //nolint:errcheck
 	}
 	return nil
 }
@@ -2815,7 +2815,7 @@ func (s *VideoService) VoiceFirstGenerateShots(videoID uint, shotIDs []uint, qua
 		ttssSem <- struct{}{}
 		go func() {
 			defer func() { <-ttssSem; wg.Done() }()
-			if genErr := s.GenerateShotAudio(sh, s.videoTenantID(video), narrationVoice); genErr != nil {
+			if genErr := s.GenerateShotAudio(context.Background(), sh, s.videoTenantID(video), narrationVoice); genErr != nil {
 				logger.Errorf("[VoiceFirst] shot %d TTS failed: %v", sh.ShotNo, genErr)
 			}
 		}()

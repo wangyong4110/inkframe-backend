@@ -11,18 +11,16 @@ import (
 // DramaticHandler 戏剧张力管理处理器
 type DramaticHandler struct {
 	hookSvc   *service.HookChainService
-	spSvc     *service.SatisfactionPointService
 	arcSvc    *service.ConflictArcService
 	pacingSvc *service.PacingService
 }
 
 func NewDramaticHandler(
 	hookSvc *service.HookChainService,
-	spSvc *service.SatisfactionPointService,
 	arcSvc *service.ConflictArcService,
 	pacingSvc *service.PacingService,
 ) *DramaticHandler {
-	return &DramaticHandler{hookSvc: hookSvc, spSvc: spSvc, arcSvc: arcSvc, pacingSvc: pacingSvc}
+	return &DramaticHandler{hookSvc: hookSvc, arcSvc: arcSvc, pacingSvc: pacingSvc}
 }
 
 // ─── 节奏曲线 ──────────────────────────────────────────────────────────────────
@@ -138,71 +136,6 @@ func (h *DramaticHandler) FulfillHook(c *gin.Context) {
 		return
 	}
 	respondOK(c, hook)
-}
-
-// ─── 爽点 ──────────────────────────────────────────────────────────────────────
-
-// ListSatisfactionPoints GET /novels/:id/satisfaction-points
-func (h *DramaticHandler) ListSatisfactionPoints(c *gin.Context) {
-	novelID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	sps, err := h.spSvc.ListByNovel(uint(novelID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to list satisfaction points")
-		return
-	}
-	respondOK(c, gin.H{"satisfaction_points": sps, "total": len(sps)})
-}
-
-// CreateSatisfactionPoint POST /novels/:id/satisfaction-points
-func (h *DramaticHandler) CreateSatisfactionPoint(c *gin.Context) {
-	novelID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	var req model.SatisfactionPoint
-	if !bindJSON(c, &req) {
-		return
-	}
-	sp, err := h.spSvc.Create(getTenantID(c), uint(novelID), &req)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create satisfaction point")
-		return
-	}
-	respondCreated(c, sp)
-}
-
-// UpdateSatisfactionPoint PUT /satisfaction-points/:id
-func (h *DramaticHandler) UpdateSatisfactionPoint(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	var req model.SatisfactionPoint
-	if !bindJSON(c, &req) {
-		return
-	}
-	sp, err := h.spSvc.Update(uint(id), &req)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to update satisfaction point")
-		return
-	}
-	respondOK(c, sp)
-}
-
-// DeleteSatisfactionPoint DELETE /satisfaction-points/:id
-func (h *DramaticHandler) DeleteSatisfactionPoint(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	if err := h.spSvc.Delete(uint(id)); err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to delete satisfaction point")
-		return
-	}
-	respondOK(c, nil)
 }
 
 // ─── 冲突弧 ────────────────────────────────────────────────────────────────────

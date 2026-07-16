@@ -1750,18 +1750,18 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	return shots, nil
 }
 
-// enforceVoiceMode 是 storyboard_generate.j2 里"仅对白"/"仅旁白"强制规则的代码层兜底。
-// prompt 指令是概率性的——AI 在动作/过渡等难以转化的镜头上偶尔会违反指令，这里做最后一道强制清理，
-// 保证下游（配音生成、审查评分）拿到的数据始终符合用户选择的 VoiceMode，不依赖 AI 是否严格遵守。
+// enforceVoiceMode 是 storyboard_generate.j2 里"仅对白"/"仅旁白"强制规则的代码层校验。
+// prompt 指令是概率性的——AI 在动作/过渡等难以转化的镜头上偶尔会违反指令。
+// 旁白是内容资产，不做自动删除：违反 VoiceMode=dialogue 时仅记录日志和指标供观测，
+// 不清空 shot.Narration，避免把 AI 已经写好的内容丢弃。
 // segNo 仅用于日志定位，传 0 表示不区分段落（如单镜头重生成场景）。
 func enforceVoiceMode(shots []*model.StoryboardShot, voiceMode string, segNo int) {
 	switch voiceMode {
 	case "dialogue":
 		for _, shot := range shots {
 			if shot.Narration != "" {
-				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=dialogue violation: narration=%q non-empty, clearing",
+				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=dialogue violation: narration=%q non-empty, keeping (no auto-delete)",
 					segNo, shot.ShotNo, truncate(shot.Narration, 30))
-				shot.Narration = ""
 				metrics.StoryboardVoiceModeViolationTotal.WithLabelValues("dialogue").Inc()
 			}
 		}
@@ -2438,7 +2438,7 @@ func (s *VideoService) ReorderShots(fromShotID, toShotID uint) (fromShotNo, toSh
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告及历史记录 ID。
 // previousScore > 0 时，将上次评分注入提示词，引导 AI 做相对评估而非每次独立打分。
-func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
+func (s *VideoService) ReviewStoryboard(ctx context.Context, tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
 	shots, err := s.storyboardRepo.ListByVideo(videoID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("获取分镜失败: %w", err)
@@ -2480,7 +2480,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 
 	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems, voiceMode)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
 		return nil, 0, fmt.Errorf("AI审查失败: %w", err)
 	}
@@ -2562,12 +2562,9 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 	}
 	count := 0
 	for _, ins := range sorted {
-		// 对白镜头：narration 留空，由 dialogue 填充
-		insertNarration := ins.Narration
-		if ins.Dialogue != "" {
-			insertNarration = ""
-		}
-		shot, err := s.InsertShot(videoID, ins.AfterShotNo, insertNarration, ins.Description, ins.Duration)
+		// 旁白不做自动删除：即使建议同时带了台词，也按 AI 给出的 narration 原样写入，
+		// 不因为存在 dialogue 就强制清空。
+		shot, err := s.InsertShot(videoID, ins.AfterShotNo, ins.Narration, ins.Description, ins.Duration)
 		if err != nil {
 			return count, fmt.Errorf("insert after shot %d: %w", ins.AfterShotNo, err)
 		}
@@ -2729,8 +2726,8 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 type shotOptimizeUpdate struct {
 	ShotNo         int     `json:"shot_no"`
 	Description    string  `json:"description"`
-	Narration      string  `json:"narration"`
-	Dialogue       string  `json:"dialogue"`
+	Narration      *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
+	Dialogue       *string `json:"dialogue"`  // 同上
 	CameraType     string  `json:"camera_type"`
 	CameraAngle    string  `json:"camera_angle"`
 	ShotSize       string  `json:"shot_size"`
@@ -2902,10 +2899,14 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		if upd.Duration > 0 {
 			safeFields["duration"] = upd.Duration
 		}
-		// narration/dialogue 互斥约束：AI 显式填写了其中一个时，两字段同时写入保证清空操作生效
-		if upd.Narration != "" || upd.Dialogue != "" {
-			safeFields["narration"] = upd.Narration
-			sh.GenMeta.Dialogue = upd.Dialogue
+		// narration/dialogue：AI 遵循"只输出实质改动字段"的指令时，未提及的字段在 JSON 里
+		// 是完全缺失的 key，而不是空字符串——用指针类型区分"未提及"(nil)与"显式清空"(指向"")，
+		// 分别独立判断是否更新，避免只改其中一个字段时把另一个未提及的字段误清空。
+		if upd.Narration != nil {
+			safeFields["narration"] = *upd.Narration
+		}
+		if upd.Dialogue != nil {
+			sh.GenMeta.Dialogue = *upd.Dialogue
 			updatedGenMeta = true
 		}
 

@@ -159,56 +159,6 @@ func NewSatisfactionPointService(repo *repository.SatisfactionPointRepository) *
 	return &SatisfactionPointService{repo: repo}
 }
 
-func (s *SatisfactionPointService) ListByNovel(novelID uint) ([]*model.SatisfactionPoint, error) {
-	return s.repo.ListByNovel(novelID)
-}
-
-func (s *SatisfactionPointService) Create(tenantID, novelID uint, req *model.SatisfactionPoint) (*model.SatisfactionPoint, error) {
-	req.NovelID = novelID
-	req.IsPlanned = true
-	if err := s.repo.Create(req); err != nil {
-		return nil, err
-	}
-	return req, nil
-}
-
-func (s *SatisfactionPointService) Update(id uint, req *model.SatisfactionPoint) (*model.SatisfactionPoint, error) {
-	sp, err := s.repo.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if req.Type != "" {
-		sp.Type = req.Type
-	}
-	if req.Description != "" {
-		sp.Description = req.Description
-	}
-	if req.PlannedChapter != 0 {
-		sp.PlannedChapter = req.PlannedChapter
-	}
-	if req.BuildupStart != 0 {
-		sp.BuildupStart = req.BuildupStart
-	}
-	if req.IntensityTarget != 0 {
-		sp.IntensityTarget = req.IntensityTarget
-	}
-	if req.ChapterID != nil {
-		sp.ChapterID = req.ChapterID
-		sp.IsPlanned = false
-	}
-	if req.Notes != "" {
-		sp.Notes = req.Notes
-	}
-	if err := s.repo.Update(sp); err != nil {
-		return nil, err
-	}
-	return sp, nil
-}
-
-func (s *SatisfactionPointService) Delete(id uint) error {
-	return s.repo.Delete(id)
-}
-
 // GetInjectionContext 返回计划在 currentChapter±2 范围内的爽点铺垫提示
 func (s *SatisfactionPointService) GetInjectionContext(novelID uint, currentChapter int) string {
 	sps, err := s.repo.ListByNovel(novelID)

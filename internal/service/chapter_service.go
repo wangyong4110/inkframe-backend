@@ -670,7 +670,7 @@ func (s *ChapterService) ListPublishedChapters(novelID uint) ([]*model.Chapter, 
 //	Step 3  按场景大纲生成完整章节内容
 //	Step 4  存储章节（包含场景大纲、叙事元数据）
 //	Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
-func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
+func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
 	logger.Printf("[ChapterService] GenerateChapter: tenantID=%d novelID=%d chapterNo=%d", tenantID, novelID, req.ChapterNo)
 
 	metrics.ChapterGenerationInFlight.Inc()
@@ -909,7 +909,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
-		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
 	)
 	if outlineErr != nil {
 		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -925,7 +925,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, prevEnding, finalChapterCtx,
 	)
 	if err != nil {
 		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -997,7 +997,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 5: 同步生成摘要（必须在返回前完成，供下一章上下文使用）───────────────────────────────
 	if s.narrativeSvc != nil && chapter.Summary == "" {
-		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+		if summary, err := s.narrativeSvc.GenerateChapterSummary(ctx, tenantID, chapter, novel.Title); err == nil {
 			chapter.Summary = summary
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 				logger.Errorf("[ChapterService] GenerateChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
@@ -1371,6 +1371,7 @@ func (s *ChapterService) buildMinimalContext(novelID uint, chapterNo int, novel 
 
 // generateSceneOutline 调用 AI 生成场景级大纲，返回 JSON 字符串和建议标题
 func (s *ChapterService) generateSceneOutline(
+	ctx context.Context,
 	tenantID, novelID uint,
 	req *model.GenerateChapterRequest,
 	novel *model.Novel,
@@ -1537,7 +1538,7 @@ func (s *ChapterService) generateSceneOutline(
 		return "", "", fmt.Errorf("generateSceneOutline: render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+	resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		logger.Errorf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
@@ -1623,7 +1624,7 @@ func (s *ChapterService) generateSceneOutline(
 				"UserPrompt":            req.Prompt,
 			})
 			if renderErr == nil {
-				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 				if retryErr == nil {
 					retryResp = extractJSONObject(strings.TrimSpace(retryResp))
 					var retryResult struct {
@@ -1685,6 +1686,7 @@ func findMissingPlotPoints(plotPoints []string, coverage []plotCoverageEntry) []
 // 返回 (正文内容, 章末钩子, error)
 // AI 输出中「【章末钩子】」标记后的内容会被提取为独立钩子字段
 func (s *ChapterService) generateFromSceneOutline(
+	ctx context.Context,
 	tenantID, novelID uint,
 	req *model.GenerateChapterRequest,
 	novel *model.Novel,
@@ -2085,7 +2087,7 @@ func (s *ChapterService) generateFromSceneOutline(
 			// 原实现的 retryOverrides 是块级局部变量，continue 后下一轮仍用原始 sceneOverrides。
 			currentOverrides := sceneOverrides
 			for attempt := 0; attempt < 2; attempt++ {
-				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
+				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
 				if sceneErr == nil {
 					// 字数不足检测：生成成功但内容过短时，提高温度重试（最多1次）
 					if attempt == 0 && len([]rune(cleanChapterOutput(sceneRaw))) < minWordsScene {
@@ -2208,7 +2210,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, genErr = s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+		raw, genErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 		if genErr == nil {
 			break
 		}
@@ -2364,7 +2366,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	if s.narrativeSvc != nil && chapter.Content != "" {
 		var summaryText string
 		for attempt := 0; attempt < 3; attempt++ {
-			if generated, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+			if generated, err := s.narrativeSvc.GenerateChapterSummary(context.Background(), tenantID, chapter, novel.Title); err == nil {
 				summaryText = generated
 				break
 			} else if attempt < 2 {
@@ -2469,7 +2471,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			// 使用 UpdateSummary（单列更新）而非 Update（全量），避免覆盖 continuity_blocked 等
 			// 可能被连贯性检查 goroutine 并发写入的字段（P1-3 race fix）。
 			if s.narrativeSvc != nil && chapter.Content != "" {
-				if newSummary, sumErr := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); sumErr == nil && newSummary != "" {
+				if newSummary, sumErr := s.narrativeSvc.GenerateChapterSummary(context.Background(), tenantID, chapter, novel.Title); sumErr == nil && newSummary != "" {
 					if updateErr := s.chapterRepo.UpdateSummary(chapter.ID, chapter.NovelID, newSummary); updateErr != nil {
 						logger.Errorf("postProcessChapter: update ch%d [summary-post-review]: %v", chapter.ID, updateErr)
 					} else {
@@ -3913,7 +3915,7 @@ func chapterTrailingMeta(s string) bool {
 	return false
 }
 
-func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
+func (s *ChapterService) RegenerateChapter(ctx context.Context, tenantID uint, id uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
 	// Load and validate ownership
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
@@ -3963,7 +3965,7 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	}
 
 	// Delegate to the full generation pipeline (scene outline → full chapter → refinement → post-processing)
-	return s.GenerateChapter(tenantID, chapter.NovelID, req)
+	return s.GenerateChapter(ctx, tenantID, chapter.NovelID, req)
 }
 
 // ArchiveVersionBeforeRewrite saves the current chapter content as a version before rewriting.
@@ -4029,7 +4031,7 @@ func (s *ChapterService) RejectChapter(id uint, reason string) error {
 }
 
 // BatchGenerateSummaries 对所有无摘要章节逐章并发生成摘要（3 并发）
-func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progressFn func(int)) (int, error) {
+func (s *ChapterService) BatchGenerateSummaries(ctx context.Context, tenantID, novelID uint, progressFn func(int)) (int, error) {
 	logger.Printf("[ChapterService] BatchGenerateSummaries: novelID=%d", novelID)
 	if s.narrativeSvc == nil {
 		return 0, fmt.Errorf("narrative service not configured")
@@ -4073,7 +4075,7 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progress
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, ch, novelTitle)
+			summary, err := s.narrativeSvc.GenerateChapterSummary(ctx, tenantID, ch, novelTitle)
 			if err != nil {
 				logger.Errorf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
 			} else {

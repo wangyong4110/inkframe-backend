@@ -23,7 +23,7 @@ import (
 func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// sfx_gen: SFX tag analysis + batch generation (idempotent — skips shots that already have tags/sfx)
 	if svcs.SFXService != nil && svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSFXGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSFXGen, func(ctx context.Context, t *model.AsyncTask) {
 			// Single-shot SFX: entity_type == "shot", params carry {shot_id, video_id, provider}
 			if t.EntityType == "shot" {
 				var params struct {
@@ -44,7 +44,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				if err := svcs.SFXService.AutoGenerateSFX(context.Background(), shot, t.TenantID, params.Provider, true); err != nil {
+				if err := svcs.SFXService.AutoGenerateSFX(ctx, shot, t.TenantID, params.Provider, true); err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
 					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID}) //nolint:errcheck
@@ -83,7 +83,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
 
-			ctx := context.Background()
 			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, params.Force); err != nil {
 				logger.Errorf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
 			}
@@ -108,7 +107,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// three_view: batch (novel entity) or single character
 	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeThreeView, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeThreeView, func(ctx context.Context, t *model.AsyncTask) {
 			tenantID := t.TenantID
 			if t.EntityType == "novel" {
 				// Batch: skip characters that already have images
@@ -154,7 +153,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				ctx := context.Background()
 				novelTitle := svcs.CharacterService.GetNovelTitle(char.NovelID)
 				if novelTitle != "" {
 					ctx = service.WithImageStorageHint(ctx, service.ImageStorageHint{NovelTitle: novelTitle})
@@ -197,7 +195,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_char_extract: extract minor characters from a single chapter
 	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterCharExtract, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterCharExtract, func(ctx context.Context, t *model.AsyncTask) {
 			chapterID := t.EntityID
 			if chapterID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -211,7 +209,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			chars, err := svcs.CharacterService.AIExtractMinorChars(t.TenantID, params.NovelID, chapterID, params.UserPrompt)
+			chars, err := svcs.CharacterService.AIExtractMinorChars(ctx, t.TenantID, params.NovelID, chapterID, params.UserPrompt)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_char_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -223,14 +221,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// char_reanalyze: reanalyze a single character
 	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharReanalyze, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharReanalyze, func(ctx context.Context, t *model.AsyncTask) {
 			charID := t.EntityID
 			if charID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			char, err := svcs.CharacterService.ReanalyzeCharacter(t.TenantID, charID)
+			char, err := svcs.CharacterService.ReanalyzeCharacter(ctx, t.TenantID, charID)
 			if err != nil {
 				logger.Errorf("TaskService resume char_reanalyze %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -242,7 +240,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// char_gen: AI batch generate characters for a novel (idempotent — overwrites existing)
 	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharGen, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				return
@@ -250,7 +248,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			chars, err := svcs.CharacterService.AIBatchGenerate(tenantID, novelID)
+			chars, err := svcs.CharacterService.AIBatchGenerate(ctx, tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume char_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -266,7 +264,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// implementation with existing-item dedup that was never wired to the live handler).
 	// Switching to it would be a real behavior change, not just a migration.
 	if svcs.ItemService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeItemExtract, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeItemExtract, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				return
@@ -274,7 +272,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			items, err := svcs.ItemService.AIExtractFromNovel(tenantID, novelID)
+			items, err := svcs.ItemService.AIExtractFromNovel(ctx, tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -286,7 +284,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// plot_extract: AI extract plot points from novel (idempotent — overwrites existing)
 	if svcs.PlotPointService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypePlotExtract, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypePlotExtract, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -295,7 +293,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			points, err := svcs.PlotPointService.AIExtractFromNovel(context.Background(), tenantID, novelID)
+			points, err := svcs.PlotPointService.AIExtractFromNovel(ctx, tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -307,7 +305,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_summary_batch: batch generate chapter summaries (idempotent — skips chapters with existing summaries)
 	if svcs.ChapterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterSummaryBatch, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterSummaryBatch, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				return
@@ -315,7 +313,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-			count, err := svcs.ChapterService.BatchGenerateSummaries(tenantID, novelID, progressFn)
+			count, err := svcs.ChapterService.BatchGenerateSummaries(ctx, tenantID, novelID, progressFn)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_summary_batch %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -327,7 +325,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// storyboard_review: AI review storyboard (creates a new review record, safe to re-run)
 	if svcs.StoryboardService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardReview, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardReview, func(ctx context.Context, t *model.AsyncTask) {
 			videoID := t.EntityID
 			if videoID == 0 {
 				return
@@ -342,7 +340,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			review, recordID, err := svcs.StoryboardService.ReviewStoryboard(tenantID, videoID, params.Provider, params.PreviousScore)
+			review, recordID, err := svcs.StoryboardService.ReviewStoryboard(ctx, tenantID, videoID, params.Provider, params.PreviousScore)
 			if err != nil {
 				logger.Errorf("TaskService resume storyboard_review %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -359,7 +357,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_review: AI review chapter content (creates a new review record, safe to re-run)
 	if svcs.QualityControlService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReview, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReview, func(ctx context.Context, t *model.AsyncTask) {
 			chapterID := t.EntityID
 			if chapterID == 0 {
 				return
@@ -374,7 +372,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			_ = tenantID                                  // QualityControlService.ReviewChapter does not take tenantID
-			review, err := svcs.QualityControlService.ReviewChapter(context.Background(), chapterID, params.Provider)
+			review, err := svcs.QualityControlService.ReviewChapter(ctx, chapterID, params.Provider)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_review %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -389,14 +387,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// Was previously misfiled under the same task type as chapter_review (chapter content
 	// review) — split into its own type since they call different service methods.
 	if svcs.OutlineReviewService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterOutlineReview, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterOutlineReview, func(ctx context.Context, t *model.AsyncTask) {
 			chapterID := t.EntityID
 			if chapterID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			review, err := svcs.OutlineReviewService.ReviewChapterOutline(context.Background(), t.TenantID, chapterID)
+			review, err := svcs.OutlineReviewService.ReviewChapterOutline(ctx, t.TenantID, chapterID)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_outline_review %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -408,7 +406,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// voice_gen: batch voice (video entity), single segment, or single shot
 	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoiceGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoiceGen, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				NarrationVoice  string `json:"narration_voice"`
 				SubtitleEnabled bool   `json:"subtitle_enabled"`
@@ -442,7 +440,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				const maxRetries = 3
 				var audioErr error
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					audioErr = svcs.VideoService.GenerateShotAudio(shot, tenantID, params.NarrationVoice)
+					audioErr = svcs.VideoService.GenerateShotAudio(ctx, shot, tenantID, params.NarrationVoice)
 					if audioErr == nil {
 						break
 					}
@@ -483,7 +481,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				const maxRetries = 3
 				var audioErr error
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					audioErr = svcs.VideoService.GenerateSegmentAudio(segID, tenantID, params.NarrationVoice)
+					audioErr = svcs.VideoService.GenerateSegmentAudio(ctx, segID, tenantID, params.NarrationVoice)
 					if audioErr == nil {
 						break
 					}
@@ -553,7 +551,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					wg.Add(1)
 					go func(s *model.StoryboardShot) {
 						defer wg.Done()
-						if err := svcs.VideoService.GenerateShotAudio(s, tenantID, params.NarrationVoice); err != nil {
+						if err := svcs.VideoService.GenerateShotAudio(ctx, s, tenantID, params.NarrationVoice); err != nil {
 							logger.Errorf("TaskService resume voice_gen %s shot %d: %v", t.TaskID, s.ShotNo, err)
 						}
 						done := int(doneCount.Add(1))
@@ -584,7 +582,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// image_gen: routed by source param
 	if svcs.ItemService != nil && svcs.SceneAnchorService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageGen, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				Source    string `json:"source"`
 				Provider  string `json:"provider"`
@@ -649,7 +647,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(context.Background(), tenantID, novelID, params.Provider, params.Force, progressFn)
+				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(ctx, tenantID, novelID, params.Provider, params.Force, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -662,7 +660,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succ, fail, err := svcs.SceneAnchorService.GenerateChapterRefImages(context.Background(), tenantID, params.NovelID, params.AnchorIDs, params.Provider, progressFn)
+				succ, fail, err := svcs.SceneAnchorService.GenerateChapterRefImages(ctx, tenantID, params.NovelID, params.AnchorIDs, params.Provider, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -676,7 +674,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_scene_extract: AI extract scene anchors from a single chapter
 	if svcs.SceneAnchorService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterSceneExtract, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterSceneExtract, func(ctx context.Context, t *model.AsyncTask) {
 			chapterID := t.EntityID
 			if chapterID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -695,7 +693,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+			ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 			defer cancel()
 			anchors, err := svcs.SceneAnchorService.ExtractFromChapter(ctx, t.TenantID, params.NovelID, "", params.Content, chapterID, params.UserPrompt)
 			if err != nil {
@@ -709,7 +707,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// scene_anchor_extract: AI extract all scene anchors from novel
 	if svcs.SceneAnchorService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSceneAnchorExtract, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSceneAnchorExtract, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				return
@@ -717,7 +715,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-			anchors, err := svcs.SceneAnchorService.AIExtractAllFromNovel(context.Background(), tenantID, novelID, progressFn)
+			anchors, err := svcs.SceneAnchorService.AIExtractAllFromNovel(ctx, tenantID, novelID, progressFn)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
@@ -728,8 +726,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// bgm_analyze and bgm_generate
 	if svcs.BGMService != nil && svcs.VideoService != nil {
-		bgmResume := func(generate bool) func(*model.AsyncTask) {
-			return func(t *model.AsyncTask) {
+		bgmResume := func(generate bool) func(context.Context, *model.AsyncTask) {
+			return func(ctx context.Context, t *model.AsyncTask) {
 				videoID := t.EntityID
 				if videoID == 0 {
 					return
@@ -747,7 +745,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				tenantID := t.TenantID
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				ctx := context.Background()
 				if !generate {
 					segs, err := svcs.BGMService.AnalyzeBGMForVideo(ctx, shots, repos.VideoBGMSegmentRepo, videoID, tenantID, params.UserPrompt)
 					if err != nil {
@@ -778,7 +775,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// storyboard_gen: re-run full storyboard generation
 	if svcs.StoryboardService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardGen, func(ctx context.Context, t *model.AsyncTask) {
 			videoID := t.EntityID
 			if videoID == 0 {
 				return
@@ -805,7 +802,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				TimeoutSeconds: params.TimeoutSeconds,
 				VoiceMode:      params.VoiceMode,
 			}
-			result, err := svcs.StoryboardService.GenerateStoryboardCtx(context.Background(), videoID, params.ChapterID, params.Characters, params.Style, params.Provider, params.UserPrompt, progressFn, overrides)
+			result, err := svcs.StoryboardService.GenerateStoryboardCtx(ctx, videoID, params.ChapterID, params.Characters, params.Style, params.Provider, params.UserPrompt, progressFn, overrides)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
@@ -822,7 +819,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// storyboard_optimize: re-run from saved review JSON
 	if svcs.StoryboardService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardOptimize, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardOptimize, func(ctx context.Context, t *model.AsyncTask) {
 			videoID := t.EntityID
 			if videoID == 0 {
 				return
@@ -858,7 +855,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// novel_outline_gen: regenerate novel outline with original params
 	if svcs.NovelService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelOutlineGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelOutlineGen, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -873,7 +870,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				req.ChapterNum = 10 // fallback for tasks created before params were saved
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.NovelService.GenerateOutline(t.TenantID, &req)
+			result, err := svcs.NovelService.GenerateOutline(ctx, t.TenantID, &req)
 			if err != nil {
 				logger.Errorf("TaskService resume novel_outline_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -889,7 +886,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	//     (GenerateChapterCharacterImages) — needs novel_id/character_ids/provider from params
 	//     since chapter_id alone (t.EntityID) isn't enough to know which characters to generate.
 	if svcs.ImageGenerationService != nil && svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharImageGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharImageGen, func(ctx context.Context, t *model.AsyncTask) {
 			if t.EntityType == "chapter" && svcs.ChapterService != nil {
 				chapterID := t.EntityID
 				if chapterID == 0 {
@@ -916,7 +913,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 				succeeded, failed, genErr := svcs.CharacterService.GenerateChapterImages(
-					context.Background(), t.TenantID, params.NovelID, chapter, params.CharacterIDs, params.Provider, progressFn,
+					ctx, t.TenantID, params.NovelID, chapter, params.CharacterIDs, params.Provider, progressFn,
 				)
 				if genErr != nil {
 					svcs.TaskService.Fail(t.TaskID, genErr.Error()) //nolint:errcheck
@@ -949,7 +946,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			image, err := svcs.ImageGenerationService.GenerateCharacterImage(t.TenantID, &model.GenerateImageRequest{
+			image, err := svcs.ImageGenerationService.GenerateCharacterImage(ctx, t.TenantID, &model.GenerateImageRequest{
 				Subject:     char.Name,
 				Description: char.Description,
 				Type:        params.Type,
@@ -972,7 +969,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	//   - "character": preview a character's configured voice, also writes the result back
 	//     to the character's VoiceSample field (CharacterHandler.PreviewVoice).
 	if svcs.AIService != nil && svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoicePreview, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoicePreview, func(ctx context.Context, t *model.AsyncTask) {
 			if t.EntityType == "voice" {
 				var vparams struct {
 					Text    string `json:"text"`
@@ -986,7 +983,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 				defer cancel()
 				rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, vparams.Text, vparams.VoiceID, 1.0, "")
 				if err != nil {
@@ -1024,7 +1021,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 			rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, params.Text, params.VoiceID, params.VoiceSpeed, params.VoiceStyle, params.VoiceLang)
 			if err != nil {
@@ -1056,7 +1053,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	//   - "design": AI-generate a costume/appearance design purely from the character's own
 	//     Description field already in the DB (GenerateCostumeDesign) — no extra params needed.
 	if svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookPromptGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookPromptGen, func(ctx context.Context, t *model.AsyncTask) {
 			charID := t.EntityID
 			if charID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1071,7 +1068,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			if params.Kind == "design" {
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				prompt, err := svcs.CharacterService.GenerateCostumeDesign(t.TenantID, charID)
+				prompt, err := svcs.CharacterService.GenerateCostumeDesign(ctx, t.TenantID, charID)
 				if err != nil {
 					logger.Errorf("TaskService resume look_prompt_gen(design) %s failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1085,7 +1082,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.CharacterService.GenerateLookVisualPrompt(t.TenantID, charID, params.Description)
+			result, err := svcs.CharacterService.GenerateLookVisualPrompt(ctx, t.TenantID, charID, params.Description)
 			if err != nil {
 				logger.Errorf("TaskService resume look_prompt_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1100,7 +1097,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// look_image_gen: re-generate look images (face closeup or three view)
 	if svcs.ImageGenerationService != nil && svcs.CharacterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookImageGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookImageGen, func(ctx context.Context, t *model.AsyncTask) {
 			lookID := t.EntityID
 			if lookID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1141,7 +1138,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			style := svcs.CharacterService.GetNovelImageStyle(char.NovelID)
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			ctx := context.Background()
 			tenantID := t.TenantID
 			var updatedLook *model.CharacterLook
 			switch params.Type {
@@ -1184,7 +1180,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// cover_image_gen: re-generate novel cover image
 	if svcs.NovelService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCoverImageGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCoverImageGen, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1197,7 +1193,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 			url, err := svcs.NovelService.GenerateCoverImage(ctx, t.TenantID, novelID, params.Suggestion)
 			if err != nil {
@@ -1211,7 +1207,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// image_edit: re-run image editing with saved instruction
 	if svcs.AIService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageEdit, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageEdit, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				ImageURL    string `json:"image_url"`
 				Instruction string `json:"instruction"`
@@ -1224,7 +1220,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			newURL, err := svcs.AIService.EditImageWithInstruction(context.Background(), t.TenantID, params.ImageURL, params.Instruction)
+			newURL, err := svcs.AIService.EditImageWithInstruction(ctx, t.TenantID, params.ImageURL, params.Instruction)
 			if err != nil {
 				logger.Errorf("TaskService resume image_edit %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, "failed to edit image: "+err.Error()) //nolint:errcheck
@@ -1246,7 +1242,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	//     check) whose errors are only logged, never fail the task — kept as detached goroutines
 	//     here to match that "don't block/don't fail on these" intent exactly.
 	if svcs.ChapterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterGen, func(ctx context.Context, t *model.AsyncTask) {
 			if t.EntityType == "chapter" && t.EntityID > 0 {
 				chapterID := t.EntityID
 				var req model.GenerateChapterRequest
@@ -1255,7 +1251,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 				svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
-				chapter, err := svcs.ChapterService.RegenerateChapter(t.TenantID, chapterID, &req)
+				chapter, err := svcs.ChapterService.RegenerateChapter(ctx, t.TenantID, chapterID, &req)
 				if err != nil {
 					logger.Errorf("TaskService resume chapter_gen(chapter) %s failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1281,7 +1277,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				tenantID := t.TenantID
 				svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 				svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
-				chapter, err := svcs.ChapterService.GenerateChapter(tenantID, params.NovelID, &params.Req)
+				chapter, err := svcs.ChapterService.GenerateChapter(ctx, tenantID, params.NovelID, &params.Req)
 				if err != nil {
 					logger.Errorf("TaskService resume chapter_gen(chapter,new) %s failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1335,7 +1331,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
-			chapter, err := svcs.ChapterService.GenerateChapter(tenantID, params.NovelID, &params.Req)
+			chapter, err := svcs.ChapterService.GenerateChapter(ctx, tenantID, params.NovelID, &params.Req)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1349,14 +1345,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// chapter_post_process: re-run the summary/title/refine/arc-summary tail after a restart
 	// interrupted it mid-flight. Safe to re-run — see ResumePostProcessChapter's doc comment.
 	if svcs.ChapterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterPostProcess, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterPostProcess, func(ctx context.Context, t *model.AsyncTask) {
 			svcs.ChapterService.ResumePostProcessChapter(t)
 		})
 	}
 
 	// asset_gen: routed by source param
 	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeAssetGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeAssetGen, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				Source   string                          `json:"source"`
 				VideoID  uint                            `json:"video_id"`
@@ -1416,7 +1412,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				// 顺序模式下：所有镜头已完成，PollAndStitchVideo 会快速完成
 				for _, sh := range shots {
 					if sh.Status == "processing" {
-						svcs.VideoService.PollAndStitchVideo(videoID)
+						svcs.VideoService.PollAndStitchVideo(ctx, videoID)
 						break
 					}
 				}
@@ -1455,7 +1451,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// novel_analysis
 	if svcs.NovelAnalysisService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelAnalysis, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelAnalysis, func(ctx context.Context, t *model.AsyncTask) {
 			var p struct {
 				CreateOutlines bool `json:"create_outlines"`
 			}
@@ -1466,17 +1462,17 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// rewrite_analysis + rewrite_chapters
 	if svcs.RewriteService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeRewriteAnalysis, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeRewriteAnalysis, func(ctx context.Context, t *model.AsyncTask) {
 			svcs.RewriteService.ResumeAnalysis(t)
 		})
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeRewriteChapters, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeRewriteChapters, func(ctx context.Context, t *model.AsyncTask) {
 			svcs.RewriteService.ResumeRewriting(t)
 		})
 	}
 
 	// outline_review_batch: batch review all chapter outlines in a novel (idempotent — creates new review records)
 	if svcs.OutlineReviewService != nil {
-		svcs.TaskService.RegisterResumeHandler("outline_review_batch", func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler("outline_review_batch", func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1488,7 +1484,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.UpdateProgress(t.TaskID, done*99/total) //nolint:errcheck
 				}
 			}
-			result, err := svcs.OutlineReviewService.BatchReviewNovel(context.Background(), t.TenantID, novelID, progressFn)
+			result, err := svcs.OutlineReviewService.BatchReviewNovel(ctx, t.TenantID, novelID, progressFn)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
@@ -1507,7 +1503,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// Not safe to blindly re-run after a crash mid-import (could create a duplicate novel),
 	// so params-less/incomplete tasks fail out with a resubmit message rather than guessing.
 	if svcs.NovelImportService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImport, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImport, func(ctx context.Context, t *model.AsyncTask) {
 			if t.EntityID > 0 {
 				resumeImportCrawl(svcs, t, t.EntityID)
 				return
@@ -1525,7 +1521,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			if params.FileURL != "" {
-				data, err := svcs.NovelImportService.DownloadStagedFile(context.Background(), params.FileURL)
+				data, err := svcs.NovelImportService.DownloadStagedFile(ctx, params.FileURL)
 				if err != nil {
 					logger.Errorf("TaskService resume import %s: failed to download staged file: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, "读取暂存文件失败: "+err.Error()) //nolint:errcheck
@@ -1567,14 +1563,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 	if svcs.AssetService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCrawlJob, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCrawlJob, func(ctx context.Context, t *model.AsyncTask) {
 			svcs.AssetService.ResumeCrawlJob(t)
 		})
 	}
 
 	// video_synthesis: resume the stitch→subtitle→cover→upload pipeline
 	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoSynthesis, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoSynthesis, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				VideoID uint `json:"video_id"`
 			}
@@ -1586,7 +1582,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			// 补上取消注册——之前这里直接裸调 RunSynthesisPipeline，恢复的任务完全绕过了取消体系。
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(ctx)
 			svcs.TaskService.RegisterCancel(t.TaskID, cancel)
 			defer svcs.TaskService.DeregisterCancel(t.TaskID)
 			defer cancel()
@@ -1596,7 +1592,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// video_gen: resume submit-all-shots + poll + stitch pipeline
 	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoGen, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				VideoID uint   `json:"video_id"`
 				Mode    string `json:"mode"`
@@ -1610,14 +1606,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
-			if err := svcs.VideoService.GenerateAllShotVideos(params.VideoID); err != nil {
+			if err := svcs.VideoService.GenerateAllShotVideos(ctx, params.VideoID); err != nil {
 				logger.Errorf("TaskService resume video_gen %s: submit failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			if params.Mode != "slideshow" {
-				svcs.VideoService.PollAndStitchVideo(params.VideoID) // blocks until done or timeout
+				svcs.VideoService.PollAndStitchVideo(ctx, params.VideoID) // blocks until done or timeout
 			}
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"video_id": params.VideoID}) //nolint:errcheck
 		})
@@ -1625,7 +1621,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// skill_gen: re-generate skills for a novel (idempotent — overwrites existing)
 	if svcs.SkillService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSkillGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSkillGen, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1633,7 +1629,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			skills, err := svcs.SkillService.GenerateSkills(t.TenantID, novelID)
+			skills, err := svcs.SkillService.GenerateSkills(ctx, t.TenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume skill_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1646,7 +1642,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// batch_chapter_gen: re-run batch chapter generation, respecting the same
 	// start/end/skip_existing filters and per-chapter overrides as the original request.
 	if svcs.ChapterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeBatchChapterGen, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeBatchChapterGen, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1694,7 +1690,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					ModelOverride: req.ModelOverride,
 					EnabledTools:  req.EnabledTools,
 				}
-				if _, genErr := svcs.ChapterService.GenerateChapter(t.TenantID, novelID, genReq); genErr != nil {
+				if _, genErr := svcs.ChapterService.GenerateChapter(ctx, t.TenantID, novelID, genReq); genErr != nil {
 					logger.Errorf("TaskService resume batch_chapter_gen %s chapter %d failed: %v", t.TaskID, ch.ChapterNo, genErr)
 					failed++
 					failedChapters = append(failedChapters, ch.ChapterNo)
@@ -1718,7 +1714,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_review_batch: 批量章节审查（novelID 存在 EntityID，无需额外参数）
 	if svcs.QualityControlService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReviewBatch, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReviewBatch, func(ctx context.Context, t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1730,7 +1726,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.UpdateProgress(t.TaskID, done*100/total) //nolint:errcheck
 				}
 			}
-			if err := svcs.QualityControlService.BatchReviewNovelChapters(context.Background(), t.TenantID, novelID, progressFn); err != nil {
+			if err := svcs.QualityControlService.BatchReviewNovelChapters(ctx, t.TenantID, novelID, progressFn); err != nil {
 				logger.Errorf("TaskService resume chapter_review_batch %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
@@ -1741,7 +1737,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// chapter_rewrite_instr: 按指令修改章节（需从 ParamsJSON 读 instruction）
 	if svcs.QualityControlService != nil && svcs.ChapterService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterRewriteInstr, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterRewriteInstr, func(ctx context.Context, t *model.AsyncTask) {
 			chapterID := t.EntityID
 			var params struct {
 				Instruction string `json:"instruction"`
@@ -1755,7 +1751,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			newContent, err := svcs.QualityControlService.RewriteByInstruction(context.Background(), chapterID, params.Instruction)
+			newContent, err := svcs.QualityControlService.RewriteByInstruction(ctx, chapterID, params.Instruction)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_rewrite_instr %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1777,7 +1773,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// image_upscale: 高清放大（需从 ParamsJSON 读 image_url/scale/method）
 	if svcs.AIService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageUpscale, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageUpscale, func(ctx context.Context, t *model.AsyncTask) {
 			var params struct {
 				ImageURL string `json:"image_url"`
 				Scale    int    `json:"scale"`
@@ -1798,7 +1794,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				params.Method = "bicubic"
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			newURL, err := svcs.AIService.UpscaleImage(context.Background(), t.TenantID, params.NovelID, params.ImageURL, params.Scale, params.Method)
+			newURL, err := svcs.AIService.UpscaleImage(ctx, t.TenantID, params.NovelID, params.ImageURL, params.Scale, params.Method)
 			if err != nil {
 				logger.Errorf("TaskService resume image_upscale %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, "高清处理失败: "+err.Error()) //nolint:errcheck
@@ -1810,7 +1806,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 	// lipsync: shot-level lip-sync video generation (VideoHandler.GenerateLipSync)
 	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLipSync, func(t *model.AsyncTask) {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLipSync, func(ctx context.Context, t *model.AsyncTask) {
 			shotID := t.EntityID
 			if shotID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1828,7 +1824,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.VideoService.GenerateLipSyncVideoWithReq(params.VideoID, shotID, params.Req)
+			result, err := svcs.VideoService.GenerateLipSyncVideoWithReq(ctx, params.VideoID, shotID, params.Req)
 			if err != nil {
 				logger.Errorf("TaskService resume lipsync %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1836,7 +1832,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 20) //nolint:errcheck
 			// 同步轮询直到完成（timeout 内部控制）
-			if pollErr := svcs.VideoService.PollLipSyncUntilDone(params.VideoID, shotID); pollErr != nil {
+			if pollErr := svcs.VideoService.PollLipSyncUntilDone(ctx, params.VideoID, shotID); pollErr != nil {
 				logger.Errorf("TaskService resume lipsync(poll) %s failed: %v", t.TaskID, pollErr)
 				svcs.TaskService.Fail(t.TaskID, pollErr.Error()) //nolint:errcheck
 				return

@@ -78,11 +78,6 @@ func (r *CharacterRepository) ListByNovel(novelID uint) ([]*model.Character, err
 	return characters, nil
 }
 
-// ListByNovelFiltered 获取小说的角色列表，可按 role 过滤（空字符串 = 不过滤）
-func (r *CharacterRepository) ListByNovelFiltered(novelID uint, role string) ([]*model.Character, error) {
-	return r.ListByNovelFilteredCtx(context.Background(), novelID, role)
-}
-
 // ListByNovelFilteredCtx 获取小说的角色列表，可按 role 过滤，支持 context 传递（用于超时/取消传播）
 func (r *CharacterRepository) ListByNovelFilteredCtx(ctx context.Context, novelID uint, role string) ([]*model.Character, error) {
 	var characters []*model.Character
@@ -140,22 +135,6 @@ func (r *CharacterRepository) BatchDeleteByNovel(novelID uint, ids []uint) error
 	return r.db.Where("novel_id = ? AND id IN ?", novelID, ids).Delete(&model.Character{}).Error
 }
 
-// GetActiveInChapter 获取章节中活跃的角色（从 ink_chapter_character 查询）
-func (r *CharacterRepository) GetActiveInChapter(chapterID uint) ([]*model.ChapterCharacter, error) {
-	var list []*model.ChapterCharacter
-	if err := r.db.Preload("Character").
-		Where("chapter_id = ? AND role_in_chapter != ?", chapterID, "mentioned").
-		Find(&list).Error; err != nil {
-		return nil, err
-	}
-	return list, nil
-}
-
-// RecordChapterCharacter 记录角色在章节中的出场信息（upsert）
-func (r *CharacterRepository) RecordChapterCharacter(cc *model.ChapterCharacter) error {
-	return r.db.Save(cc).Error
-}
-
 // CharacterStateSnapshotRepository 角色状态快照仓库
 type CharacterStateSnapshotRepository struct {
 	db *gorm.DB
@@ -191,16 +170,6 @@ func (r *CharacterStateSnapshotRepository) ListByCharacter(characterID uint) ([]
 	var snapshots []*model.CharacterStateSnapshot
 	err := r.db.Where("character_id = ?", characterID).Order("created_at DESC").Find(&snapshots).Error
 	return snapshots, err
-}
-
-// GetByChapterAndCharacter 获取指定章节中特定角色的快照
-func (r *CharacterStateSnapshotRepository) GetByChapterAndCharacter(chapterID, characterID uint) (*model.CharacterStateSnapshot, error) {
-	var s model.CharacterStateSnapshot
-	err := r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).First(&s).Error
-	if err != nil {
-		return nil, err
-	}
-	return &s, nil
 }
 
 // ListByChapterID 批量获取指定章节的所有角色快照（一次查询，避免 N+1）

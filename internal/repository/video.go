@@ -92,19 +92,9 @@ func (r *VideoRepository) Update(video *model.Video) error {
 	return r.db.Save(video).Error
 }
 
-// DeleteByID 删除视频
-func (r *VideoRepository) DeleteByID(id uint) error {
-	return r.db.Delete(&model.Video{}, id).Error
-}
-
 // UpdateFields 更新视频任意字段
 func (r *VideoRepository) UpdateFields(id uint, fields map[string]interface{}) error {
 	return r.db.Model(&model.Video{}).Where("id = ?", id).Updates(fields).Error
-}
-
-// ListPublic 列出公开发布的视频（用于广场）
-func (r *VideoRepository) ListPublic(page, pageSize int) ([]*model.Video, int64, error) {
-	return r.ListPublicSorted("hot", "", page, pageSize)
 }
 
 // ListPublicSorted 排序列出公开视频（sort: latest|hot；q: 关键词搜索）
@@ -155,21 +145,10 @@ func (r *VideoRepository) IncrViewCount(id uint) error {
 	return nil
 }
 
-// IncrLikeCount 点赞数 delta（+1 或 -1，写入 ink_content_stats）
-func (r *VideoRepository) IncrLikeCount(id uint, delta int) error {
-	r.incrStat(id, "like_count", gorm.Expr("GREATEST(0, like_count + ?)", delta))
-	return nil
-}
-
 // IncrCommentCount 评论数 delta（写入 ink_content_stats）
 func (r *VideoRepository) IncrCommentCount(id uint, delta int) error {
 	r.incrStat(id, "comment_count", gorm.Expr("GREATEST(0, comment_count + ?)", delta))
 	return nil
-}
-
-// UpdateHotScore 更新热度分
-func (r *VideoRepository) UpdateHotScore(id uint, score float64) error {
-	return r.db.Model(&model.Video{}).Where("id = ?", id).Update("hot_score", score).Error
 }
 
 // BatchUpdateHotScores 批量更新热度分（分批次处理，防止单次 SQL 过大）
@@ -212,24 +191,6 @@ type VideoHotCalcRow struct {
 	CommentCount int
 }
 
-// ListPublicForHotCalc 列出所有公开视频用于热度分批量计算（JOIN ink_content_stats）
-func (r *VideoRepository) ListPublicForHotCalc() ([]VideoHotCalcRow, error) {
-	var rows []VideoHotCalcRow
-	err := r.db.Raw(`SELECT v.id,
-		v.published_at,
-		COALESCE(cs.view_count, 0) AS view_count,
-		COALESCE(cs.like_count, 0) AS like_count,
-		COALESCE(cs.comment_count, 0) AS comment_count
-		FROM ink_video v
-		LEFT JOIN ink_content_stats cs ON cs.entity_type = 'video' AND cs.entity_id = v.id
-		WHERE v.is_published = 1
-		  AND v.visibility = 'public'
-		  AND v.deleted_at IS NULL
-		LIMIT 10000`).
-		Scan(&rows).Error
-	return rows, err
-}
-
 // ListPublicForHotCalcPaged 分页列出公开视频用于热度分批量计算（JOIN ink_content_stats，避免全量加载）
 func (r *VideoRepository) ListPublicForHotCalcPaged(limit, offset int) ([]VideoHotCalcRow, error) {
 	var rows []VideoHotCalcRow
@@ -246,36 +207,6 @@ func (r *VideoRepository) ListPublicForHotCalcPaged(limit, offset int) ([]VideoH
 		ORDER BY v.id ASC LIMIT ? OFFSET ?`, limit, offset).
 		Scan(&rows).Error
 	return rows, err
-}
-
-// HydrateVideoStats 批量填充视频统计字段（ViewCount/LikeCount/CommentCount）
-func (r *VideoRepository) HydrateVideoStats(videos []*model.Video) {
-	if len(videos) == 0 {
-		return
-	}
-	ids := make([]uint, 0, len(videos))
-	for _, v := range videos {
-		ids = append(ids, v.ID)
-	}
-	var rows []struct {
-		EntityID     uint
-		ViewCount    int
-		LikeCount    int
-		CommentCount int
-	}
-	r.db.Raw(`SELECT entity_id, view_count, like_count, comment_count
-		FROM ink_content_stats WHERE entity_type = 'video' AND entity_id IN ?`, ids).Scan(&rows)
-	statsMap := make(map[uint]struct{ v, l, c int }, len(rows))
-	for _, row := range rows {
-		statsMap[row.EntityID] = struct{ v, l, c int }{row.ViewCount, row.LikeCount, row.CommentCount}
-	}
-	for _, vid := range videos {
-		if s, ok := statsMap[vid.ID]; ok {
-			vid.ViewCount = s.v
-			vid.LikeCount = s.l
-			vid.CommentCount = s.c
-		}
-	}
 }
 
 // ─── VideoLikeRepository ────────────────────────────────────────────────────

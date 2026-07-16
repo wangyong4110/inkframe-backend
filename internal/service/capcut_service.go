@@ -4628,8 +4628,10 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 		}
 
 		narration, dialogue := shot.Narration, shot.GenMeta.Dialogue
-		// 多段配音（ink_shot_voice_segment）编辑后才是最终实际使用的文案；
-		// 一旦存在分段记录，以分段内容为准（覆盖可能已过期/被清空的 shot.Narration/GenMeta.Dialogue）。
+		// 多段配音（ink_shot_voice_segment）存在时，其内容通常比 shot.Narration/GenMeta.Dialogue
+		// 更新更细（用户可在配音面板单独编辑每段）。但分段是"旁白段"和"对白段"分开存的——
+		// 一个镜头完全可能只有对白段、没有旁白段（或反之），这不代表 shot.Narration 本身已过期。
+		// 因此只在分段确实产出了非空内容时才覆盖对应字段，避免把仍然有效的 shot 级文案误清空。
 		if s.segmentRepo != nil {
 			if segs, err := s.segmentRepo.ListByShotID(shot.ID); err == nil && len(segs) > 0 {
 				var narrParts, dialParts []string
@@ -4643,8 +4645,12 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 						dialParts = append(dialParts, seg.Speaker+"："+seg.Text)
 					}
 				}
-				narration = strings.Join(narrParts, "\n")
-				dialogue = strings.Join(dialParts, "\n")
+				if len(narrParts) > 0 {
+					narration = strings.Join(narrParts, "\n")
+				}
+				if len(dialParts) > 0 {
+					dialogue = strings.Join(dialParts, "\n")
+				}
 			}
 		}
 

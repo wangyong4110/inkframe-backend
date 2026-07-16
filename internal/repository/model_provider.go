@@ -87,15 +87,6 @@ func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType strin
 }
 
 
-// GetSystemProvider 获取系统级提供商（tenant_id=0）
-func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelProvider, error) {
-	var provider model.ModelProvider
-	if err := r.db.Where("name = ? AND tenant_id = 0", name).First(&provider).Error; err != nil {
-		return nil, err
-	}
-	return &provider, nil
-}
-
 // GetByNameAndTenant 按名称和租户查找提供商（含软删除过滤）
 func (r *ModelProviderRepository) GetByNameAndTenant(name string, tenantID uint) (*model.ModelProvider, error) {
 	var provider model.ModelProvider
@@ -199,38 +190,6 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uin
 	return models, nil
 }
 
-// GetVoicesFromProvider 返回指定 provider 的音色列表（构造为虚拟 AIModel）。
-// 用于 voice_gen 任务：只展示用户在任务配置中明确选定的 TTS provider 的音色。
-func (r *AIModelRepository) GetVoicesFromProvider(tenantID, providerID uint) ([]*model.AIModel, error) {
-	credCond := "(CASE WHEN needs_secret_key = 1 " +
-		"THEN (api_key != '' AND api_secret_key != '') " +
-		"ELSE api_key != '' END)"
-	var providers []*model.ModelProvider
-	if err := r.db.Where(
-		"id = ? AND tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND name IN ? AND "+credCond,
-		providerID, tenantID, model.TTSProviderNames(),
-	).Find(&providers).Error; err != nil {
-		return nil, err
-	}
-	var result []*model.AIModel
-	for _, p := range providers {
-		for _, v := range model.BuiltinVoices(p.Name) {
-			result = append(result, &model.AIModel{
-				ProviderID:  p.ID,
-				Provider:    p,
-				Name:        v.ID,
-				DisplayName: v.Name,
-				Type:        "voice",
-				Gender:      v.Gender,
-				AgeGroup:    v.AgeGroup,
-				Quality:     v.Quality,
-				IsActive:    true,
-			})
-		}
-	}
-	return result, nil
-}
-
 func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
 	credCond := "(CASE WHEN needs_secret_key = 1 " +
 		"THEN (api_key != '' AND api_secret_key != '') " +
@@ -332,15 +291,6 @@ func (r *AIModelRepository) DeleteByProvider(providerID uint) error {
 	return r.db.Unscoped().Where("provider_id = ?", providerID).Delete(&model.AIModel{}).Error
 }
 
-// UpdateHealthStatus 更新健康状态
-func (r *AIModelRepository) UpdateHealthStatus(providerID uint, status string) error {
-	return r.db.Model(&model.ModelProvider{}).Where("id = ?", providerID).
-		Updates(map[string]interface{}{
-			"health_check": status,
-			"last_checked": time.Now(),
-		}).Error
-}
-
 // LogUsage 记录使用（忽略外键约束错误，使用日志为非关键数据）
 func (r *AIModelRepository) LogUsage(log *model.ModelUsageLog) error {
 	err := r.db.Create(log).Error
@@ -348,49 +298,6 @@ func (r *AIModelRepository) LogUsage(log *model.ModelUsageLog) error {
 		return nil // model_id 引用不存在时静默跳过，不影响主流程
 	}
 	return err
-}
-
-// GetUsageStats 获取使用统计
-func (r *AIModelRepository) GetUsageStats(modelID uint, startTime, endTime time.Time) (*UsageStats, error) {
-	var stats UsageStats
-	type aggRow struct {
-		TotalRequests int
-		SuccessCount  int
-		TotalTokens   int
-		TotalCost     float64
-		TotalLatency  float64
-	}
-	var row aggRow
-	err := r.db.Model(&model.ModelUsageLog{}).
-		Select("COUNT(*) AS total_requests, SUM(CASE WHEN success THEN 1 ELSE 0 END) AS success_count, "+
-			"COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(cost), 0) AS total_cost, "+
-			"COALESCE(SUM(latency), 0) AS total_latency").
-		Where("model_id = ? AND created_at BETWEEN ? AND ?", modelID, startTime, endTime).
-		Scan(&row).Error
-	if err != nil {
-		return nil, err
-	}
-	stats.TotalRequests = row.TotalRequests
-	stats.SuccessCount = row.SuccessCount
-	stats.TotalTokens = row.TotalTokens
-	stats.TotalCost = row.TotalCost
-	stats.TotalLatency = row.TotalLatency
-	if stats.TotalRequests > 0 {
-		stats.AverageLatency = stats.TotalLatency / float64(stats.TotalRequests)
-		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalRequests)
-	}
-	return &stats, nil
-}
-
-// UsageStats 使用统计
-type UsageStats struct {
-	TotalRequests  int
-	SuccessCount   int
-	TotalTokens    int
-	TotalCost      float64
-	TotalLatency   float64
-	AverageLatency float64
-	SuccessRate    float64
 }
 
 // ModelComparisonRepository 模型对比仓库
@@ -439,11 +346,3 @@ func (r *ModelComparisonRepository) AddResult(result *model.ExperimentResult) er
 	return r.db.Create(result).Error
 }
 
-// GetResults 获取实验结果
-func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.ExperimentResult, error) {
-	var results []*model.ExperimentResult
-	if err := r.db.Preload("Model").Where("experiment_id = ?", experimentID).Find(&results).Error; err != nil {
-		return nil, err
-	}
-	return results, nil
-}

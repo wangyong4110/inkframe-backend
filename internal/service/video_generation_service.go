@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -677,7 +678,7 @@ func (s *FrameGeneratorService) GenerateFrame(tenantID uint, req *FrameGeneratio
 	}
 
 	// 4. 生成图像
-	image, err := s.aiService.GenerateImage(tenantID, prompt, options)
+	image, err := s.aiService.GenerateImage(context.Background(), tenantID, prompt, options)
 	if err != nil {
 		return nil, err
 	}

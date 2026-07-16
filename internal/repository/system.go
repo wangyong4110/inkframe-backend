@@ -13,14 +13,6 @@ func NewSystemSettingRepository(db *gorm.DB) *SystemSettingRepository {
 	return &SystemSettingRepository{db: db}
 }
 
-func (r *SystemSettingRepository) Get(key string) (string, error) {
-	var s model.SystemSetting
-	if err := r.db.First(&s, "key = ?", key).Error; err != nil {
-		return "", err
-	}
-	return s.Value, nil
-}
-
 func (r *SystemSettingRepository) Set(key, value, description string) error {
 	return r.db.Save(&model.SystemSetting{Key: key, Value: value, Description: description}).Error
 }
@@ -78,26 +70,6 @@ type SatisfactionPointRepository struct{ db *gorm.DB }
 
 func NewSatisfactionPointRepository(db *gorm.DB) *SatisfactionPointRepository {
 	return &SatisfactionPointRepository{db: db}
-}
-
-func (r *SatisfactionPointRepository) Create(sp *model.SatisfactionPoint) error {
-	return r.db.Create(sp).Error
-}
-
-func (r *SatisfactionPointRepository) GetByID(id uint) (*model.SatisfactionPoint, error) {
-	var sp model.SatisfactionPoint
-	if err := r.db.First(&sp, id).Error; err != nil {
-		return nil, err
-	}
-	return &sp, nil
-}
-
-func (r *SatisfactionPointRepository) Update(sp *model.SatisfactionPoint) error {
-	return r.db.Save(sp).Error
-}
-
-func (r *SatisfactionPointRepository) Delete(id uint) error {
-	return r.db.Delete(&model.SatisfactionPoint{}, id).Error
 }
 
 func (r *SatisfactionPointRepository) ListByNovel(novelID uint) ([]*model.SatisfactionPoint, error) {

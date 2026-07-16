@@ -545,14 +545,14 @@ func (s *VideoService) RecoverActivePollTasks() {
 			logger.Printf("[VideoService] RecoverActivePollTasks: resuming poll for video %d", v.ID)
 			go func() {
 				s.activePoll.Delete(v.ID) // PollAndStitchVideo will re-register
-				s.PollAndStitchVideo(v.ID)
+				s.PollAndStitchVideo(context.Background(), v.ID)
 			}()
 		}
 	}
 }
 
 // PollAndStitchVideo 后台轮询所有分镜状态，完成后拼接
-func (s *VideoService) PollAndStitchVideo(videoID uint) {
+func (s *VideoService) PollAndStitchVideo(parentCtx context.Context, videoID uint) {
 	// Cross-instance dedup via Redis SETNX; fallback to local sync.Map.
 	if s.cache != nil {
 		redisKey := lockKey("video", "poll", videoID)
@@ -587,7 +587,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	}
 	defer s.activePoll.Delete(videoID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(parentCtx, 2*time.Hour)
 	defer cancel()
 
 	// P2-2: 自适应轮询间隔（15s→30s→60s），降低空闲时的 DB 压力

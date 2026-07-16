@@ -249,7 +249,8 @@ type Services struct {
 	// ── Collab ──
 	CollabService *service.CollabService
 	// ── Drama Template ──
-	DramaTemplateService *service.DramaTemplateService
+	DramaTemplateService   *service.DramaTemplateService
+	NarrativeMemoryService *service.NarrativeMemoryService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -291,6 +292,7 @@ type contentSvcs struct {
 	NovelAnalysis     *service.NovelAnalysisService
 	NovelImport       *service.NovelImportService
 	Crawler           *crawler.NovelCrawler
+	NarrativeMemory   *service.NarrativeMemoryService
 }
 
 // videoSvcs holds video / media generation services.
@@ -466,7 +468,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
 		SceneAnchor: sceneAnchorSvc, ForeshadowCRUD: foreshadowCRUDSvc,
 		NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
-		Crawler: crawlerSvc,
+		Crawler:         crawlerSvc,
+		NarrativeMemory: narrativeMemorySvc,
 	}
 }
 
@@ -492,7 +495,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 		WithAssetRepo(repos.AssetRepo, repos.TagRepo).
 		WithRedis(redisClient) // Fix: cross-instance BGM URL cache
 
-	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, nil, aiSvc)
+	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, aiSvc)
 
 	// 将依赖注回 videoService
 	videoSvc.WithConsistencyService(charConsistencySvc)
@@ -639,6 +642,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		NovelAnalysisService:     content.NovelAnalysis,
 		NovelImportService:       content.NovelImport,
 		CrawlerService:           content.Crawler,
+		NarrativeMemoryService:   content.NarrativeMemory,
 		// ── Video ──
 		VideoService:                video.Video,
 		StoryboardService:           video.Storyboard,
@@ -846,7 +850,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.CharacterArcService,
 			services.ImageGenerationService,
 		).WithChapterService(services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithAIService(services.AIService).WithNovelService(services.NovelService).
-			WithAuditService(services.AuditService),
+			WithAuditService(services.AuditService).WithNarrativeService(services.NarrativeMemoryService),
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
@@ -920,7 +924,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		),
 		DramaticHandler: handler.NewDramaticHandler(
 			services.HookChainService,
-			services.SatisfactionPointService,
 			services.ConflictArcService,
 			services.PacingService,
 		),

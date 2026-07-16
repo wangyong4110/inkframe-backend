@@ -768,14 +768,6 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 
 // UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）。
 // 使用原子 SQL 避免并发下的读-改-写竞态：avg = (avg*n + score) / (n+1)。
-func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
-	return s.repo.DB().Exec(`
-		UPDATE ink_scene_anchor
-		SET avg_cons_score = (avg_cons_score * usage_count + ?) / (usage_count + 1),
-		    usage_count = usage_count + 1
-		WHERE id = ?`, score, id).Error
-}
-
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
 // force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
 // 外层并发度固定为 3（避免大批量时无限创建 goroutine），内层 imageSem 进一步限流。

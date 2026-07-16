@@ -1172,7 +1172,7 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 		NovelID:    novel.ID,
 		ChapterNum: chapterNum,
 	}
-	outline, err := s.novelService.GenerateOutline(tenantID, req)
+	outline, err := s.novelService.GenerateOutline(ctx, tenantID, req)
 	if err != nil {
 		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline GenerateOutline failed: %v", novel.ID, err)
 		return nil, fmt.Errorf("GenerateOutline: %w", err)

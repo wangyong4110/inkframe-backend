@@ -186,7 +186,7 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 		return
 	}
 
-	skills, err := h.skillSvc.GenerateSkills(tenantID, novelID)
+	skills, err := h.skillSvc.GenerateSkills(c.Request.Context(), tenantID, novelID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

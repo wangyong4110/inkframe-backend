@@ -87,7 +87,6 @@ type TaskService struct {
 	// crash-recovery registry and (since the task engine's introduction, see task_engine.go) the
 	// canonical "how do I execute a task of this type" registry used for first dispatch too.
 	semaphores       sync.Map          // semaphore key string → chan struct{} (RunTracked MaxConcurrency / task engine per-(tenant,type) backstop)
-	cleanupCallbacks []func()          // optional hooks called during the hourly cleanup cycle
 	rootCtx          context.Context   // server root context; cancelled on graceful shutdown
 
 	// Task engine (task_engine.go): wakeCh is signalled by Create() so the engine's dispatch
@@ -198,7 +197,14 @@ func (s *TaskService) Boot(ctx context.Context) {
 // created one are dispatched through the exact same path, so there is only one function to
 // register and only one place that needs to stay correct. fn receives the full AsyncTask
 // (including ParamsJSON) and must not assume any HTTP request context is available.
-func (s *TaskService) RegisterResumeHandler(taskType string, fn func(*model.AsyncTask)) {
+//
+// fn also receives a cancellable context.Context, derived by the task engine's claimAndRun
+// (bounded by taskEngineHardTimeout and cancelled when a user calls POST /tasks/:id/cancel).
+// Implementations MUST thread this ctx down to any AI provider / outbound HTTP call (via the
+// *Ctx variant of the relevant service method) for cancellation to actually stop in-flight
+// work — passing context.Background() instead silently defeats cancellation, which used to be
+// a codebase-wide bug (the ctx this func now receives was previously computed and discarded).
+func (s *TaskService) RegisterResumeHandler(taskType string, fn func(context.Context, *model.AsyncTask)) {
 	s.resumeFns.Store(taskType, fn)
 }
 
@@ -229,13 +235,6 @@ func (s *TaskService) SetParams(taskID string, params interface{}) error {
 		return err
 	}
 	return s.repo.UpdateFields(taskID, map[string]interface{}{"params": string(b)})
-}
-
-// RegisterCleanupCallback adds a function that is called once per hour during the
-// regular cleanup cycle. Use this to clean up domain-specific data associated with
-// completed or failed tasks (e.g. ChapterRewriteTask records for old rewrite projects).
-func (s *TaskService) RegisterCleanupCallback(fn func()) {
-	s.cleanupCallbacks = append(s.cleanupCallbacks, fn)
 }
 
 // Shutdown stops background goroutines. Call on server exit.
@@ -399,58 +398,6 @@ func taskTypeFromID(taskID string) string {
 		return taskID[:i]
 	}
 	return "unknown"
-}
-
-// MarkTaskFailed implements dead-letter queue semantics.
-// Each call increments retry_count and appends to failure_log.
-// If retry_count < max_retries, status is reset to "pending" with exponential backoff
-// (not implemented here — callers re-enqueue via the resume handler path).
-// Once retry_count >= max_retries the task is moved to status "dead" and will not
-// be retried automatically; it remains visible in the task list for diagnosis.
-func (s *TaskService) MarkTaskFailed(taskID string, err error) {
-	task, dbErr := s.repo.GetByTaskID(taskID)
-	if dbErr != nil {
-		logger.Errorf("[TaskService] MarkTaskFailed: cannot load task %s: %v", taskID, dbErr)
-		return
-	}
-	// Accumulate failure log (truncate to 8KB to avoid unbounded growth).
-	const maxLogBytes = 8192
-	entry := fmt.Sprintf("[%s] %v", time.Now().Format(time.RFC3339), err)
-	newLog := task.DLQ.FailureLog
-	if newLog != "" {
-		newLog += "\n"
-	}
-	newLog += entry
-	if len(newLog) > maxLogBytes {
-		newLog = newLog[len(newLog)-maxLogBytes:]
-	}
-
-	task.RetryCount++
-	task.DLQ.FailureLog = newLog
-
-	maxRetries := task.DLQ.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-	if task.RetryCount < maxRetries {
-		// Retry: reset to pending so the next cleanup cycle can resume it.
-		// Backoff is implicit: cleanup runs hourly and Boot runs on next restart.
-		task.Status = model.StatusPending
-		task.Error = fmt.Sprintf("retry %d/%d: %v", task.RetryCount, maxRetries, err)
-		logger.Printf("[TaskService] task %s moved back to pending for retry %d/%d", taskID, task.RetryCount, maxRetries)
-	} else {
-		// Dead letter: exhausted all retries.
-		task.Status = "dead"
-		task.Error = fmt.Sprintf("dead after %d retries: %v", task.RetryCount, err)
-		logger.Printf("[TaskService] task %s moved to dead-letter queue after %d retries", taskID, task.RetryCount)
-	}
-	if saveErr := s.repo.Update(task); saveErr != nil {
-		logger.Errorf("[TaskService] MarkTaskFailed: save task %s failed: %v", taskID, saveErr)
-	}
-	// Send notification when task finally dies (not on retries).
-	if task.Status == "dead" && s.notifSvc != nil && s.tenantUserRepo != nil {
-		go s.sendFailureNotification(task, task.Error)
-	}
 }
 
 // sendFailureNotification sends a failure in-app notification to all users in the task's tenant.
@@ -618,23 +565,6 @@ func (s *TaskService) CancelActiveByEntityAndInvoke(entityType string, entityID 
 	}
 }
 
-// ListDistinctActiveTenants returns tenant IDs that currently have pending tasks.
-// This is the foundation for a per-tenant round-robin scheduler: callers can
-// iterate over the returned tenant IDs and pick the oldest pending task for each
-// tenant in sequence, preventing any single tenant from starving others.
-//
-// Per-tenant fairness design note:
-// The ink_async_task table has composite index idx_task_tenant_created (tenant_id, created_at)
-// which makes "SELECT ... WHERE tenant_id = ? AND status = 'pending' ORDER BY created_at LIMIT 1"
-// very efficient. A fair scheduler would:
-//   1. Call ListDistinctActiveTenants() to get [t1, t2, t3, ...]
-//   2. Round-robin through them (track lastProcessedTenantID in memory)
-//   3. For each tenant, pick the oldest pending task
-// This prevents one high-volume tenant from blocking others.
-func (s *TaskService) ListDistinctActiveTenants() ([]uint, error) {
-	return s.repo.ListDistinctActiveTenants()
-}
-
 // failStaleTasks marks pending/running tasks not updated since `before` as failed.
 // Dispatch of pending work is handled exclusively by the task engine's continuous
 // wake+poll loop now (task_engine.go) — this only does cleanup: a task that is still
@@ -705,10 +635,6 @@ func (s *TaskService) runCleanup() {
 			if s.db != nil {
 				cutoff := time.Now().AddDate(0, 0, -30)
 				s.db.Where("created_at < ?", cutoff).Delete(&model.WebhookDelivery{})
-			}
-			// Run domain-specific cleanup callbacks (e.g. rewrite chapter tasks).
-			for _, fn := range s.cleanupCallbacks {
-				fn()
 			}
 		case <-s.stopCh:
 			return

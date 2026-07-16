@@ -38,9 +38,10 @@ const taskEngineDispatchBatchSize = 200
 
 // taskEngineHardTimeout bounds how long a single engine-dispatched task may run before its
 // context is cancelled, mirroring the timeout the old recoverOrphaned path used for resumed
-// tasks. Executor functions (func(*model.AsyncTask), see RegisterResumeHandler) don't take a
-// context parameter, so this mostly affects Cancel()/shutdown bookkeeping rather than
-// interrupting in-flight work that ignores it — same limitation the old resume path had.
+// tasks. Executor functions (func(context.Context, *model.AsyncTask), see
+// RegisterResumeHandler) receive this cancellable context and are expected to thread it down
+// to the actual AI provider calls, so both this timeout and an explicit Cancel() actually
+// interrupt in-flight work rather than merely updating bookkeeping.
 const taskEngineHardTimeout = 30 * time.Minute
 
 // defaultTaskEngineConcurrency is the default cap on concurrently-running tasks per
@@ -117,7 +118,7 @@ func (s *TaskService) dispatchOnce(ctx context.Context) {
 		if !ok {
 			continue // registered after ListPending ran, or raced with an unregister — skip, retried next cycle
 		}
-		fn := fnVal.(func(*model.AsyncTask))
+		fn := fnVal.(func(context.Context, *model.AsyncTask))
 		task := t
 		key := fmt.Sprintf("%d:%s", task.TenantID, task.Type)
 		if !s.tryAcquireSlot(key, s.concurrencyLimitFor(task.Type)) {
@@ -140,7 +141,7 @@ func (s *TaskService) concurrencyLimitFor(taskType string) int {
 // claimAndRun atomically claims a single pending task (so a racing wake+poll, or another
 // instance, cannot also run it) and executes it. Mirrors the claim/cancel/panic-recovery
 // pattern the old recoverOrphaned path used for resumed tasks.
-func (s *TaskService) claimAndRun(parentCtx context.Context, task *model.AsyncTask, fn func(*model.AsyncTask)) {
+func (s *TaskService) claimAndRun(parentCtx context.Context, task *model.AsyncTask, fn func(context.Context, *model.AsyncTask)) {
 	ok, err := s.repo.ClaimForResume(task.TaskID)
 	if err != nil {
 		logger.Errorf("[TaskEngine] ClaimForResume(%s): %v", task.TaskID, err)
@@ -151,13 +152,13 @@ func (s *TaskService) claimAndRun(parentCtx context.Context, task *model.AsyncTa
 		return
 	}
 
-	_, cancel := context.WithTimeout(parentCtx, taskEngineHardTimeout)
+	ctx, cancel := context.WithTimeout(parentCtx, taskEngineHardTimeout)
 	s.RegisterCancel(task.TaskID, cancel)
 	defer s.DeregisterCancel(task.TaskID)
 	defer cancel()
 	defer s.recoverTaskPanic(task.TaskID, "")
 
-	fn(task)
+	fn(ctx, task)
 }
 
 // recoverTaskPanic is the shared panic-recovery helper for anything that executes a task's

@@ -328,14 +328,12 @@ func (s *IntelligentStoryboardService) extractDialogues(content string) []string
 
 type CharacterConsistencyService struct {
 	imageService *ImageService
-	loraService  *LoRAService
 	aiService    *AIService
 }
 
-func NewCharacterConsistencyService(imageService *ImageService, loraService *LoRAService, aiService *AIService) *CharacterConsistencyService {
+func NewCharacterConsistencyService(imageService *ImageService, aiService *AIService) *CharacterConsistencyService {
 	return &CharacterConsistencyService{
 		imageService: imageService,
-		loraService:  loraService,
 		aiService:    aiService,
 	}
 }
@@ -593,63 +591,6 @@ func (s *ImageService) GenerateSceneImage(
 	}
 
 	return result.URL, nil
-}
-
-// ============================================
-// LoRA Service - LoRA训练和管理
-// ============================================
-
-type LoRAService struct {
-	modelRepo interface{}
-}
-
-func NewLoRAService(modelRepo interface{}) *LoRAService {
-	return &LoRAService{modelRepo: modelRepo}
-}
-
-// LoRAModel LoRA模型
-type LoRAModel struct {
-	ID          string  `json:"id"`
-	CharacterID uint    `json:"character_id"`
-	Name        string  `json:"name"`
-	ModelPath   string  `json:"model_path"`
-	Weight      float64 `json:"weight"`
-	Quality     float64 `json:"quality"`
-	Status      string  `json:"status"` // training/ready/failed
-	CreatedAt   string  `json:"created_at"`
-}
-
-// TrainCharacterLoRA 训练角色LoRA
-func (s *LoRAService) TrainCharacterLoRA(
-	characterID uint,
-	characterName string,
-	trainingImages []string,
-) (*LoRAModel, error) {
-	// 简化实现:创建LoRA模型记录
-	model := &LoRAModel{
-		ID:          fmt.Sprintf("lora_%d_%d", characterID, time.Now().Unix()),
-		CharacterID: characterID,
-		Name:        fmt.Sprintf("%s_LoRA", characterName),
-		Weight:      0.8,
-		Quality:     0.0, // 训练完成后更新
-		Status:      "training",
-		CreatedAt:   time.Now().Format("2006-01-02 15:04:05"),
-	}
-
-	return model, nil
-}
-
-// GetCharacterLoRA 获取角色LoRA
-func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
-	// 简化实现
-	return &LoRAModel{
-		ID:          fmt.Sprintf("lora_%d", characterID),
-		CharacterID: characterID,
-		Name:        "default_lora",
-		Weight:      0.8,
-		Quality:     0.85,
-		Status:      "ready",
-	}, nil
 }
 
 // AIProvider AI提供者接口

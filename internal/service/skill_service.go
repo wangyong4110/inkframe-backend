@@ -168,7 +168,7 @@ func parseSkillsJSON(raw string) ([]skillJSON, error) {
 }
 
 // GenerateSkills 使用 AI 为小说生成技能体系
-func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.Skill, retErr error) {
+func (s *SkillService) GenerateSkills(ctx context.Context, tenantID, novelID uint) (result []*model.Skill, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("[SkillService] GenerateSkills: recovered panic: %v", r)
@@ -199,7 +199,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 		novelTitle, novelGenre,
 	)
 
-	aiResult, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", prompt, "",
+	aiResult, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_items", prompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)

@@ -1057,7 +1057,7 @@ func (s *NarrativeMemoryService) adaptOutlineAfterArc(
 // ──────────────────────────────────────────────
 
 // GenerateChapterSummary 为已生成章节内容生成80-120字摘要
-func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *model.Chapter, novelTitle string) (retSummary string, retErr error) {
+func (s *NarrativeMemoryService) GenerateChapterSummary(ctx context.Context, tenantID uint, chapter *model.Chapter, novelTitle string) (retSummary string, retErr error) {
 	summaryStart := time.Now()
 	defer func() {
 		status := "success"
@@ -1093,7 +1093,7 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 	const minSummaryRunes = 150
 	var summary string
 	for attempt := 0; attempt < 3; attempt++ {
-		summary, err = s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_summary", prompt, "")
+		summary, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_summary", prompt, "")
 		if err != nil {
 			logger.Errorf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d attempt=%d err=%v", chapter.ChapterNo, attempt+1, err)
 			return "", err
