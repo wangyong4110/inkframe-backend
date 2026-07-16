@@ -31,8 +31,6 @@ import (
 type AssetService struct {
 	assetRepo      *repository.AssetRepository
 	tagRepo        *repository.TagRepository
-	versionRepo    *repository.AssetVersionRepository
-	collectionRepo *repository.AssetCollectionRepository
 	publishReqRepo *repository.AssetPublishRequestRepository
 	usageRepo      *repository.AssetUsageRepository
 	likeRepo       *repository.AssetLikeRepository
@@ -96,8 +94,6 @@ func (s *AssetService) WithRedis(c *redis.Client) *AssetService {
 func NewAssetService(
 	assetRepo *repository.AssetRepository,
 	tagRepo *repository.TagRepository,
-	versionRepo *repository.AssetVersionRepository,
-	collectionRepo *repository.AssetCollectionRepository,
 	publishReqRepo *repository.AssetPublishRequestRepository,
 	usageRepo *repository.AssetUsageRepository,
 	likeRepo *repository.AssetLikeRepository,
@@ -110,8 +106,8 @@ func NewAssetService(
 	taskSvc *TaskService,
 ) *AssetService {
 	return &AssetService{
-		assetRepo: assetRepo, tagRepo: tagRepo, versionRepo: versionRepo,
-		collectionRepo: collectionRepo, publishReqRepo: publishReqRepo,
+		assetRepo: assetRepo, tagRepo: tagRepo,
+		publishReqRepo: publishReqRepo,
 		usageRepo: usageRepo, likeRepo: likeRepo, commentRepo: commentRepo,
 		crawlRepo: crawlRepo, shareLinkRepo: shareLinkRepo,
 		searchLogRepo: searchLogRepo, quotaRepo: quotaRepo,
@@ -482,53 +478,6 @@ func (s *AssetService) ListPendingShareRequests(page, size int) ([]*model.AssetP
 	return s.publishReqRepo.ListPending(page, size)
 }
 
-// ─── Version Control ──────────────────────────────────────────────────────────
-
-func (s *AssetService) ListVersions(assetID uint) ([]*model.AssetVersion, error) {
-	return s.versionRepo.ListByAsset(assetID)
-}
-
-func (s *AssetService) CreateVersion(ctx context.Context, assetID, callerID uint, r io.Reader, size int64, mimeType, note string) (*model.AssetVersion, error) {
-	if s.storageSvc == nil {
-		return nil, fmt.Errorf("storage service not configured")
-	}
-	a, err := s.assetRepo.GetByID(assetID)
-	if err != nil || a.CreatorID != callerID {
-		return nil, errors.New("not found or permission denied")
-	}
-	ext := mimeToExt(mimeType)
-	key := fmt.Sprintf("assets/%d/versions/%d/%s%s", a.TenantID, assetID, randomHex(12), ext)
-	url, err := s.storageSvc.Upload(ctx, key, r, size, mimeType)
-	if err != nil {
-		return nil, err
-	}
-	v := &model.AssetVersion{
-		AssetID:    assetID,
-		StorageURL: url, FileSize: size,
-		ChangeNote: note, CreatedBy: callerID,
-	}
-	if err := s.versionRepo.CreateVersionAtomic(v); err != nil {
-		return nil, err
-	}
-	// Update asset storage URL to latest version
-	_ = s.assetRepo.UpdateFields(assetID, map[string]interface{}{"storage_url": url, "file_size": size})
-	return v, nil
-}
-
-func (s *AssetService) RestoreVersion(ctx context.Context, assetID uint, versionNo int, callerID uint) error {
-	a, err := s.assetRepo.GetByID(assetID)
-	if err != nil || a.CreatorID != callerID {
-		return errors.New("not found or permission denied")
-	}
-	v, err := s.versionRepo.GetByVersionNo(assetID, versionNo)
-	if err != nil {
-		return err
-	}
-	return s.assetRepo.UpdateFields(assetID, map[string]interface{}{
-		"storage_url": v.StorageURL, "file_size": v.FileSize,
-	})
-}
-
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
 func (s *AssetService) AddTags(assetID, callerID uint, tagNames []string) ([]*model.Tag, error) {
@@ -600,46 +549,6 @@ func (s *AssetService) UseAsset(assetID uint, usage model.AssetUsage) (string, s
 		attribution = a.MediaMeta.Attribution
 	}
 	return a.MediaMeta.StorageURL, attribution, nil
-}
-
-// ─── Collections ─────────────────────────────────────────────────────────────
-
-func (s *AssetService) CreateCollection(tenantID, creatorID uint, name, desc, scope string) (*model.AssetCollection, error) {
-	c := &model.AssetCollection{
-		TenantID: tenantID, CreatorID: creatorID,
-		Name: name, Description: desc, Scope: scope,
-	}
-	return c, s.collectionRepo.Create(c)
-}
-
-func (s *AssetService) ListCollections(creatorID uint) ([]*model.AssetCollection, error) {
-	return s.collectionRepo.ListByCreator(creatorID)
-}
-
-func (s *AssetService) AddToCollection(collectionID uint, assetIDs []uint, callerID uint) error {
-	c, err := s.collectionRepo.GetByID(collectionID)
-	if err != nil || c.CreatorID != callerID {
-		return errors.New("not found or permission denied")
-	}
-	for _, aid := range assetIDs {
-		_ = s.collectionRepo.AddItem(collectionID, aid)
-	}
-	return nil
-}
-
-func (s *AssetService) RemoveFromCollection(collectionID uint, assetIDs []uint, callerID uint) error {
-	c, err := s.collectionRepo.GetByID(collectionID)
-	if err != nil || c.CreatorID != callerID {
-		return errors.New("not found or permission denied")
-	}
-	for _, aid := range assetIDs {
-		_ = s.collectionRepo.RemoveItem(collectionID, aid)
-	}
-	return nil
-}
-
-func (s *AssetService) ListCollectionItems(collectionID uint) ([]*model.Asset, error) {
-	return s.collectionRepo.ListItems(collectionID)
 }
 
 // ─── Share Links ──────────────────────────────────────────────────────────────
@@ -2364,6 +2273,8 @@ func mimeToExt(mime string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "image/svg+xml":
+		return ".svg"
 	case "video/mp4":
 		return ".mp4"
 	case "video/quicktime":

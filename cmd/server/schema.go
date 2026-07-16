@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-16-v1"
+const schemaVersion = "2026-07-16-v4"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -94,12 +94,70 @@ func autoMigrate(db *gorm.DB) error {
 
 	// ink_asset.description 从 JSON blob（asset_media_meta.description）提升为独立列，
 	// 支持 FULLTEXT 检索，不再需要每次查询都做 JSON_EXTRACT + 全表扫描（2026-07-16-v1）。
-	db.Exec("ALTER TABLE ink_asset ADD COLUMN IF NOT EXISTS description TEXT")
+	//
+	// 注意：不用 "ADD COLUMN IF NOT EXISTS"（MySQL 8.0.29+ 才支持，旧版本/MariaDB 会报语法错误）。
+	// 用 information_schema 查询列是否存在，再决定要不要 ALTER，且必须检查错误——
+	// 否则一旦 ALTER 失败，下面还是会把 schemaVersion 写进去，导致这次迁移永久被跳过，
+	// 列却始终没加上（历史上就是这样导致 INSERT INTO ink_asset 报 Unknown column 'description'）。
+	var descColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_asset' AND COLUMN_NAME = 'description'`,
+	).Scan(&descColCnt)
+	if descColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_asset ADD COLUMN description TEXT").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_asset.description: %w", err)
+		}
+	}
 	// 回填旧数据：只在新列为空、且 JSON 里确实有值时才写入，避免覆盖已经迁移过的记录。
 	db.Exec(`UPDATE ink_asset SET description = JSON_UNQUOTE(JSON_EXTRACT(asset_media_meta, '$.description'))
 		WHERE (description IS NULL OR description = '')
 		AND JSON_EXTRACT(asset_media_meta, '$.description') IS NOT NULL`)
 	ensureAssetDescriptionFulltextIndex(db)
+
+	// ink_asset_collection / ink_asset_collection_item 已废弃（收藏夹功能后端已实现但前端
+	// 从未接入，纯死代码，已随本次改动一并删除 Go 侧 model/repository/service/handler/router），
+	// ink_asset_version 也已废弃（素材只保留最新数据，不再需要版本历史/回滚功能，前后端相关
+	// 代码已一并删除），显式 DROP 掉物理表——GORM AutoMigrate 只会新增列/表，永远不会删除，
+	// 不然这些表会一直留在库里。子表（*_item）先删，避免残留的孤儿行；用 information_schema
+	// 判断表是否存在，避免对不存在的表重复执行 DROP 报错（虽然 DROP TABLE IF EXISTS 本身也是
+	// 幂等的，这里仍统一走已建立的 existence-check 模式，方便和其它迁移语句一起阅读）。
+	for _, table := range []string{"ink_asset_collection_item", "ink_asset_collection", "ink_asset_version"} {
+		var tblCnt int64
+		db.Raw(
+			"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+			table,
+		).Scan(&tblCnt)
+		if tblCnt == 0 {
+			continue
+		}
+		if err := db.Exec("DROP TABLE IF EXISTS `" + table + "`").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to drop %s: %w", table, err)
+		}
+	}
+
+	// ink_video.progress / ink_storyboard_shot.progress：视频合成/分镜批处理的实时进度列，
+	// 代码里一直在用 videoRepo.UpdateFields(id, {"progress": pct})／storyboardRepo.UpdateFields(id,
+	// {"progress": ...}) 直接 SET 这个列（比读改写整个 task_meta JSON 便宜得多），但一直没有配
+	// 对应的迁移，导致线上报 Error 1054 Unknown column 'progress'（2026-07-16-v3 遗漏，本次补上）。
+	// 同样：先查 information_schema 再 ALTER，且必须检查错误，避免重蹈 description 列的覆辙。
+	type progressCol struct{ table, column string }
+	for _, c := range []progressCol{
+		{"ink_video", "progress"},
+		{"ink_storyboard_shot", "progress"},
+	} {
+		var colCnt int64
+		db.Raw(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			c.table, c.column,
+		).Scan(&colCnt)
+		if colCnt == 0 {
+			if err := db.Exec("ALTER TABLE `" + c.table + "` ADD COLUMN `" + c.column + "` INT NOT NULL DEFAULT 0").Error; err != nil {
+				return fmt.Errorf("autoMigrate: failed to add %s.%s: %w", c.table, c.column, err)
+			}
+		}
+	}
 
 	// 补全缺失索引（幂等，已存在则跳过）
 	ensureCriticalIndexes(db)

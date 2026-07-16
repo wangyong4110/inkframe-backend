@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	AssetScopePersonal = "personal"
@@ -90,6 +93,67 @@ type Asset struct {
 
 func (Asset) TableName() string { return "ink_asset" }
 
+// MarshalJSON 把 MediaMeta/QualityMeta 拍平到顶层输出。这两个字段用 JSON 序列化进单独的
+// DB 列纯粹是为了减少列数（见上面 "JSON 合并字段" 注释），只是存储层的优化，从来不是 API
+// 响应形状的一部分——前端 Asset 类型（inkframe-frontend/types/index.ts）一直按顶层字段
+// （storage_url/thumbnail_url/width/height/...）读取，如果不拍平，序列化出来的是
+// {"media_meta":{"storage_url":...}}，前端读到的所有这些字段永远是 undefined。
+func (a Asset) MarshalJSON() ([]byte, error) {
+	type alias Asset // 用别名类型避免调用自身 MarshalJSON 导致无限递归
+	return json.Marshal(&struct {
+		*alias
+		MediaMeta   *AssetMediaMeta   `json:"media_meta,omitempty"`
+		QualityMeta *AssetQualityMeta `json:"quality_meta,omitempty"`
+
+		StorageURL    string  `json:"storage_url"`
+		ThumbnailURL  string  `json:"thumbnail_url,omitempty"`
+		PreviewURL    string  `json:"preview_url,omitempty"`
+		SourceURL     string  `json:"source_url,omitempty"`
+		Attribution   string  `json:"attribution,omitempty"`
+		Width         int     `json:"width,omitempty"`
+		Height        int     `json:"height,omitempty"`
+		Duration      float64 `json:"duration,omitempty"`
+		FileSize      int64   `json:"file_size,omitempty"`
+		MimeType      string  `json:"mime_type,omitempty"`
+		AspectRatio   string  `json:"aspect_ratio,omitempty"`
+		ColorPalette  string  `json:"color_palette,omitempty"`
+		Metadata      string  `json:"metadata,omitempty"`
+		QualityScore  float64 `json:"quality_score,omitempty"`
+		QualityIssues string  `json:"quality_issues,omitempty"`
+		SafetyScore   float64 `json:"safety_score,omitempty"`
+		SafetyChecked bool    `json:"safety_checked,omitempty"`
+		DeletedBy     *uint   `json:"deleted_by,omitempty"`
+		NovelID       *uint   `json:"novel_id,omitempty"`
+		VideoID       *uint   `json:"video_id,omitempty"`
+		ShotID        *uint   `json:"shot_id,omitempty"`
+	}{
+		alias: (*alias)(&a),
+		// MediaMeta/QualityMeta 显式留空（配合 omitempty）以覆盖 *alias 提升出来的同名嵌套字段，
+		// Go 的 json 包在字段名冲突时浅层字段优先，所以这里能盖掉 alias.MediaMeta 的嵌套输出。
+		StorageURL:    a.MediaMeta.StorageURL,
+		ThumbnailURL:  a.MediaMeta.ThumbnailURL,
+		PreviewURL:    a.MediaMeta.PreviewURL,
+		SourceURL:     a.MediaMeta.SourceURL,
+		Attribution:   a.MediaMeta.Attribution,
+		Width:         a.MediaMeta.Width,
+		Height:        a.MediaMeta.Height,
+		Duration:      a.MediaMeta.Duration,
+		FileSize:      a.MediaMeta.FileSize,
+		MimeType:      a.MediaMeta.MimeType,
+		AspectRatio:   a.MediaMeta.AspectRatio,
+		ColorPalette:  a.MediaMeta.ColorPalette,
+		Metadata:      a.MediaMeta.Metadata,
+		QualityScore:  a.QualityMeta.QualityScore,
+		QualityIssues: a.QualityMeta.QualityIssues,
+		SafetyScore:   a.QualityMeta.SafetyScore,
+		SafetyChecked: a.QualityMeta.SafetyChecked,
+		DeletedBy:     a.QualityMeta.DeletedBy,
+		NovelID:       a.QualityMeta.NovelID,
+		VideoID:       a.QualityMeta.VideoID,
+		ShotID:        a.QualityMeta.ShotID,
+	})
+}
+
 // Tag is the tag dictionary (ink_tag).
 type Tag struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
@@ -128,47 +192,6 @@ type AssetPublishRequest struct {
 }
 
 func (AssetPublishRequest) TableName() string { return "ink_asset_publish_request" }
-
-// AssetVersion tracks version history for personal-library assets (ink_asset_version).
-type AssetVersion struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	AssetID      uint      `json:"asset_id" gorm:"index"`
-	VersionNo    int       `json:"version_no"`
-	StorageURL   string    `json:"storage_url" gorm:"type:text"`
-	ThumbnailURL string    `json:"thumbnail_url" gorm:"type:text"`
-	FileSize     int64     `json:"file_size"`
-	ChangeNote   string    `json:"change_note" gorm:"size:500"`
-	CreatedBy    uint      `json:"created_by"`
-	CreatedAt    time.Time `json:"created_at"`
-}
-
-func (AssetVersion) TableName() string { return "ink_asset_version" }
-
-// AssetCollection groups assets (personal or public scope) (ink_asset_collection).
-type AssetCollection struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	TenantID    uint      `json:"tenant_id" gorm:"index"`
-	Scope       string    `json:"scope" gorm:"size:20;default:'personal'"`
-	Name        string    `json:"name" gorm:"size:200"`
-	Description string    `json:"description" gorm:"size:1000"`
-	CoverURL    string    `json:"cover_url" gorm:"size:2000"`
-	AssetCount  int       `json:"asset_count" gorm:"default:0"`
-	CreatorID   uint      `json:"creator_id"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-func (AssetCollection) TableName() string { return "ink_asset_collection" }
-
-// AssetCollectionItem is the join between collections and assets (ink_asset_collection_item).
-type AssetCollectionItem struct {
-	CollectionID uint      `gorm:"primaryKey;index"`
-	AssetID      uint      `gorm:"primaryKey"`
-	SortOrder    int       `gorm:"default:0"`
-	AddedAt      time.Time
-}
-
-func (AssetCollectionItem) TableName() string { return "ink_asset_collection_item" }
 
 // CrawlJobStats 爬取统计（JSON存储）
 type CrawlJobStats struct {

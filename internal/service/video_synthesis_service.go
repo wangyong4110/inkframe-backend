@@ -1300,8 +1300,24 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 	if s.segmentRepo != nil {
 		segs, err := s.segmentRepo.ListByShotID(shot.ID)
 		if err == nil {
-			for _, seg := range segs {
-				if seg.AudioPath != "" {
+			for segIdx, seg := range segs {
+				if seg.AudioPath == "" {
+					segsDurSecs += seg.DurationSecs
+					continue
+				}
+				if strings.HasPrefix(seg.AudioPath, "http://") || strings.HasPrefix(seg.AudioPath, "https://") {
+					// WASM ffmpeg 无网络协议支持，远程音频需先下载到本地再喂给 -i
+					localPath := fmt.Sprintf("%s/voice_seg_%d_%d.mp3", tmpDir, idx, segIdx)
+					dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
+					dlErr := downloadFileCtx(dlCtx, seg.AudioPath, localPath)
+					dlCancel()
+					if dlErr != nil {
+						logger.Errorf("[buildShotAudio] shot %d: voice segment download failed: %v — skipping segment", shot.ShotNo, dlErr)
+						segsDurSecs += seg.DurationSecs
+						continue
+					}
+					voicePaths = append(voicePaths, localPath)
+				} else {
 					voicePaths = append(voicePaths, strings.TrimPrefix(seg.AudioPath, "file://"))
 				}
 				segsDurSecs += seg.DurationSecs
@@ -1312,6 +1328,8 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 	var speechAudioPath string
 	var audioDur float64
 	switch len(voicePaths) {
+	case 0:
+		// 全部分段下载失败或无音频，降级到 SFX-only / 静音轨
 	case 1:
 		speechAudioPath = voicePaths[0]
 		audioDur = segsDurSecs

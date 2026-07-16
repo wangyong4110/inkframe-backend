@@ -106,6 +106,9 @@ type Video struct {
 	// 分镜审查状态（pending/reviewed/skipped）
 	ReviewStatus string `json:"review_status" gorm:"size:20;default:''"`
 
+	// 合成阶段实时进度（0-100），供轮询接口读取；与 TaskMeta.Progress（单任务/单分镜进度）是两个独立概念
+	Progress int `json:"progress" gorm:"default:0"`
+
 	// 发布状态
 	IsPublished bool `json:"is_published" gorm:"default:false;index"`
 
@@ -200,6 +203,9 @@ type StoryboardShot struct {
 	// 状态
 	Status       string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
 	ErrorMessage string `json:"error_message" gorm:"size:1000"` // 最后一次失败原因，供前端展示
+
+	// 批量处理阶段实时进度（0-100），供轮询接口读取；与 TaskMeta.Progress（单任务进度）是两个独立概念
+	Progress int `json:"progress" gorm:"default:0"`
 
 	// AI 生成结果 URL（前端展示用）
 	ImageURL string `json:"image_url" gorm:"size:1000"` // AI生成图片URL

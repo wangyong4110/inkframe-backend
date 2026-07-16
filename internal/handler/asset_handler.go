@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/inkframe/inkframe-backend/internal/util"
 )
 
 // AssetHandler handles /api/v1/assets and related routes.
@@ -45,13 +47,16 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 
 	// Extension whitelist — validated first to prevent extension spoofing
 	allowedExtensions := map[string]bool{
-		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".svg": true,
 		".mp4": true, ".webm": true,
 		".mp3": true, ".wav": true, ".ogg": true,
 		".pdf": true,
 		".txt": true,
 	}
-	// Map extensions to expected MIME category prefixes for cross-validation
+	// Map extensions to expected MIME category prefixes for cross-validation.
+	// .svg is intentionally absent here: Go's http.DetectContentType has no
+	// "image/svg+xml" signature, so SVGs sniff as text/xml or text/plain —
+	// they get their own check below instead of the generic category match.
 	extMIMECategory := map[string]string{
 		".jpg": "image/", ".jpeg": "image/", ".png": "image/", ".gif": "image/", ".webp": "image/",
 		".mp4": "video/", ".webm": "video/",
@@ -70,7 +75,8 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 		"video/mp4": true, "video/webm": true,
 		"audio/mpeg": true, "audio/wav": true, "audio/ogg": true, "audio/mp4": true,
 		"application/pdf": true,
-		"text/plain": true,
+		"text/plain":      true,
+		"text/xml":        true,
 	}
 	// Detect actual MIME type from first 512 bytes (not just filename extension)
 	buf := make([]byte, 512)
@@ -93,6 +99,28 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 		}
 	}
 
+	// SVG is XML that can carry <script>/event-handler payloads (stored XSS
+	// if the asset is later opened directly in a browser tab), so it gets
+	// parsed and stripped of script-capable constructs before it's ever
+	// written to storage. A parse/sanitize failure means the upload is
+	// rejected rather than stored as-is.
+	var uploadReader io.Reader = f
+	uploadSize := header.Size
+	if fileExt == ".svg" {
+		raw, readErr := io.ReadAll(f)
+		if readErr != nil {
+			respondErr(c, http.StatusInternalServerError, "failed to process file")
+			return
+		}
+		clean, sanErr := util.SanitizeSVG(raw)
+		if sanErr != nil {
+			respondBadRequest(c, "invalid or unsafe svg file: "+sanErr.Error())
+			return
+		}
+		uploadReader = bytes.NewReader(clean)
+		uploadSize = int64(len(clean))
+	}
+
 	title := c.PostForm("title")
 	if title == "" {
 		title = header.Filename
@@ -109,11 +137,11 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 	uid := getUserID(c)
 	tid := getTenantID(c)
 
-	asset, err := h.svc.Upload(c.Request.Context(), f, header.Size, service.UploadAssetParams{
+	asset, err := h.svc.Upload(c.Request.Context(), uploadReader, uploadSize, service.UploadAssetParams{
 		TenantID: tid, CreatorID: uid,
 		Title: title, Type: assetType,
 		SubType:  c.PostForm("sub_type"),
-		MimeType: mime, FileSize: header.Size,
+		MimeType: mime, FileSize: uploadSize,
 	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -341,52 +369,6 @@ func (h *AssetHandler) AdminRemoveAsset(c *gin.Context) {
 	respondOK(c, nil)
 }
 
-// ─── Versions ─────────────────────────────────────────────────────────────────
-
-// GET /assets/:id/versions
-func (h *AssetHandler) ListVersions(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	vs, err := h.svc.ListVersions(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, vs)
-}
-
-// POST /assets/:id/versions
-func (h *AssetHandler) CreateVersion(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	f, header, err := c.Request.FormFile("file")
-	if err != nil {
-		respondBadRequest(c, "file required")
-		return
-	}
-	defer f.Close()
-	mime := header.Header.Get("Content-Type")
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
-	v, err := h.svc.CreateVersion(c.Request.Context(), uint(id), getUserID(c),
-		f, header.Size, mime, c.PostForm("note"))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondCreated(c, v)
-}
-
-// POST /assets/:id/versions/:v/restore
-func (h *AssetHandler) RestoreVersion(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	vNo, _ := strconv.Atoi(c.Param("v"))
-	if err := h.svc.RestoreVersion(c.Request.Context(), uint(id), vNo, getUserID(c)); err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, nil)
-}
-
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
 // GET /assets/tags
@@ -508,86 +490,6 @@ func (h *AssetHandler) BatchShareRequest(c *gin.Context) {
 	}
 	submitted, failed := h.svc.BatchShareRequest(getUserID(c), body.AssetIDs)
 	respondOK(c, gin.H{"submitted": submitted, "failed": failed})
-}
-
-// ─── Collections ─────────────────────────────────────────────────────────────
-
-// GET /asset-collections
-func (h *AssetHandler) ListCollections(c *gin.Context) {
-	cols, err := h.svc.ListCollections(getUserID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, cols)
-}
-
-// POST /asset-collections
-func (h *AssetHandler) CreateCollection(c *gin.Context) {
-	var body struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Scope       string `json:"scope"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.Name == "" {
-		respondBadRequest(c, "name required")
-		return
-	}
-	scope := body.Scope
-	if scope == "" {
-		scope = "personal"
-	}
-	col, err := h.svc.CreateCollection(getTenantID(c), getUserID(c), body.Name, body.Description, scope)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondCreated(c, col)
-}
-
-// POST /asset-collections/:id/items
-func (h *AssetHandler) AddToCollection(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	var body struct {
-		AssetIDs []uint `json:"asset_ids"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, "asset_ids required")
-		return
-	}
-	if err := h.svc.AddToCollection(uint(id), body.AssetIDs, getUserID(c)); err != nil {
-		respondErr(c, http.StatusForbidden, err.Error())
-		return
-	}
-	respondOK(c, nil)
-}
-
-// DELETE /asset-collections/:id/items
-func (h *AssetHandler) RemoveFromCollection(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	var body struct {
-		AssetIDs []uint `json:"asset_ids"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, "asset_ids required")
-		return
-	}
-	if err := h.svc.RemoveFromCollection(uint(id), body.AssetIDs, getUserID(c)); err != nil {
-		respondErr(c, http.StatusForbidden, err.Error())
-		return
-	}
-	respondOK(c, nil)
-}
-
-// GET /asset-collections/:id/items
-func (h *AssetHandler) ListCollectionItems(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	assets, err := h.svc.ListCollectionItems(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, assets)
 }
 
 // ─── Share Links ──────────────────────────────────────────────────────────────

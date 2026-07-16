@@ -69,8 +69,6 @@ type Repositories struct {
 	// Asset Library
 	AssetRepo               *repository.AssetRepository
 	TagRepo                 *repository.TagRepository
-	AssetVersionRepo        *repository.AssetVersionRepository
-	AssetCollectionRepo     *repository.AssetCollectionRepository
 	AssetPublishRequestRepo *repository.AssetPublishRequestRepository
 	AssetUsageRepo          *repository.AssetUsageRepository
 	AssetLikeRepo           *repository.AssetLikeRepository
@@ -152,8 +150,6 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		// Asset Library
 		AssetRepo:               repository.NewAssetRepository(db),
 		TagRepo:                 repository.NewTagRepository(db),
-		AssetVersionRepo:        repository.NewAssetVersionRepository(db),
-		AssetCollectionRepo:     repository.NewAssetCollectionRepository(db),
 		AssetPublishRequestRepo: repository.NewAssetPublishRequestRepository(db),
 		AssetUsageRepo:          repository.NewAssetUsageRepository(db),
 		AssetLikeRepo:           repository.NewAssetLikeRepository(db),
@@ -672,8 +668,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		AssetService: service.NewAssetService(
 			repos.AssetRepo,
 			repos.TagRepo,
-			repos.AssetVersionRepo,
-			repos.AssetCollectionRepo,
 			repos.AssetPublishRequestRepo,
 			repos.AssetUsageRepo,
 			repos.AssetLikeRepo,

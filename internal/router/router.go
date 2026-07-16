@@ -933,22 +933,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.POST("/assets/:id/like", ah.ToggleLike)
 			v1.POST("/assets/:id/use", ah.UseAsset)
 
-			// Versions
-			v1.GET("/assets/:id/versions", ah.ListVersions)
-			v1.POST("/assets/:id/versions", ah.CreateVersion)
-			v1.POST("/assets/:id/versions/:v/restore", ah.RestoreVersion)
-
 			// Comments
 			v1.GET("/assets/:id/comments", ah.ListComments)
 			v1.POST("/assets/:id/comments", ah.AddComment)
 			v1.DELETE("/assets/:id/comments/:cid", ah.DeleteComment)
-
-			// Collections
-			v1.GET("/asset-collections", ah.ListCollections)
-			v1.POST("/asset-collections", ah.CreateCollection)
-			v1.GET("/asset-collections/:id/items", ah.ListCollectionItems)
-			v1.POST("/asset-collections/:id/items", ah.AddToCollection)
-			v1.DELETE("/asset-collections/:id/items", ah.RemoveFromCollection)
 
 			// Share links
 			v1.GET("/share-links", ah.ListShareLinks)

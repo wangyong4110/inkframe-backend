@@ -18,7 +18,7 @@
 //   - arc_summary_repository.go  — ArcSummaryRepository
 //   - task_repository.go         — TaskRepository
 //   - user_repository.go         — UserRepository, TenantRepository, TenantUserRepository
-//   - asset_repository.go        — AssetRepository, TagRepository, AssetVersionRepository, AssetCollectionRepository, etc.
+//   - asset_repository.go        — AssetRepository, TagRepository, etc.
 //   - platform_repository.go     — PlatformAccountRepository, VideoPublishRecordRepository
 //   - plot_point_repository.go   — PlotPointRepository
 package repository

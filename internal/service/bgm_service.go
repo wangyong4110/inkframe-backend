@@ -591,17 +591,7 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		}
 	}
 
-	// 1. 本地文件（上传 OSS 得到可访问 URL）
-	if localPath := s.SelectBGM(seg.TrackMeta.Mood); localPath != "" {
-		if publicURL, ok := s.resolveLocalBGMURL(ctx, localPath); ok {
-			seg.URL = publicURL
-			seg.TrackMeta.Source = "local"
-			return nil
-		}
-		// storageSvc 未配置：跳过本地，继续尝试 API
-	}
-
-	// 2. Jamendo 搜索
+	// 1. Jamendo 搜索
 	if jKey, _ := s.bgmProviderCreds(tenantID, "jamendo"); jKey != "" {
 		for _, q := range queries {
 			if trackURL, name, artist := s.jamendoSearch(ctx, tenantID, q); trackURL != "" {
@@ -615,7 +605,7 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		logger.Printf("[BGMService] segment %d (%s) Jamendo miss for all queries", seg.SeqNo, seg.TrackMeta.Mood)
 	}
 
-	// 3. Pixabay 降级
+	// 2. Pixabay 降级
 	if pKey, _ := s.bgmProviderCreds(tenantID, "pixabay-bgm"); pKey != "" {
 		for _, q := range queries {
 			if trackURL, name := s.pixabaySearchBGM(ctx, tenantID, q); trackURL != "" {
@@ -629,6 +619,15 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		logger.Printf("[BGMService] segment %d (%s) Pixabay miss for all queries", seg.SeqNo, seg.TrackMeta.Mood)
 	}
 
+	// 3. MiniMax Music AI 生成
+	if mmURL := s.generateMinimaxMusic(ctx, tenantID, seg.TrackMeta.Mood, seg.TrackMeta.SearchQueries); mmURL != "" {
+		seg.URL = mmURL
+		seg.TrackMeta.TrackName = "AI 生成音乐"
+		seg.TrackMeta.TrackArtist = "MiniMax Music"
+		seg.TrackMeta.Source = "minimax-music"
+		return nil
+	}
+
 	// 4. Fun-Music AI 生成（最终兜底）
 	if funURL := s.generateFunMusic(ctx, tenantID, seg.TrackMeta.Mood, seg.TrackMeta.SearchQueries); funURL != "" {
 		seg.URL = funURL
@@ -639,6 +638,47 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 	}
 
 	return nil
+}
+
+// generateMinimaxMusic 调用 MiniMax 文生音乐生成一段 BGM，返回音频 URL。
+// 失败时静默返回空字符串（调用方作为兜底使用，不中断流程）。
+func (s *BGMService) generateMinimaxMusic(ctx context.Context, tenantID uint, mood, searchQueriesJSON string) string {
+	if s.aiSvc == nil {
+		return ""
+	}
+	apiKey, _ := s.bgmProviderCreds(tenantID, "minimax-music")
+	if apiKey == "" {
+		return ""
+	}
+
+	// 将 mood 和 searchQueries 合并为音乐描述 prompt
+	prompt := mood
+	var queries []string
+	if searchQueriesJSON != "" {
+		_ = json.Unmarshal([]byte(searchQueriesJSON), &queries)
+	}
+	if len(queries) > 0 {
+		prompt = queries[0]
+		if mood != "" && mood != queries[0] {
+			prompt = mood + "，" + queries[0]
+		}
+	}
+	if prompt == "" {
+		logger.Errorf("[BGMService] minimax-music: empty mood and search_queries — upstream BGM analysis produced no prompt, skipping")
+		return ""
+	}
+
+	provider := ai.NewMinimaxMusicProvider(apiKey)
+	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
+		Text:         prompt,
+		Instrumental: true, // BGM 场景不需要人声歌词
+		Model:        "music-3.0",
+	})
+	if err != nil {
+		logger.Printf("[BGMService] minimax-music generate failed (mood=%s): %v", mood, err)
+		return ""
+	}
+	return resp.URL
 }
 
 // generateFunMusic 调用阿里云 Fun-Music 生成一段 BGM，返回音频 URL。
@@ -665,7 +705,8 @@ func (s *BGMService) generateFunMusic(ctx context.Context, tenantID uint, mood, 
 		}
 	}
 	if prompt == "" {
-		prompt = "轻柔背景音乐"
+		logger.Errorf("[BGMService] fun-music: empty mood and search_queries — upstream BGM analysis produced no prompt, skipping")
+		return ""
 	}
 
 	provider := ai.NewFunMusicProvider(apiKey)

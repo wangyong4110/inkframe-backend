@@ -150,6 +150,8 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 		provider = ai.NewQwenTTSProvider(apiKey, matched.APIEndpoint)
 	case "fun-music":
 		provider = ai.NewFunMusicProvider(apiKey)
+	case "minimax-music":
+		provider = ai.NewMinimaxMusicProvider(apiKey)
 	case "openai", "openai-image":
 		provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "anthropic":
@@ -435,9 +437,9 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	if err != nil {
 		return nil, err
 	}
-	// 按照 volcengine-visual/jimeng-video → kling → seedance/doubao → happyhorse/qianwen 顺序优先选择
+	// 按照 volcengine-visual/jimeng-video → kling → seedance/doubao → minimax-video → happyhorse/qianwen 顺序优先选择
 	// volcengine-visual 合并了 jimeng-video；doubao 合并了 seedance；qianwen 合并了 happyhorse
-	preferOrder := []string{"volcengine-visual", "jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
+	preferOrder := []string{"volcengine-visual", "jimeng-video", "kling", "seedance", "doubao", "minimax-video", "happyhorse", "qianwen"}
 	if name != "" {
 		preferOrder = []string{strings.ToLower(name)}
 	}
@@ -474,6 +476,8 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 		case "seedance", "doubao":
 			return ai.NewDoubaoVideoProvider(apiKey, p.APIEndpoint), nil
+		case "minimax-video":
+			return ai.NewMinimaxVideoProvider(apiKey), nil
 		case "happyhorse":
 			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 		case "qianwen":

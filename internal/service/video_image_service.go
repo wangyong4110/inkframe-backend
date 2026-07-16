@@ -1506,7 +1506,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoAspectRatio = "16:9"
 	}
 
-	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%.2fs", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
+	logger.Printf("GenerateShotVideo: shot %d provider=%s(%s) aspect=%s duration=%.2fs", shot.ShotNo, providerName, provider.GetName(), videoAspectRatio, shot.Duration)
 
 	// 参考图策略（优先级从高到低）：
 	//   ① shot.GenMeta.ReferenceImageURL 非空（上一镜最后一帧）→ I2V 时序链接，最高优先级
@@ -1953,7 +1953,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", len(extraRefImages), klingMode, klingCFG, videoPromptFinal)
+	logger.Printf("GenerateShotVideo: shot %d submitting to %s(%s) (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, provider.GetName(), referenceImage != "", len(extraRefImages), klingMode, klingCFG, videoPromptFinal)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1961,7 +1961,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	task, err := provider.GenerateVideo(ctx, req)
 	if err != nil {
 		metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "error").Inc()
-		logger.Errorf("GenerateShotVideo: shot %d submit failed: %v", shot.ShotNo, err)
+		logger.Errorf("GenerateShotVideo: shot %d submit failed via %s(%s): %v", shot.ShotNo, providerName, provider.GetName(), err)
 		return fmt.Errorf("shot video generation failed: %w", err)
 	}
 

@@ -38,12 +38,12 @@ type VideoGenerateRequest struct {
 	Seed           int      `json:"seed"`             // 随机种子，-1 或 0 表示随机（Seedance 1.x）
 
 	// Seedance 扩展参数
-	ReturnLastFrame       bool   `json:"return_last_frame"`        // 是否在响应中返回最后一帧 URL（用于视频续接）
-	Draft                 bool   `json:"draft"`                    // 草稿/预览模式（仅 Seedance 1.5 Pro，快速低质预览）
-	DraftTaskID           string `json:"draft_task_id,omitempty"`  // 续接草稿任务 ID（二步式：草稿→正式）
-	ServiceTier           string `json:"service_tier,omitempty"`   // "default"（在线）/"flex"（离线，价格减半，小时级延迟）
-	ExecutionExpiresAfter int64  `json:"execution_expires_after"`  // flex 离线推理超时（秒）；0 表示不限
-	CallbackURL           string `json:"callback_url,omitempty"`   // Webhook 回调地址；任务完成/失败时推送
+	ReturnLastFrame       bool   `json:"return_last_frame"`       // 是否在响应中返回最后一帧 URL（用于视频续接）
+	Draft                 bool   `json:"draft"`                   // 草稿/预览模式（仅 Seedance 1.5 Pro，快速低质预览）
+	DraftTaskID           string `json:"draft_task_id,omitempty"` // 续接草稿任务 ID（二步式：草稿→正式）
+	ServiceTier           string `json:"service_tier,omitempty"`  // "default"（在线）/"flex"（离线，价格减半，小时级延迟）
+	ExecutionExpiresAfter int64  `json:"execution_expires_after"` // flex 离线推理超时（秒）；0 表示不限
+	CallbackURL           string `json:"callback_url,omitempty"`  // Webhook 回调地址；任务完成/失败时推送
 
 	// Seedance 2.0 新增参数
 	Priority         int    `json:"priority,omitempty"`           // 请求优先级 0-9（仅 Seedance 2.0，0=默认FIFO，>0插队到低优先级前）
@@ -61,8 +61,9 @@ type VideoTask struct {
 // VideoTaskStatus 视频任务状态
 type VideoTaskStatus struct {
 	TaskID       string  `json:"task_id"`
-	Status       string  `json:"status"`                  // pending, processing, completed, failed
-	Progress     float64 `json:"progress"`                // 0-100
+	Status       string  `json:"status"`   // pending, processing, completed, failed
+	Progress     float64 `json:"progress"` // 0-100
 	Error        string  `json:"error,omitempty"`
 	LastFrameURL string  `json:"last_frame_url,omitempty"` // 最后一帧 URL（需请求时设置 ReturnLastFrame=true）
+	FileID       string  `json:"file_id,omitempty"`        // MiniMax 专用：任务成功后的文件 ID，需再调用文件检索接口换取下载地址
 }

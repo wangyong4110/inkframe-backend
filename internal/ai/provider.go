@@ -153,6 +153,8 @@ type AudioGenerateRequest struct {
 	SilenceDuration int     `json:"silence_duration"` // 文末静音时长 ms，范围 [0,30000]（V3）
 	DisableMarkdown bool    `json:"disable_markdown"` // 开启 Markdown 过滤（true=过滤语法符号）
 	Duration        float64 `json:"duration"`         // 音效时长（秒，文生音效 API 使用，如 Kling SFX）
+	Lyrics          string  `json:"lyrics"`           // 歌词（文生音乐 API 使用，如 MiniMax Music；用 \n 分隔每行）
+	Instrumental    bool    `json:"instrumental"`     // 是否生成纯音乐（无人声），MiniMax Music 使用
 	// 腾讯云 TTS 扩展参数
 	FastVoiceType  string `json:"fast_voice_type,omitempty"`  // 一句话复刻音色ID（VoiceType=200000000 时填入）
 	EnableSubtitle bool   `json:"enable_subtitle,omitempty"`  // 是否返回字/词级时间戳
