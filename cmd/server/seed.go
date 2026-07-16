@@ -194,6 +194,7 @@ func seedAIModels(db *gorm.DB) {
 		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false},
 		// 背景音乐
 		{"fun-music", "Fun-Music AI（阿里云百炼）", "https://dashscope.aliyuncs.com/api/v1", false},
+		{"minimax-music", "MiniMax Music（文生音乐）", "https://api.minimaxi.com/v1/music_generation", false},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）

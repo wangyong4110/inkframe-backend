@@ -122,6 +122,12 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 	"elevenlabs-sfx": {
 		"sfx": {"sound-generation"},
 	},
+	"fun-music": {
+		"music": {"fun-music-v1"},
+	},
+	"minimax-music": {
+		"music": {"music-3.0", "music-2.6", "music-3.0-free", "music-2.6-free"},
+	},
 }
 
 // providerModelDef 内置的提供商模型定义，用于租户创建供应商时自动初始化模型列表。
