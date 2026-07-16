@@ -602,17 +602,15 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 // EditImageWithInstruction 使用支持参考图的文生图模型重新生成图片，将原图作为参考图保持视觉一致性。
 // 只使用 ai.ImageEngineTraitsFor(...).SupportsReferenceImage 为 true 的 provider
 // （doubao/qianwen T2I 端点不支持参考图，会静默忽略）。
+// 参考图按 ai.ImageRefModeFor 解析（跟 GenerateCharacterThreeViewMulti 一致）：能直接用
+// URL 的场景（volcengine-visual 的新一代即梦模型只接受 URL，DreamO/SeedEditV3 优先 URL）
+// 跳过 base64 转换，避免参考图被这些模型静默丢弃。
 func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint, imageURL, instruction string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
-	// 将图片转为 base64，确保图片提供商服务器能取到数据
-	imgInput := s.fetchImageAsBase64(ctx, imageURL)
-	if imgInput == "" {
-		imgInput = imageURL
-		logger.Errorf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
-	}
+	extFirst, extRefs, refURLFirst, refURLSlice := s.resolveReferenceImagesForProviders(ctx, tenantID, "", []string{imageURL})
 
 	entries := s.loadImageProviderEntries(tenantID)
 
@@ -621,7 +619,14 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 			return !ai.ImageEngineTraitsFor(e.ProviderName).SupportsReferenceImage
 		},
 		func(e ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest {
-			return &ai.ImageGenerateRequest{Model: modelName, Prompt: instruction, ReferenceImage: imgInput}
+			return &ai.ImageGenerateRequest{
+				Model:           modelName,
+				Prompt:          instruction,
+				ReferenceImage:  extFirst,
+				ReferenceImages: extRefs,
+				ReferenceURL:    refURLFirst,
+				ReferenceURLs:   refURLSlice,
+			}
 		})
 	if resp != nil {
 		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
