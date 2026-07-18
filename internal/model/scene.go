@@ -154,7 +154,6 @@ type SceneAnchor struct {
 
 	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
 	Description string `json:"description" gorm:"type:text"`
-	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔，含风格/光照等）
 	RefImageURL string `json:"ref_image_url" gorm:"size:1000"` // 首次生成后存参考图URL
 
 	// 扩展字段（一致性评分相关）

@@ -26,8 +26,7 @@ Chapter content:
 5. `name` (new anchors only): 2–8 Chinese characters, specific and memorable (e.g. 皇宫正殿, not 宫殿).
 6. `description` (new anchors only): Detailed Chinese visual description for AI image generation, **minimum 150 characters**. **重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
 {% include "fragments/scene_visual_dimensions.j2" %}
-7. `prompt_lock` (new anchors only): 6–10 个紧凑的英文视觉锁定词（逗号分隔，逗号后无空格），将逐字附加到该场景每个分镜的 prompt 末尾，强制跨镜头视觉一致性。聚焦最独特且稳定的视觉属性：色彩关键词、光照条件、氛围、材质/质感标签。示例：`"warm amber lighting,golden hour,muted earth tones,film grain,shallow depth of field,cinematic"` 或 `"cold blue moonlight,misty fog,dark stone,high contrast,dramatic shadows"`。禁止包含角色名、动作或剧情元素。
-8. Output ONLY a valid JSON object — no markdown fences, no explanation text.
+7. Output ONLY a valid JSON object — no markdown fences, no explanation text.
 
 # Output format
 
@@ -35,8 +34,7 @@ Chapter content:
   "new_anchors": [
     {
       "name": "皇宫正殿",
-      "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳（5500K冷白），穿过弥漫的香烟投下长长斜向光条。色彩调色板：主色调深朱红与金色、翡翠色地面、黑花岗岩点缀，禁止亮白色和粉色调。纵深层次：前景——抛光大理石地面反射烛光；中景——六对朱红巨柱夹持宽阔中央通道；背景——七级台阶御座消隐于半明半暗中。动态特性：熏炉白烟袅袅向上漂移，铁质枝形灯架上烛焰轻微摇曳。氛围：至高皇权与暗藏杀机，烟雾弥漫中窗口光柱内有悬浮尘埃粒子。",
-      "prompt_lock": "deep crimson and gold palette,jade-green marble floor,cold morning light 5500K,incense smoke,iron chandeliers,high contrast,cinematic,grand interior"
+      "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳（5500K冷白），穿过弥漫的香烟投下长长斜向光条。色彩调色板：主色调深朱红与金色、翡翠色地面、黑花岗岩点缀，禁止亮白色和粉色调。纵深层次：前景——抛光大理石地面反射烛光；中景——六对朱红巨柱夹持宽阔中央通道；背景——七级台阶御座消隐于半明半暗中。动态特性：熏炉白烟袅袅向上漂移，铁质枝形灯架上烛焰轻微摇曳。氛围：至高皇权与暗藏杀机，烟雾弥漫中窗口光柱内有悬浮尘埃粒子。"
     }
   ],
   "appearing_anchors": ["古林小径", "村口广场"]

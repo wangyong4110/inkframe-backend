@@ -284,10 +284,6 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	if anchor.Name != "" && fragment != "" {
 		fragment = fmt.Sprintf("[场景：%s] %s", anchor.Name, fragment)
 	}
-	// 追加 PromptLock 锁定关键词（风格/色调/光线等约束）
-	if anchor.PromptLock != "" {
-		fragment = fragment + ", " + anchor.PromptLock
-	}
 	return fragment, anchor.RefImageURL, anchorName, nil
 }
 
@@ -305,7 +301,6 @@ func (s *SceneAnchorService) SetShotAnchor(shotID uint, anchorID *uint) error {
 type extractedAnchor struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	PromptLock  string `json:"prompt_lock"` // 视觉锁定词，逗号分隔，注入每个分镜 prompt
 }
 
 // extractAnchorResponse 是新版 LLM 返回格式
@@ -448,7 +443,6 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			NovelID:     novelID,
 			Name:        e.Name,
 			Description: e.Description,
-			PromptLock:  e.PromptLock,
 		}
 		if err := s.repo.Create(anchor); err != nil {
 			logger.Errorf("[SceneAnchorService] ExtractFromChapter: create anchor %q: %v", e.Name, err)
@@ -627,7 +621,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		}
 	}
 
-	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(description), description, anchor.PromptLock)
+	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q", id, len(description), description)
 	nameQuoted, titleNote := "", ""
 	if anchor.Name != "" {
 		nameQuoted = fmt.Sprintf("\"%s\"", anchor.Name)
@@ -636,7 +630,6 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	formatRules := fmt.Sprintf(sceneRefFormatRules, nameQuoted, titleNote)
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
 		"Description": description,
-		"PromptLock":  anchor.PromptLock,
 		"FormatRules": formatRules,
 	})
 	if tplErr != nil {
