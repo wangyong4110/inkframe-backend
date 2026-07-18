@@ -350,14 +350,12 @@ func seedImageRefSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 		fmt.Sprintf("http://localhost:%d/api/v1/tools/image-ref-search", port))
 }
 
-func seedColorPaletteMcpTool(db *gorm.DB, cfg *config.Config) {
-	port := cfg.Server.Port
-	if port == 0 {
-		port = 8080
+// removeRetiredMcpTool 清理已下架的系统内置 MCP 工具记录（软删除），避免残留一个
+// 指向不存在接口的失效工具。幂等：工具已不存在或已被删除时是 no-op。
+func removeRetiredMcpTool(db *gorm.DB, name string) {
+	if err := db.Where("name = ?", name).Delete(&model.McpTool{}).Error; err != nil {
+		logger.Errorf("[Seed] retired MCP tool %q cleanup failed: %v", name, err)
 	}
-	seedMcpTool(db, "color_palette", "场景配色方案",
-		"根据情绪/场景类型返回配色方案，为视频分镜图像生成提供一致的视觉色调",
-		fmt.Sprintf("http://localhost:%d/api/v1/tools/color-palette", port))
 }
 
 func seedKnowledgeSearchMcpTool(db *gorm.DB, cfg *config.Config) {

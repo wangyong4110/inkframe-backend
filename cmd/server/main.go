@@ -110,7 +110,7 @@ func main() {
 	seedWikiSearchMcpTool(db, cfg)
 	seedStoryPatternMcpTool(db, cfg)
 	seedImageRefSearchMcpTool(db, cfg)
-	seedColorPaletteMcpTool(db, cfg)
+	removeRetiredMcpTool(db, "color_palette")
 	seedKnowledgeSearchMcpTool(db, cfg)
 	seedCharacterLookupMcpTool(db, cfg)
 	seedPromptEnhanceMcpTool(db, cfg)
@@ -255,7 +255,6 @@ func main() {
 		WikiSearchHandler:      handlers.WikiSearchHandler,
 		StoryPatternHandler:    handlers.StoryPatternHandler,
 		ImageRefSearchHandler:  handlers.ImageRefSearchHandler,
-		ColorPaletteHandler:    handlers.ColorPaletteHandler,
 		NotificationHandler:    handlers.NotificationHandler,
 		KnowledgeHandler:       handlers.KnowledgeHandler,
 		KnowledgeToolHandler:   handlers.KnowledgeToolHandler,

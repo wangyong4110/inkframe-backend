@@ -51,7 +51,6 @@ type Config struct {
 	WikiSearchHandler      *handler.WikiSearchHandler
 	StoryPatternHandler    *handler.StoryPatternHandler
 	ImageRefSearchHandler  *handler.ImageRefSearchHandler
-	ColorPaletteHandler    *handler.ColorPaletteHandler
 	NotificationHandler    *handler.NotificationHandler
 	KnowledgeHandler       *handler.KnowledgeHandler
 	KnowledgeToolHandler   *handler.KnowledgeToolHandler
@@ -815,10 +814,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		}
 		if cfg.ImageRefSearchHandler != nil {
 			toolsGroup.POST("/image-ref-search", cfg.ImageRefSearchHandler.Search)
-		}
-		if cfg.ColorPaletteHandler != nil {
-			toolsGroup.POST("/color-palette", cfg.ColorPaletteHandler.Get)
-			toolsGroup.GET("/color-palette/list", cfg.ColorPaletteHandler.ListAll)
 		}
 		if cfg.KnowledgeToolHandler != nil {
 			toolsGroup.POST("/knowledge-search", cfg.KnowledgeToolHandler.Search)

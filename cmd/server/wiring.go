@@ -797,7 +797,6 @@ type Handlers struct {
 	WikiSearchHandler      *handler.WikiSearchHandler
 	StoryPatternHandler    *handler.StoryPatternHandler
 	ImageRefSearchHandler  *handler.ImageRefSearchHandler
-	ColorPaletteHandler    *handler.ColorPaletteHandler
 	NotificationHandler    *handler.NotificationHandler
 	KnowledgeHandler       *handler.KnowledgeHandler
 	KnowledgeToolHandler   *handler.KnowledgeToolHandler
@@ -921,7 +920,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				getEnv("PIXABAY_API_KEY", ""),
 			),
 		),
-		ColorPaletteHandler:  handler.NewColorPaletteHandler(service.NewColorPaletteService()),
 		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
 		KnowledgeHandler:     handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
 		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),

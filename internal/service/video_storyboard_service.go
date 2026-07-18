@@ -2310,56 +2310,6 @@ func qualityTierImageParams(tier string) (width, steps int) {
 	}
 }
 
-// imageAspectRatioToSize 根据宽高比和质量档位计算 "WxH" 图片尺寸。
-// base 为较长边像素值，按 8 取整以兼容大多数图生图 API 的对齐要求。
-// 同时保证总像素数不低于 seedreamMinPixels（921600 = 960×960），满足 Seedream 4.0 基础要求。
-// Seedream 5.0 更高的像素下限（3686400）由 doubao.go 的 seedreamEnforceMinSize 按模型版本动态处理。
-const seedreamMinPixels = 921600
-
-// volcengineMaxPixels 即梦AI（Volcengine视觉）通用文生图模型（high_aes_general_v30l 等 req_key）的
-// 分辨率上限为"必须严格小于 2048×2048"；超出会被网关直接拒绝（gateway_code=21000），需要在算尺寸时
-// 就裁掉，而不是等 API 报错后才发现（"master" 档位 base=2560，配合 1:1 或未知宽高比会算出 2560×2560，
-// 超限）。这里用 2040×2040 而非精确的 2048×2048 作为目标上限，留出取整余量，避免等比缩放后刚好卡在
-// 2048×2048 这个边界值上（"严格小于"意味着恰好相等也会被拒绝）。
-const volcengineMaxPixels = 2040 * 2040
-
-func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
-	base, _ := qualityTierImageParams(qualityTier)
-	if base == 0 {
-		base = 1024
-	}
-	r8 := func(n int) int { return (n + 4) / 8 * 8 }
-	floor8 := func(n int) int { return n / 8 * 8 }
-	var w, h int
-	switch aspectRatio {
-	case "16:9":
-		w, h = base, r8(base*9/16)
-	case "9:16":
-		w, h = r8(base*9/16), base
-	case "4:3":
-		w, h = base, r8(base*3/4)
-	case "3:4":
-		w, h = r8(base*3/4), base
-	case "21:9":
-		w, h = base, r8(base*9/21)
-	default: // 1:1 or unknown
-		w, h = base, base
-	}
-	// Enforce Seedream minimum pixel count by scaling up proportionally.
-	if w*h < seedreamMinPixels {
-		scale := math.Sqrt(float64(seedreamMinPixels) / float64(w*h))
-		w = r8(int(math.Ceil(float64(w) * scale)))
-		h = r8(int(math.Ceil(float64(h) * scale)))
-	}
-	// Enforce Volcengine max pixel count by scaling down proportionally (floor to stay under the cap).
-	if w*h > volcengineMaxPixels {
-		scale := math.Sqrt(float64(volcengineMaxPixels) / float64(w*h))
-		w = floor8(int(float64(w) * scale))
-		h = floor8(int(float64(h) * scale))
-	}
-	return fmt.Sprintf("%dx%d", w, h)
-}
-
 // validCameraType 验证摄像机类型，无效时返回默认值 static
 func validCameraType(t string) string {
 	valid := map[string]bool{

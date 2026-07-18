@@ -427,7 +427,6 @@ var SystemFeatures = []SystemFeature{
 	{Key: "knowledge_search", Name: "知识库检索",   Description: "检索本小说已积累的剧情知识",           Category: "chapter"},
 	{Key: "character_lookup", Name: "角色档案",     Description: "角色一致性日志增强",                  Category: "chapter"},
 	{Key: "image_ref_search", Name: "参考图搜索",   Description: "图片生成参考图查询",                  Category: "image"},
-	{Key: "color_palette",    Name: "配色方案",     Description: "图片风格配色参考",                    Category: "image"},
 	{Key: "prompt_enhance",   Name: "Prompt 增强", Description: "图片生成 prompt 优化",               Category: "image"},
 }
 
