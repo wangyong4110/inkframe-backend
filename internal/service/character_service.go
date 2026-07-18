@@ -2106,9 +2106,9 @@ type GeneratedCharacterSheet struct {
 // 右侧三格全身视图（正面/四分之三侧面/背面），顶部由 AI 直接生成名称标牌。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, referenceImage, provider string) (*GeneratedCharacterSheet, error) {
-	aiRef := referenceImage
-	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
-		aiRef = ""
+	aiRef := ""
+	if strings.HasPrefix(referenceImage, "http://") || strings.HasPrefix(referenceImage, "https://") {
+		aiRef = referenceImage
 	}
 
 	// 人形/动物角色的版式+规则文案见 characterSheetFormatHumanoid / characterSheetFormatAnimal 常量。
@@ -2116,28 +2116,22 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	if isAnimalCharacter(appearance) {
 		format = characterSheetFormatAnimal
 	}
-	condensedFace := condenseVisualPrompt(appearance, 40)
-	layoutDetails := fmt.Sprintf(format, condensedFace, name)
+	layoutDetails := fmt.Sprintf(format, condenseVisualPrompt(appearance, 40), name)
 
-	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）。
-	// appearance 此处已是完整外观描述（含服装/鞋履/配饰），由 GenerateLookVisualPrompt
-	// 与面部提示词同一次 AI 调用独立产出，不需要再从中提取/剥离任何内容。
-	condensedAppearance := condenseVisualPrompt(appearance, 80)
+	// 名称标牌由 AI 直接在图中生成，prompt 固定为「外观描述（截断至80词，跨格一致性的唯一文字锚点）+ 版式规则」。
+	prompt := condenseVisualPrompt(appearance, 80) + "，" + layoutDetails
 
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
-	// 名称标牌由 AI 直接在图中生成（见 layoutDetails 规则），不再由程序事后拼接；
-	// prompt 内容固定为「外观描述 + 版式规则」，无需负向提示词，故不再走模板引擎。
-	prompt := condensedAppearance + "，" + layoutDetails
+	var refs []string
+	if aiRef != "" {
+		refs = []string{aiRef}
+	}
 
 	// 一致性权重设为 0.4（低权重）：合图需要 prompt 主导布局结构，
 	// DreamO（weight>=0.7）以参考图为主会压制多面板布局 prompt 导致所有格都生成正面图。
 	// 0.4 → selectImageModel 选 SeedEditV3（volcengine-visual 路径），prompt 主导效果更好。
 	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetCanvasHeight)
-	refs := []string{}
-	if aiRef != "" {
-		refs = []string{aiRef}
-	}
 	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, "", size, 0, 0.4)
 	if err != nil {
 		return nil, err
