@@ -147,7 +147,6 @@ func (s *AIService) tryImageProviders(
 	ctx context.Context, tenantID uint, entries []ai.ImageProviderEntry, refCount int, style string,
 	skip func(ai.ImageProviderEntry) bool,
 	buildReq func(entry ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest,
-	consistencyWeight ...float64,
 ) (resp *ai.ImageResponse, skipped []string, lastErr error) {
 	for _, e := range entries {
 		if skip != nil && skip(e) {
@@ -159,7 +158,7 @@ func (s *AIService) tryImageProviders(
 			lastErr = err
 			continue
 		}
-		modelName := selectImageModel(e, refCount, style, consistencyWeight...)
+		modelName := selectImageModel(e, refCount, style)
 		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if acquireErr != nil {
 			lastErr = acquireErr
@@ -183,19 +182,15 @@ func (s *AIService) tryImageProviders(
 // selectImageModel returns the model to use for the given entry, dispatching
 // to the provider's own model-selection logic (registered via
 // ai.RegisterImageEngineTraits) when one exists; otherwise it keeps
-// entry.Model unchanged. consistencyWeight defaults to 1.0 when unset or <= 0.
+// entry.Model unchanged.
 //
 // referenceImageCount must be the ACTUAL number of reference images supplied,
 // not just a presence flag — a single reference image and multiple reference
 // images (e.g. character + separate scene image) often need different model
 // variants (see ai.ImageEngineTraits.SelectModel's doc comment).
-func selectImageModel(entry ai.ImageProviderEntry, referenceImageCount int, style string, consistencyWeight ...float64) string {
-	weight := 1.0
-	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
-		weight = consistencyWeight[0]
-	}
+func selectImageModel(entry ai.ImageProviderEntry, referenceImageCount int, style string) string {
 	if sel := ai.ImageEngineTraitsFor(entry.ProviderName).SelectModel; sel != nil {
-		return sel(entry, referenceImageCount, style, weight)
+		return sel(entry, referenceImageCount, style)
 	}
 	return entry.Model
 }
@@ -224,15 +219,12 @@ func klingResolutionExtra(providerName, size string) map[string]interface{} {
 // 逐行重复的三段式逻辑（指定 provider / DB 自动遍历 / 静态列表兜底），只是参考图数量不同。
 // style: 图片风格（"realistic"/"anime"/"ink_painting" 等），影响 Volcengine 模型选择。
 // 空字符串表示使用提供者默认模型。
-// consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
-//
-//	≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt, sizeOverride string, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt, sizeOverride string) (string, error) {
 	var refs []string
 	if referenceImage != "" {
 		refs = []string{referenceImage}
 	}
-	return s.GenerateCharacterThreeViewMulti(ctx, tenantID, providerName, prompt, refs, style, negativePrompt, sizeOverride, 0, consistencyWeight...)
+	return s.GenerateCharacterThreeViewMulti(ctx, tenantID, providerName, prompt, refs, style, negativePrompt, sizeOverride, 0)
 }
 
 // resolveReferenceImagesForProviders 下载参考图并按需转换为 base64。
@@ -381,7 +373,7 @@ func (s *AIService) resolveNamedImageProvider(tenantID uint, providerName string
 // referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
 // size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
 // 若 referenceImages 为空，退化为纯文本生成。
-func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -396,12 +388,6 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		}
 	}
 
-	weight := 1.0
-	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
-		weight = consistencyWeight[0]
-	}
-	cfgScale := 1.0 + weight*9.0
-
 	extFirst, extRefs, refURLFirst, refURLSlice := s.resolveReferenceImagesForProviders(ctx, tenantID, providerName, referenceImages)
 
 	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
@@ -415,18 +401,16 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		// 仅当所有参考图均无可公开访问的 URL（纯 base64 来源）时，才退回 binary_data_base64。
 
 		return &ai.ImageGenerateRequest{
-			Model:             model,
-			Prompt:            prompt,
-			NegativePrompt:    negativePrompt,
-			Size:              sz,
-			Seed:              seed,
-			ReferenceImage:    extFirst,
-			ReferenceImages:   extRefs,
-			ReferenceURL:      refURLFirst,
-			ReferenceURLs:     refURLSlice,
-			CFGScale:          cfgScale,
-			ConsistencyWeight: weight,
-			Extra:             klingResolutionExtra(provName, sz),
+			Model:           model,
+			Prompt:          prompt,
+			NegativePrompt:  negativePrompt,
+			Size:            sz,
+			Seed:            seed,
+			ReferenceImage:  extFirst,
+			ReferenceImages: extRefs,
+			ReferenceURL:    refURLFirst,
+			ReferenceURLs:   refURLSlice,
+			Extra:           klingResolutionExtra(provName, sz),
 		}
 	}
 
@@ -435,7 +419,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if err != nil {
 			return "", err
 		}
-		modelName := selectImageModel(*entry, len(referenceImages), style, weight)
+		modelName := selectImageModel(*entry, len(referenceImages), style)
 		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if err != nil {
 			return "", err
@@ -471,7 +455,6 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, modelName, len(referenceImages), len(extRefs), extRefTypes)
 			return buildReq(modelName, e.Size, e.ProviderName)
 		},
-		weight,
 	)
 	if err != nil {
 		return "", fmt.Errorf("no image provider available: %w", err)

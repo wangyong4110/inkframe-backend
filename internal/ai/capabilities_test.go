@@ -57,7 +57,7 @@ func TestImageEngineTraits_RegisterAndLookupRoundTrip(t *testing.T) {
 	traits := ImageEngineTraits{
 		Supports2KResolution:  true,
 		SupportsReferenceImage: true,
-		SelectModel: func(entry ImageProviderEntry, referenceImageCount int, style string, consistencyWeight float64) string {
+		SelectModel: func(entry ImageProviderEntry, referenceImageCount int, style string) string {
 			if referenceImageCount > 1 {
 				return "multi-ref-model"
 			}
@@ -74,10 +74,10 @@ func TestImageEngineTraits_RegisterAndLookupRoundTrip(t *testing.T) {
 		t.Fatal("expected SelectModel func to round-trip non-nil")
 	}
 	entry := ImageProviderEntry{ProviderName: "p", Model: "base-model"}
-	if m := got.SelectModel(entry, 2, "anime", 0.5); m != "multi-ref-model" {
+	if m := got.SelectModel(entry, 2, "anime"); m != "multi-ref-model" {
 		t.Fatalf("SelectModel with 2 refs = %q, want multi-ref-model", m)
 	}
-	if m := got.SelectModel(entry, 1, "anime", 0.5); m != "base-model" {
+	if m := got.SelectModel(entry, 1, "anime"); m != "base-model" {
 		t.Fatalf("SelectModel with 1 ref = %q, want base-model", m)
 	}
 }

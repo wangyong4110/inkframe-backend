@@ -13,7 +13,6 @@ type NovelVideoConfigData struct {
 	VideoResolution       string  `json:"video_resolution"`
 	VideoFPS              int     `json:"video_fps"`
 	VideoAspectRatio      string  `json:"video_aspect_ratio"`
-	CharConsistencyWeight float64 `json:"char_consistency_weight"`
 	NarrationVoice        string  `json:"narration_voice"`
 	SubtitleEnabled       bool    `json:"subtitle_enabled"`
 	SubtitlePosition      string  `json:"subtitle_position"`

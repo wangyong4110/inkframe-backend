@@ -376,7 +376,7 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	// ── Step 2: VideoConfig lives in a separate table; read-modify-write is
 	// acceptable here because video settings races are non-critical. ──────────
 	hasVideoFields := req.VideoType != "" || req.VideoResolution != "" || req.VideoFPS != nil ||
-		req.VideoAspectRatio != "" || req.CharConsistencyWeight != nil ||
+		req.VideoAspectRatio != "" ||
 		req.NarrationVoice != "" || req.SubtitleEnabled != nil || req.SubtitlePosition != "" ||
 		req.SubtitleFontSize != nil || req.SubtitleColor != "" || req.SubtitleBgStyle != "" ||
 		req.SubtitleFont != "" || req.ContrastLevel != nil ||
@@ -400,9 +400,6 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		}
 		if req.VideoAspectRatio != "" {
 			vc.Config.VideoAspectRatio = req.VideoAspectRatio
-		}
-		if req.CharConsistencyWeight != nil {
-			vc.Config.CharConsistencyWeight = *req.CharConsistencyWeight
 		}
 		if req.NarrationVoice != "" {
 			vc.Config.NarrationVoice = req.NarrationVoice

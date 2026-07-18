@@ -81,7 +81,7 @@ func (s *AIService) downloadImageBytes(ctx context.Context, imageURL string) ([]
 }
 
 // upscaleImageAI 使用 AI 图像生成模型（DreamO）在目标尺寸重新生成图片，保留原图视觉特征。
-// 将原图转为 base64 作为参考图，CFGScale=8 强化特征保持，dstW/dstH 指定输出分辨率。
+// 将原图转为 base64 作为参考图，dstW/dstH 指定输出分辨率。
 func (s *AIService) upscaleImageAI(ctx context.Context, tenantID, novelID uint, data []byte, origURL string, dstW, dstH int) (string, error) {
 	// 转 base64 传给 AI（绕过 OSS 访问限制）
 	b64 := base64.StdEncoding.EncodeToString(data)
@@ -92,8 +92,7 @@ func (s *AIService) upscaleImageAI(ctx context.Context, tenantID, novelID uint, 
 	const upscalePrompt = "masterpiece, best quality, ultra high resolution, sharp focus, fine details, perfect clarity, photorealistic"
 	sizeStr := fmt.Sprintf("%dx%d", dstW, dstH)
 
-	// CFGScale=8：高特征保持强度，让输出尽量忠于原图内容
-	newURL, err := s.GenerateCharacterThreeView(ctx, tenantID, "", upscalePrompt, b64, "", "", sizeStr, 8.0)
+	newURL, err := s.GenerateCharacterThreeView(ctx, tenantID, "", upscalePrompt, b64, "", "", sizeStr)
 	if err != nil {
 		return "", fmt.Errorf("upscale ai: generate: %w", err)
 	}

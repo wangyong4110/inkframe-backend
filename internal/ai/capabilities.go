@@ -70,9 +70,9 @@ type ImageEngineTraits struct {
 	SupportsReferenceImage bool
 
 	// SelectModel, if set, picks which model variant to use for a given
-	// entry/reference-image-count/style/consistency-weight combination. Providers
-	// without provider-specific model selection leave this nil, and callers
-	// keep entry.Model unchanged.
+	// entry/reference-image-count/style combination. Providers without
+	// provider-specific model selection leave this nil, and callers keep
+	// entry.Model unchanged.
 	//
 	// referenceImageCount is the number of reference images supplied (0 = none).
 	// It must be a count, not just a presence flag: a single reference image
@@ -80,7 +80,7 @@ type ImageEngineTraits struct {
 	// character + separate scene/location image) often need different model
 	// variants — a model tuned for single-portrait editing will silently drop
 	// every reference image past the first.
-	SelectModel func(entry ImageProviderEntry, referenceImageCount int, style string, consistencyWeight float64) string
+	SelectModel func(entry ImageProviderEntry, referenceImageCount int, style string) string
 }
 
 var imageEngineTraits = map[string]ImageEngineTraits{}

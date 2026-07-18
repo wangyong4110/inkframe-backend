@@ -714,12 +714,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	ctx := context.Background()
 
-	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比和角色一致性权重
+	// 获取视频的 ArtStyle、TenantID、质量档位和宽高比
 	// （提前到角色参考图截断逻辑之前，因为截断与否需要按 tenantID 判断实际生效的图片模型）
 	artStyle := ""
 	var tenantID uint
-	charConsistencyWeight := 0.85 // 较高一致性：DreamO scale≈8.65，优先保持角色面部特征清晰
-	qualityTier := "production"   // 默认质量档位（preview=768px 对视频参考帧质量不够）
+	qualityTier := "production" // 默认质量档位（preview=768px 对视频参考帧质量不够）
 	var imageAspectRatio string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.RenderConfig.ArtStyle
@@ -734,9 +733,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					tenantID = novel.TenantID
 				}
 				vc := novel.VideoConf()
-				if vc.CharConsistencyWeight > 0 {
-					charConsistencyWeight = vc.CharConsistencyWeight
-				}
 				// 项目设置的画面风格优先于视频级别的默认值
 				if novel.AIConfig.ImageStyle != "" {
 					artStyle = novel.AIConfig.ImageStyle
@@ -786,9 +782,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// 根据宽高比+质量档位计算实际图片尺寸（WxH），直接传给 API
 	imageSize := imageAspectRatioToSize(imageAspectRatio, qualityTier)
-	// 质量档位对应的 CFG scale（引导强度），无参考图时注入 Text2ImgV3 的 scale 参数
-	_, _, qualityCFG := qualityTierImageParams(qualityTier)
-	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s qualityCFG=%.1f", shot.ShotNo, qualityTier, imageAspectRatio, imageSize, qualityCFG)
+	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s", shot.ShotNo, qualityTier, imageAspectRatio, imageSize)
 
 	// 构建负向提示词：基础解剖/物理规律排除词 + 分镜 LLM 生成的镜头专项排除词
 	// 图像生成必须有负向提示词，否则极易出现变形肢体、违反物理规律、比例失调等问题
@@ -927,20 +921,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 见上方"参考图列表"注释。二次读取也同样跳过场景图，防止并发批次中后加进来。
 
 	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
-	// 无角色参考图时（Text2ImgV3 纯文生图）：用质量档位 CFG 替代 consistencyWeight，让文生图遵从 prompt；
-	// 有参考图时（DreamO）：consistencyWeight 控制 IP-Adapter 强度（0.75 → scale≈7.75）。
-	imageConsistencyWeight := charConsistencyWeight
-	if len(cappedPortraits) == 0 {
-		// 无角色参考图时（含仅有场景锚点/道具参考图的情况）：
-		// 场景/道具图不适合 DreamO 角色 IP-Adapter 嵌入，降级为文生图 CFG 权重（< 0.7 → SeedEditV3；无参考图 → Text2ImgV3）。
-		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）。
-		imageConsistencyWeight = (qualityCFG - 1.0) / 9.0
-	}
 	var sceneSeed int64
 	if shot.SceneAnchorID != nil {
 		sceneSeed = int64(*shot.SceneAnchorID) * 31337
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, sceneSeed, imageConsistencyWeight)
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, sceneSeed)
 	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
 		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
 		// 此类错误是确定性失败，重试相同参考图无意义。

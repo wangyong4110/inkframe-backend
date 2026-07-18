@@ -227,7 +227,6 @@ func (n *Novel) VideoConf() NovelVideoConfigData {
 		VideoResolution:       "1080p",
 		VideoFPS:              30,
 		VideoAspectRatio:      "16:9",
-		CharConsistencyWeight: 1.0,
 		SubtitleEnabled:       true,
 		SubtitlePosition:      "bottom",
 		SubtitleFontSize:      48,
@@ -295,7 +294,6 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 			"video_resolution":        vc.VideoResolution,
 			"video_fps":               vc.VideoFPS,
 			"video_aspect_ratio":      vc.VideoAspectRatio,
-			"char_consistency_weight": vc.CharConsistencyWeight,
 			"narration_voice":         vc.NarrationVoice,
 			"subtitle_enabled":        vc.SubtitleEnabled,
 			"subtitle_position":       vc.SubtitlePosition,
@@ -599,7 +597,6 @@ type UpdateNovelRequest struct {
 	VideoResolution       string   `json:"video_resolution"`
 	VideoFPS              *int     `json:"video_fps"`
 	VideoAspectRatio      string   `json:"video_aspect_ratio"`
-	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
 	NarrationVoice        string   `json:"narration_voice"`
 
 	// 字幕配置

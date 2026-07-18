@@ -2128,11 +2128,8 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		refs = []string{aiRef}
 	}
 
-	// 一致性权重设为 0.4（低权重）：合图需要 prompt 主导布局结构，
-	// DreamO（weight>=0.7）以参考图为主会压制多面板布局 prompt 导致所有格都生成正面图。
-	// 0.4 → selectImageModel 选 SeedEditV3（volcengine-visual 路径），prompt 主导效果更好。
 	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetCanvasHeight)
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, "", size, 0, 0.4)
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, "", size, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -682,12 +682,10 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 		}
 	}
 
-	// consistencyWeight=0.7 → GenerateCharacterThreeViewMulti 自动选用 DreamO（文生图+参考图）
-	// scale = weight * 10 = 7（中等参考强度，兼顾提示词创意与原图风格一致性）
 	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
 		ctx, tenantID, "", instruction,
 		[]string{anchor.RefImageURL},
-		imageStyle, "", "", 0, 0.7,
+		imageStyle, "", "", 0,
 	)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: AI generate failed anchorID=%d: %v", id, err)

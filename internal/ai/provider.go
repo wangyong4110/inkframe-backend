@@ -101,7 +101,6 @@ type ImageGenerateRequest struct {
 	ReferenceURL    string   `json:"reference_url,omitempty"`    // 单张参考图原始 HTTP URL（支持 URL 的接口优先使用）
 	ReferenceURLs   []string `json:"reference_urls,omitempty"`   // 多张参考图原始 HTTP URL
 	ControlNets     []ControlNet `json:"control_nets,omitempty"`
-	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
 	Extra           map[string]interface{} `json:"extra,omitempty"` // 提供者特定扩展参数
 
 	// Seedream 5.0/4.5/4.0 扩展参数

@@ -2287,26 +2287,26 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		motion, desc, atmos)
 }
 
-// qualityTierImageParams 返回图片生成质量档位对应的参数（宽度、步数、CFG scale）
-func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
+// qualityTierImageParams 返回图片生成质量档位对应的参数（宽度、步数）
+func qualityTierImageParams(tier string) (width, steps int) {
 	switch tier {
 	case "draft":
 		// 1280px 长边 → 16:9 = 1280×720，9:16 = 720×1280。
 		// 避免 seedreamMinPixels 强制上采样导致实际分辨率不可预测。
-		return 1280, 20, 6.0
+		return 1280, 20
 	case "preview":
-		return 1280, 25, 7.0
+		return 1280, 25
 	case "production":
 		// 1920px 长边 → 16:9 = 1920×1080，9:16 = 1080×1920，1:1 = 1920×1920。
 		// 与 generateKenBurnsPureGo/generateStillFrameClip 的输出分辨率一致，
 		// 避免静止帧 1.5× 上采样 + Ken Burns zoom 时最高 2.25× 上采样导致的画面模糊。
-		return 1920, 35, 7.5
+		return 1920, 35
 	case "master":
-		return 2560, 50, 8.0
+		return 2560, 50
 	case "ultra": // alias for master; reserved for future upscaling pipeline
-		return 2560, 50, 8.5
+		return 2560, 50
 	default:
-		return 1920, 30, 7.5
+		return 1920, 30
 	}
 }
 
@@ -2324,7 +2324,7 @@ const seedreamMinPixels = 921600
 const volcengineMaxPixels = 2040 * 2040
 
 func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
-	base, _, _ := qualityTierImageParams(qualityTier)
+	base, _ := qualityTierImageParams(qualityTier)
 	if base == 0 {
 		base = 1024
 	}
