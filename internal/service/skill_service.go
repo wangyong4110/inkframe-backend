@@ -281,7 +281,14 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 		return skill, nil // already generated, skip regeneration
 	}
 	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
-	imageURL, imgErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", "fantasy", "", "")
+	// 项目画面风格：优先使用小说设置的 image_style，未注入 novelRepo 或查询失败时才退回 "fantasy" 兜底。
+	imageStyle := "fantasy"
+	if s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(skill.NovelID); nErr == nil && novel.AIConfig.ImageStyle != "" {
+			imageStyle = novel.AIConfig.ImageStyle
+		}
+	}
+	imageURL, imgErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", imageStyle, "", "")
 	if imgErr != nil {
 		logger.Errorf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
 		// Continue without image — skill metadata is still updated

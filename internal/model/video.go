@@ -20,7 +20,6 @@ type NovelVideoConfigData struct {
 	SubtitleFontSize      int     `json:"subtitle_font_size"`
 	SubtitleColor         string  `json:"subtitle_color"`
 	SubtitleBgStyle       string  `json:"subtitle_bg_style"`
-	ColorGrade            string  `json:"color_grade"`
 	ContrastLevel         float64 `json:"contrast_level"`
 	Saturation            float64 `json:"saturation"`
 	FilmGrain             bool    `json:"film_grain"`
@@ -145,8 +144,6 @@ func (Video) TableName() string {
 // ShotCamDir 摄像机方向与风格配置（合并存储为 JSON）
 type ShotCamDir struct {
 	CameraType    string `json:"camera_type"`
-	CameraAngle   string `json:"camera_angle"`
-	ShotSize      string `json:"shot_size"`
 	EmotionalTone string `json:"emotional_tone"`
 	Transition    string `json:"transition"`
 	TransitionOut string `json:"transition_out"`
@@ -214,6 +211,9 @@ type StoryboardShot struct {
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
 
+	// 所属分场剧本；nil = 兼容旧的直接生成路径（未走剧本阶段）
+	ScreenplaySceneID *uint `json:"screenplay_scene_id,omitempty" gorm:"index"`
+
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 
@@ -245,8 +245,6 @@ func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 		Alias
 		// flatten CamDir
 		CameraType    string `json:"camera_type,omitempty"`
-		CameraAngle   string `json:"camera_angle,omitempty"`
-		ShotSize      string `json:"shot_size,omitempty"`
 		EmotionalTone string `json:"emotional_tone,omitempty"`
 		Transition    string `json:"transition,omitempty"`
 		TransitionOut string `json:"transition_out,omitempty"`
@@ -261,8 +259,6 @@ func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 	}{
 		Alias:          (Alias)(s),
 		CameraType:     s.CamDir.CameraType,
-		CameraAngle:    s.CamDir.CameraAngle,
-		ShotSize:       s.CamDir.ShotSize,
 		EmotionalTone:  s.CamDir.EmotionalTone,
 		Transition:     s.CamDir.Transition,
 		TransitionOut:  s.CamDir.TransitionOut,
@@ -439,7 +435,6 @@ type ShotInsertSuggestion struct {
 	Dialogue    string  `json:"dialogue,omitempty"` // 对白镜头：与 narration 互斥，同时出现时 dialogue 优先
 	Description string  `json:"description"`
 	Duration    float64 `json:"duration"`
-	ShotSize    string  `json:"shot_size,omitempty"`
 	CameraType  string  `json:"camera_type,omitempty"`
 	Reason      string  `json:"reason"` // 插入原因（引用章节文本依据）
 }

@@ -87,6 +87,19 @@ func (r *VideoRepository) List(novelID *uint, chapterID *uint, status string, te
 	return videos, total, nil
 }
 
+// ListAllByNovel 返回一部小说下的全部视频（不分页），供剧集列表等需要一次性拿到全量视频的聚合场景使用。
+func (r *VideoRepository) ListAllByNovel(novelID, tenantID uint) ([]*model.Video, error) {
+	query := r.db.Model(&model.Video{}).Where("novel_id = ?", novelID)
+	if tenantID > 0 {
+		query = query.Where("novel_id IN (SELECT id FROM ink_novel WHERE (tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL)", tenantID)
+	}
+	var videos []*model.Video
+	if err := query.Order("chapter_id ASC, created_at ASC").Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	return videos, nil
+}
+
 // Update 更新视频
 func (r *VideoRepository) Update(video *model.Video) error {
 	return r.db.Save(video).Error

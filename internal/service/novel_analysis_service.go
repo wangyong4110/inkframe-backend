@@ -543,7 +543,6 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 							"NovelTitle":       novelForChar.Title,
 							"Genre":            novelForChar.Meta.Genre,
 							"Summaries":        summariesText,
-							"PromptLanguage":   novelForChar.AIConfig.PromptLanguage,
 							"GenreVisualHints": genreVisualHints(novelForChar.Meta.Genre),
 						})
 						if pErr != nil {
@@ -618,7 +617,6 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 													CharacterID:  ec.ID,
 													NovelID:      ec.NovelID,
 													Label:        "默认形象",
-													ChapterFrom:  1,
 													VisualPrompt: filteredVP,
 												}
 												if cErr := s.lookRepo.Create(newLook); cErr != nil {
@@ -709,9 +707,6 @@ type extractMinorCharsResponse struct {
 
 type analysisItemJSON struct {
 	Name         string `json:"name"`
-	Category     string `json:"category"`
-	Appearance   string `json:"appearance"`
-	Description  string `json:"description"`
 	Location     string `json:"location"`
 	Owner        string `json:"owner"`
 	VisualPrompt string `json:"visual_prompt"`
@@ -883,7 +878,6 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		"NovelTitle":       novel.Title,
 		"Genre":            novel.Meta.Genre,
 		"Summaries":        summariesText,
-		"PromptLanguage":   novel.AIConfig.PromptLanguage,
 		"GenreVisualHints": genreVisualHints(novel.Meta.Genre),
 	})
 	if err != nil {
@@ -962,7 +956,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		// 自动推荐配音设置
 		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, role, voiceModels)
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
-		suggestedLang := suggestVoiceLanguage(novel.AIConfig.PromptLanguage)
+		suggestedLang := suggestVoiceLanguage()
 		char := &model.Character{
 			NovelID:     novel.ID,
 			UUID:        uuid.New().String(),
@@ -996,7 +990,6 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 				CharacterID:  char.ID,
 				NovelID:      char.NovelID,
 				Label:        "默认形象",
-				ChapterFrom:  1,
 				VisualPrompt: c.VisualPrompt,
 			}
 			if err := s.lookRepo.Create(defaultLook); err != nil {

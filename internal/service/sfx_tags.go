@@ -63,20 +63,6 @@ func guessSFXType(tag string) string {
 	return "action"
 }
 
-// shotSizeGuide 根据景别返回音效设计侧重说明。
-func shotSizeGuide(shotSize string) string {
-	switch shotSize {
-	case "extreme_close_up":
-		return "极近景/特写：只保留微观细节音（衣物摩擦、关节/肌肉收紧、细小触碰），环境音一律压到不可感知；动作音选 close-mic dry crisp"
-	case "close_up":
-		return "近景：近距离动作音为主，环境音降低 6–10dB（subtle/soft）；避免大空间混响"
-	case "wide":
-		return "远景/全景：环境底层音主导（outdoor/reverb），动作音必须选 distant 版本；不加细节音"
-	default: // medium
-		return "中景：动作音与环境底层音比例均衡（约 1:1），两者互不遮蔽频段"
-	}
-}
-
 // cameraMotionGuide 根据运镜类型返回额外音效提示。
 func cameraMotionGuide(cameraType string) string {
 	switch cameraType {

@@ -44,38 +44,29 @@
 【输出字段规范——严格遵守，违反规范将导致输出无法使用】
 【字数上限速查】description ≤50字 | narration ≤45字 | dialogue ≤35字 | sfx_tags.prompt 15-40字 | image_prompt/video_prompt ≥100字/词
 
+{% if VideoMode == "slideshow" %}
+【视频类型：图片解说——每个分镜只对应一张静态画面】
+- 本片最终只生成静态图片（+ 轻微 Ken Burns 缩放/平移），不生成 AI 视频，因此每个分镜内只能呈现一个动作/一个画面瞬间，禁止在同一分镜的 description / image_prompt 中描述连续的多个动作或镜头内切换——若原文内容包含多个连续动作，须拆成多个分镜，每个分镜各自定格在其中一个瞬间。
+- camera_type 以 static 为主即可（对应静态图 + 轻微推拉/平移的 Ken Burns 效果），不必满足下方"static 不超过 40%"的多样性要求；仅在画面确有明显纵深/横向张力时才选 push/pull/pan 等其他值。
+- transition_in / transition_out 只需描述图片间的淡入淡出/溶解关系（如"上一张画面溶解淡出，本画面淡入"），不要求逐帧运动状态的精确衔接（无需描述"最后一帧"的动作定格细节）。
+{% else %}
+【视频类型：视频动画——单个镜头可覆盖同一场景内的多个连续动作/运镜节拍】
+本片会为每个分镜生成一段连续 AI 视频，因此不必为场景中的每个细分动作都拆出新镜头：只要能在该镜头的时长与一次运镜内合理呈现，一个分镜的 description / image_prompt / video_prompt 可以覆盖同一场景内多个连贯的动作或情绪推进节拍。以下 camera_type / transition 规则照常适用。
+{% endif %}
 ▸ camera_type（运镜方式）——必须体现多样性，禁止全部使用 static
   可选值（选其中一个填入）：static | push | pull | pan | track | crane_up | crane_down | follow | arc | tilt | whip_pan | zoom
   含义：static=固定机位，push=推镜头(向前推进)，pull=拉镜头(向后拉远)，pan=摇镜头(水平旋转)，track=移镜头(横向平移)，crane_up=升镜头，crane_down=降镜头，follow=跟镜头(跟随主体)，arc=环绕镜头(围绕主体环绕)，tilt=俯仰镜头(垂直俯仰)，whip_pan=甩镜头(快速甩动)，zoom=变焦镜头(焦距变化)
-  分布建议：static 不超过全部分镜的 40%，动作场景用 push/follow/arc，对话场景用 pan/tilt，环境展示用 pull/track/crane_up
+  分布建议：{% if VideoMode == "slideshow" %}以上方【图片解说】分支的建议为准{% else %}static 不超过全部分镜的 40%，动作场景用 push/follow/arc，对话场景用 pan/tilt，环境展示用 pull/track/crane_up{% endif %}
 
-▸ camera_angle（摄像机角度）——选其中一个填入
-  可选值：eye_level | high | low | dutch | overhead | POV
-
-▸ shot_size（景别）——选其中一个填入
-  可选值：extreme_wide | wide | full | medium | close_up | extreme_close_up
-
-{% if IsEn %}
-▸ description（narrative summary — brief scene summary for human reference only, NOT used for image generation）
-  - Write a concise Chinese summary of the scene in ≤50 Chinese characters (汉字).
-  - Cover: who is present, what is happening, where, and the emotional tone. Do NOT describe technical details.
-  - Example: "镇中央鹅卵石广场，小红帽与镇民们道别，晨光柔和，氛围温馨。"（29字）
-
-{% else %}
 ▸ description（画面描述——叙事摘要，仅供人工参考，不用于AI生图）
   - 简明描述场景：地点 + 在场角色 + 正在发生的事 + 情绪氛围，不超过50字。
   - 不要描述技术参数、光线细节、材质细节，那些写在 image_prompt 里。
   - 示例："镇中央鹅卵石广场，小红帽与镇民们道别，晨光柔和，气氛温馨。"（29字）
 
-{% endif %}
 {% include "fragments/image_prompt_spec.j2" %}
 
 {% include "fragments/video_prompt_spec.j2" %}
-{% if IsImageEn %}
-▸ negative_prompt（负向提示词，English only，必填）
-{% else %}
 ▸ negative_prompt（负向提示词，必填）
-{% endif %}
   - 针对本镜头内容的具体缺陷排除词，而非通用固定词表
   - 基础结构：[画质类] + [与本镜头内容相悖的风格词] + [本镜头特有的规避点]
   - 画质类（必选）：blurry, low quality, jpeg artifacts, noise, grainy, overexposed, underexposed, watermark, text, logo, signature, floating objects, impossible physics
@@ -114,7 +105,7 @@
 ⚠️ 【语言强制规则——最高优先级，任何其他指令均不得覆盖此规则】
 - narration（旁白）：必须使用简体中文，严禁混入任何英文单词或其他外语，无论角色或场景设定如何。
 - dialogue（台词）：语言须与角色在【角色信息】中标注的"台词语言"保持一致；未标注则默认简体中文。
-- image_prompt / video_prompt / negative_prompt / description 字段才允许使用英文。
+- image_prompt / video_prompt / negative_prompt / description 字段须使用简体中文撰写；仅画质/风格提升词（如 masterpiece, best quality 等标准 Stable Diffusion 惯用词）允许使用英文。
 【旁白-画面对位原则】画面说环境/气氛，旁白说情感/时间/因果——严禁旁白重复画面已传达的内容：
   - ✅ 画面：古老庭院 → 旁白："三年前他也是这样进来的，只是那次，身边还有人。"（时间/情感维度）
   - ✅ 画面：夜深的房间 → 旁白："她数过三百六十个这样的夜晚，每一个都比上一个更难熬。"（人物内心）
@@ -239,10 +230,10 @@
 【⚠️ 全书开场——第一章第一镜专属强制规则，违反将导致整个输出被拒绝】
 这是《{{ NovelTitle }}》全书的第一个分镜。观众对这个世界一无所知，必须用前几个镜头完成"落地"，才能让后续情节有依托。
 
-① **第1镜必须是建立大景**：shot_size 必须为 `extreme_wide` 或 `wide`，严禁以 `medium` / `close_up` / `extreme_close_up` 开场。
+① **第1镜必须是建立大景**：image_prompt 须以远景/全景构图开场，展现地点全貌，严禁以中景/近景/特写构图开场。
 ② **第1镜严禁直接开场对白**：dialogue 必须为 `""`，角色未出现在观众视野前不能开口说话。
 ③ **第1镜 image_prompt 必须包含三要素**：地点全貌 + 时间/天色（晨/昏/夜/日正当中）+ 情绪底色（荒芜/繁华/危机/宁静等），让观众在3秒内完成视觉落地。
-④ **前3镜遵循景别漏斗**：extreme_wide/wide（建立环境）→ full/medium（人物入场）→ close_up（情绪落点）。不得在第1镜就给特写。
+④ **前3镜遵循构图漏斗**：远景/全景（建立环境）→ 中景（人物入场）→ 近景/特写（情绪落点）。不得在第1镜就给特写。
 ⑤ **第1镜 transition_in**：必须填写 `"黑场淡入，[具体场景名]全景缓缓浮现"`，不得留空或写其他内容。
 {% if WorldviewDesc %}
 
@@ -269,7 +260,7 @@
 【⚠️ 上一段末尾分镜——本段必须无缝衔接，违反将导致输出被拒绝】
 以下是上一段最后若干个分镜的完整状态。**本段第 1 镜必须在地点、情绪基调、人物动作状态上与最后一个分镜自然延续**，严禁任何叙事跳跃或内容重复。
 {% for ps in PrevShots %}
-  第{{ ps.ShotNo }}镜 [景别:{{ ps.ShotSize }} 运镜:{{ ps.CameraType }}{% if ps.EmotionalTone %} 情绪:{{ ps.EmotionalTone }}{% endif %}{% if ps.Location %} 地点:{{ ps.Location }}{% endif %}]
+  第{{ ps.ShotNo }}镜 [运镜:{{ ps.CameraType }}{% if ps.EmotionalTone %} 情绪:{{ ps.EmotionalTone }}{% endif %}{% if ps.Location %} 地点:{{ ps.Location }}{% endif %}]
   画面/旁白：{{ ps.NarrOrDesc }}{% if ps.Dialogue %}
   台词：{{ ps.Dialogue }}{% endif %}{% if ps.TransitionOut %}
   结尾状态(transition_out)：{{ ps.TransitionOut }}{% endif %}
@@ -313,7 +304,7 @@
 {% if Items %}
 【本章道具/道具】
 ⚠️ 规则：当某道具在画面中出现时，`items` 数组填写其精确名称，并指出持有者（holder）和位置（location）。未出现则填 `[]`。
-{% for item in Items %}- {{ item.Name }}{% if item.Owner %}（持有者：{{ item.Owner }}）{% endif %}{% if item.Location %}（位置：{{ item.Location }}）{% endif %}{% if item.Description %}：{{ item.Description }}{% endif %}
+{% for item in Items %}- {{ item.Name }}{% if item.Owner %}（持有者：{{ item.Owner }}）{% endif %}{% if item.Location %}（位置：{{ item.Location }}）{% endif %}
 {% endfor %}
 {% endif %}
 {% if PlotPoints %}
@@ -336,13 +327,11 @@
 字段要求：
 - narration：时间词本身，结尾加句号（如"翌日。"），不超过10字；dialogue=""
 - subtitle：""（不加画面文字——日出/日落画面已能自解释）
-- shot_size：extreme_wide
 - camera_type：static 或 pull
-- camera_angle：high 或 overhead
 - duration：2.0~3.0 秒
 - transition：dissolve
 - characters：[]
-- description/image_prompt/video_prompt：光线变化画面（日出橙红晨光/黄昏金红暮色/月升银白夜空），无角色
+- description/image_prompt/video_prompt：大远景+俯瞰或高角度构图，光线变化画面（日出橙红晨光/黄昏金红暮色/月升银白夜空），无角色
 - sfx_tags：完整 JSON 数组格式，例如 [{"tag":"birdsong","type":"ambient","prompt":"清晨第一缕鸟鸣，空旷山林中远近交错的啁啾声，清新宁静"}]；可选 tag：birdsong（日出）/ crickets_night（入夜）/ wind_night（子夜）/ wind_gentle（清风）
 
 ━━ 第三级：中跨度（数日~数月级）━━
@@ -351,13 +340,11 @@
 字段要求：
 - narration：时间词本身，结尾加句号（如"三日后。"），不超过10字；dialogue=""
 - subtitle：与 narration 完全相同的文字（如"三日后"，不加句号）——此字段将叠加在画面上显示
-- shot_size：extreme_wide
 - camera_type：static 或 pull
-- camera_angle：high 或 overhead
 - duration：3.0~4.0 秒
 - transition：dissolve
 - characters：[]
-- description/image_prompt/video_prompt：选择体现时间流逝的自然衰变意象：
+- description/image_prompt/video_prompt：大远景+俯瞰或高角度构图，选择体现时间流逝的自然衰变意象：
   ▸ 悲剧/压抑基调 → 花朵凋谢/树叶枯落/青苔爬墙/积尘加厚
   ▸ 励志/成长基调 → 新芽萌发/枝条繁茂/路面被踩出深痕
   ▸ 中性基调 → 季节交替（绿→黄→白→绿）/月亮盈亏/灯火从明到灭
@@ -370,13 +357,11 @@
 【镜头A】环境大景，承载时间词
 - narration：时间词本身，结尾加句号（如"三年后。"），不超过10字；dialogue=""
 - subtitle：时间词（如"三年后"）——叠加在画面上，让观众零歧义感知年份跨度
-- shot_size：extreme_wide
 - camera_type：pull 或 crane_up（升镜强化岁月感）
-- camera_angle：high 或 overhead
 - duration：3.0~5.0 秒
 - transition：dissolve
 - characters：[]
-- description/image_prompt/video_prompt：相同地点在年岁积累后的整体景观——强调物理变化（建筑风化/植被生长/路面磨损），情感基调决定意象选择：
+- description/image_prompt/video_prompt：大远景+俯瞰或高角度构图，相同地点在年岁积累后的整体景观——强调物理变化（建筑风化/植被生长/路面磨损），情感基调决定意象选择：
   ▸ 悲剧 → 荒草蔓延、屋顶坍塌、庭院空置
   ▸ 励志 → 同一地点焕然一新、植被茂盛、人迹增多
   ▸ 思念 → 物是人非，场景保存完好但空无一人
@@ -384,13 +369,11 @@
 【镜头B】时间痕迹特写，情感落点
 - narration：""；dialogue：""（纯视觉，让画面说话）
 - subtitle：""
-- shot_size：close_up 或 extreme_close_up
 - camera_type：static 或 push（缓缓推近）
-- camera_angle：eye_level 或 low（仰视渺小物体，强化时间压迫感）
 - duration：3.0~5.0 秒
 - transition：dissolve（溶解进下一段正常叙事）
 - characters：[]
-- description/image_prompt/video_prompt：选择一件承载时间重量的具体物体特写：
+- description/image_prompt/video_prompt：近景/特写，平视或低角度（仰视渺小物体，强化时间压迫感），选择一件承载时间重量的具体物体特写：
   ▸ 青苔从无到厚厚一层覆盖石阶
   ▸ 同一把椅子：木材从新到开裂发灰
   ▸ 同一棵树：从细幼苗到粗壮树干，某处树皮上的刻字已被生长撑开变形
@@ -414,7 +397,7 @@
 7. 分镜是否均匀覆盖章节全文？将所有分镜按对应内容位置划分为前段/中段/后段，每段应占总数约1/3；若某段超过50%，须重新分配，补充对其他段落的覆盖。
 8. 旁白（narration）是否尽量取材自【章节内容】原文？对照原文逐镜检查，若旁白与原文无对应关系，且非必要补充性叙述，则替换为从原文提炼的句子。
 {% if IsFirstChapter and IsFirstSegment %}
-9. 第1镜 shot_size 是否为 extreme_wide 或 wide？dialogue 是否为 ""？image_prompt 是否包含地点全貌+时间/天色+情绪底色？transition_in 是否为黑场淡入？
+9. 第1镜 image_prompt 是否为远景/全景构图？dialogue 是否为 ""？image_prompt 是否包含地点全貌+时间/天色+情绪底色？transition_in 是否为黑场淡入？
 {% endif %}
 以上任何一项未通过，须先修正再输出。
 
@@ -503,89 +486,6 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
 
 纯对话/静态：留空数组 []
 
-{% if IsImageEn %}
-⚠️⚠️⚠️ 格式示例警告：以下 JSON 示例中所有人名（如 "Ling Yun"、"Bai Xue"）、对白、场景（石庭废墟、门洞、玉坠）均为【虚构占位内容】，与本次章节完全无关。你的输出中绝对不得出现这些名字或照搬这些场景——只参考字段名称和数据类型结构。你必须完全根据下方【章节内容】生成分镜。
-
-格式示例（以下仅展示2个分镜作为格式参考，实际须生成{{ ExpectedShots }}个）：
-[
-  {
-    "shot_no": 1,
-    "description": "Crumbling stone courtyard floor with irregular slate tiles — several cracked diagonally, a few displaced upward 3-5cm by encroaching roots, thin moss in shaded corners, fine dust in joints. Foreground-left: collapsed stone incense burner on its side, 60cm bowl half-buried in rubble, flaking bronze-green patina, three unlit incense stubs in ash. Center-foreground: 1.8m granite stele face-angled toward camera, inscription weathered near-illegible, base ringed with dried flower offerings, dead petals scattered on stone. Mid-ground: two stone columns flanking 3m-wide gateway — left intact, right sheared at 2m with jagged fracture, stone lintel one end resting on rubble. Background: dense pine forest canopy at 10m, warm amber shafts filtering through gaps, distant mountain ridge faint through golden haze. Warm upper-right sunlight 3000K, hard shadows of intact column stretching diagonally left across tiles, cool grey pooling in rubble zones. Fine dust motes suspended in light shafts. Medium shot, eye-level, 50mm f/4, foreground tiles sharp, forest background soft.",
-    "image_prompt": "{{ ImageStyleHint }}, medium shot, eye-level angle — GROUND LAYER: cracked grey flagstone courtyard floor, multiple tiles displaced 3-5cm upward by tree roots, thin moss film at shaded corners, dust accumulating in stone joints, scattered dried leaf fragments at foreground edges — FOREGROUND OBJECTS: left of center: collapsed stone incense burner lying on its side, 60cm bowl diameter half-buried in rubble, weathered bronze-green patina with large flaking sections, three unlit incense stubs protruding from accumulated grey ash at 30° angles; center: 1.8m granite stone stele standing upright, face angled 15° toward camera, diagonal hairline crack from upper-left to mid-face, base 40cm in earth, moss covering lower 30cm on both sides, dried flower offerings encircling the base in various decay states — MIDGROUND: two stone columns flanking a 3m-wide stone gateway, left column intact with carved lotus relief at capital, right column sheared cleanly at 2m height with jagged fracture edge, structural stone lintel partially collapsed with right end resting on rubble pile — BACKGROUND: dense ancient pine forest beginning 5m beyond gateway, canopy at 10m height, warm amber afternoon light filtering through canopy gaps as 4-5 scattered vertical shafts reaching ground level, distant mountain ridge barely visible through soft 25% golden haze at treeline — LIGHTING: warm directional sunlight from upper-right at 30° angle, 3000K amber cast, casting long hard shadow of intact column diagonally left-and-downward across stone tiles, deep cool blue-grey shadow pooling in collapsed rubble zone — ATMOSPHERE: fine dust motes suspended in each light shaft drifting slowly, thin ground-level haze at 10-15cm height in shadowed corners — desaturated amber-gold and grey palette — 50mm f/4, moderate depth-of-field, foreground flagstone sharp, pine background softly blurred — {{ StyleQualityTokens }}",
-    "video_prompt": "Smooth leftward pan at 12°/sec, horizon line held steady throughout; as camera pans, stone gateway progressively fills right portion of frame while incense burner foreground-left exits left edge — ATMOSPHERIC PARTICLES: fine dust motes suspended in each of the 4 vertical light shafts drift diagonally downward at 0.4cm/sec, each mote visible for 2-3 seconds in lit zone, overall density stable; ground-level haze in shadowed corners drifts imperceptibly leftward at 0.1cm/sec — FOLIAGE: pine branches background visible through gateway oscillate 5° at 0.3Hz from residual wind, recovering with 1s damped overshoot — STRUCTURAL: thin mortar dust trickles from right column fracture point in a 12cm stream at 3-5 second irregular intervals, each fall lasting 0.2s then ceasing; two small pebble fragments near rubble pile vibrate ±0.8mm — LIGHT AND SHADOW: amber torchlight intensity in gateway interior stable throughout; as pan advances, shadow of intact column sweeps slowly leftward across foreground tiles at 2cm/sec matching pan rate; dust motes in rightward light shaft enter frame at right edge and remain visible for full 2-3 second span before exiting left — LIGHTING DYNAMICS: ambient diffuse top-light dims ~8% over shot duration as afternoon advances, shadows imperceptibly deepening — emotional arc: opens on quiet desolation — empty stone courtyard holding its ancient silence — and closes as the gateway's darkness beyond dominates frame, deepening the weight of what lies beyond",
-    "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, modern clothes, western armor, gun, car, neon sign, sci-fi elements, floating objects, impossible physics, overexposed, harsh sunlight",
-    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}苔痕浸透了每一块石板，废墟用沉默记录着无人问津的岁月。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
-    "subtitle": "",
-    "camera_type": "pan",
-    "camera_angle": "eye_level",
-    "shot_size": "medium",
-    "duration": 5.0,
-    "location": "<已命名场景中的精确名称，或自然语言描述>",
-    "time_of_day": "afternoon",
-    "weather": "clear",
-    "lighting": "natural",
-    "characters": [],
-    "items": [],
-    "transition": "cut",
-    "transition_out": "Pan reaches leftward endpoint; stone gateway now fills right half of frame; incense burner has exited left edge; camera holds still; dust motes drifting in light shafts; no characters present",
-    "transition_in": "Opening from black fade-in, wide aerial drift descends slowly to reveal ruined courtyard from crane-high angle",
-    "sfx_tags": [{"tag":"forest_ambient","type":"ambient","prompt":"古旧石庭院四周松林中低沉连绵的森林环境音，透出一种荒废已久的寂静"},{"tag":"wind_gentle","type":"ambient","prompt":"穿过石门洞的一缕轻柔穿堂风，带有幽凉气息"},{"tag":"stone_door","type":"action","prompt":"沉重石门在废墟中发出低沉摩擦声，带有厚重的历史感"}],
-    "emotional_tone": "压抑"
-  },
-  {
-    "shot_no": 2,
-    "description": "Extreme close-up of cracked stone floor surface: a single grey flagstone tile with two intersecting diagonal fractures forming an X, fine white powder residue along crack edges, small pebble fragment resting in the deeper fracture groove. Left-of-center: a jade green pendant chain resting on the stone surface, one end disappearing into the deep fracture shadow. Foreground-right corner: three dried flower petals in various stages of decay — outermost completely brown and shriveled, innermost retaining faint red pigment. Underlit by diffuse cold blue ambient light from above-left at shallow angle, casting micro-shadows along each crack ridge. Extremely shallow depth-of-field — crack surface razor-sharp, stone surface beyond 5cm falling into soft focus.",
-    "image_prompt": "{{ ImageStyleHint }}, extreme close-up, overhead slight tilt angle — GROUND LAYER: single weathered grey flagstone tile filling 80% of frame, surface texture showing micro-erosion pitting every 3-5cm, two intersecting diagonal fractures crossing at frame center — horizontal fracture 0.8cm wide, vertical fracture 0.5cm wide — fine white powdered stone residue along all crack edges, crack interior shadow deep grey — FOREGROUND OBJECTS: resting in horizontal crack groove left-of-center: a jade pendant chain, individual links each 3mm, chain segment 8cm visible, cool green jade bead 1cm diameter at terminus, chain disappearing into crack shadow at right end; foreground-right corner: three dried flower petals overlapping, outermost 100% brown-shriveled and curled, middle 70% faded with tan edges, innermost retaining faint crimson pigment at center — MIDGROUND: stone tile edge at frame bottom showing 1cm thickness reveal, adjacent tile surface 30% visible showing similar erosion texture — BACKGROUND: blurred stone courtyard surface, 15-20% visible at frame top, soft grey-green out of focus — LIGHTING: cold diffuse ambient light from upper-left at 15° shallow angle, 6500K cool white, casting micro-shadows along each crack ridge 1-2mm height, highlight on jade pendant chain links creating specular point reflections, deep shadows in crack grooves — ATMOSPHERE: clear air within frame, no haze — cool grey and jade green palette, amber accent from dried petal pigment — 85-100mm f/1.8, extreme close-up, crack surface razor-sharp, stone beyond 5cm fully blurred — {{ StyleQualityTokens }}, macro photography",
-    "video_prompt": "Locked-off camera with subtle organic stabilization, imperceptible breathing drift of ±0.2px; ATMOSPHERIC: clear air, no particle motion — STRUCTURAL MICRO-DYNAMICS: fine powdered stone residue along horizontal crack ridge: three granules vibrate ±0.3mm from low-frequency distant rumble at 2-3 second intervals, one granule rolling 2mm rightward into deeper crack shadow during second interval; jade pendant chain on stone: entire chain segment rests motionless except for one link at chain midpoint which rotates 8° clockwise over 3 seconds from imperceptible air current, then settles back over 1.5s — FOLIAGE: no foliage in frame — LIGHT AND SHADOW: cold diffuse ambient light holds completely stable throughout; specular highlights on jade chain links remain fixed; crack groove shadows hold depth without change — LIGHTING DYNAMICS: no perceptible change over shot duration — emotional arc: opens on the intimacy of small, abandoned things — the chain resting in the crack, the dying petals — and holds that stillness until the scale of loss contained in these centimeters becomes suffocating",
-    "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, modern clothes, western armor, gun, car, neon sign, sci-fi elements, floating objects, overexposed, wide shot, landscape, crowd",
-    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
-    "subtitle": "",
-    "camera_type": "static",
-    "camera_angle": "overhead",
-    "shot_size": "extreme_close_up",
-    "duration": 4.0,
-    "location": "<已命名场景中的精确名称，或自然语言描述>",
-    "time_of_day": "afternoon",
-    "weather": "clear",
-    "lighting": "diffuse",
-    "characters": [],
-    "items": [{"name":"jade pendant","holder":"","location":"resting in horizontal crack groove left-of-center"}],
-    "transition": "cut",
-    "transition_out": "Locked-off extreme close-up holds; jade chain link completes its 8° rotation and settles; stone granule rests in crack shadow; frame holds in deep stillness",
-    "transition_in": "Continuing from the gateway pan's final hold, camera cuts abruptly downward to extreme close-up of cracked flagstone at ground level — no movement, the closeness itself is the transition",
-    "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"极近景石板缝隙间隐约可感的轻微气流，几近无声却带出空旷的孤寂感"},{"tag":"silence_deep","type":"emotion","prompt":"压倒一切的深沉静默，只余远处偶尔传来的微弱回音"}],
-    "emotional_tone": "悲伤"
-  },
-  {
-    "shot_no": 3,
-    "description": "Ling Yun stands before the stone gateway, right hand holding a sword at his side, gazing into the dark passage with a determined expression.",
-    "image_prompt": "{{ ImageStyleHint }}, medium shot, eye-level angle — GROUND LAYER: smooth flagstone paving before the gateway, narrow moss-filled joints between stones, a few small scattered pebble fragments at foreground-left — FOREGROUND OBJECTS: stone threshold beam at ground level, 15cm height, worn granite surface with light weathering along upper edge — MIDGROUND: stone gateway arch 3m wide and 4m tall, dark interior corridor receding beyond the threshold, faint interior wall texture visible at 2m depth, thin mist drifting outward from corridor interior — BACKGROUND: shadowed stone corridor interior, far end barely lit, wall surfaces showing moss patches and hairline cracks — LIGHTING: natural side-light from upper-left at 45°, 4500K neutral-warm, casting a hard-edged shadow of the right doorframe diagonally across the ground 1.5m rightward; recessed corridor interior in cool blue-grey shadow — ATMOSPHERE: low-density mist drifting outward from corridor mouth, thinning to invisible at 1.2m from threshold — CHARACTERS BLOCK: Ling Yun standing foreground-center, body facing camera with 15° rightward offset, right arm hanging naturally at side gripping sword hilt with blade tip pointing downward, left hand in loose fist at side, head tilted 10° upward directed at corridor interior, feet shoulder-width apart, posture upright and rigid, expression solemn and determined, brow slightly furrowed — COLOR PALETTE: stone grey, muted amber sunlight, cool shadow interior contrast — 50mm f/4, moderate depth-of-field, Ling Yun razor-sharp, corridor background softly readable — {{ StyleQualityTokens }}",
-    "video_prompt": "Continuing from the extreme close-up of cracked flagstone, camera tilts upward slowly over 0.8 seconds transitioning to eye-level, Ling Yun's figure rising into frame center — camera locks off with subtle organic micro-stabilization, imperceptible ±0.2px breathing drift — CHARACTER ACTIONS: Ling Yun stands still at frame center, right hand gripping sword at side unmoving; in the first 1.5 seconds, a single slow deep breath causes subtle chest expansion of ~5mm amplitude; in the final 1.5 seconds, Ling Yun's left hand fingers curl inward incrementally, knuckles tightening, tendons on back of hand becoming faintly visible — ATMOSPHERIC PARTICLES: low-density mist drifts outward from gateway corridor at 0.3cm/sec, expanding at ground level near threshold, density stable — LIGHTING: ambient natural side-light holds stable; Ling Yun left-side illuminated, right side and sword arm in soft shadow extending diagonally to ground — emotional arc: opens on Ling Yun's static gaze into the gateway — only the breath and the tightening hand betray the tension within — closes as he remains utterly still, the decision already made. SOUND: faint hollow wind resonance drifting from the stone corridor; low suspense undertone emerges imperceptibly in the final second",
-    "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, floating objects, impossible physics, overexposed, extra figures, blurred character",
-    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}门洞的冷气漫过脚背，他就这样站着，像是在等一个迟到了三年的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你在里面，我却找不到你。{% else %}{% endif %}",
-    "subtitle": "",
-    "camera_type": "static",
-    "camera_angle": "eye_level",
-    "shot_size": "medium",
-    "duration": 5.0,
-    "location": "<exact name from named scene list, or natural-language description>",
-    "time_of_day": "afternoon",
-    "weather": "clear",
-    "lighting": "natural",
-    "characters": [{"name":"Ling Yun","position":"foreground-center","pose":"upright, feet shoulder-width, spine straight","action":"right hand grips sword at side, left hand fingers curl inward slowly","expression":"solemn and determined, brow furrowed"}],
-    "items": [],
-    "transition": "dissolve",
-    "transition_out": "Locked-off camera holds; Ling Yun standing center, left hand grip fully tightened, gaze fixed on corridor — frame freezes in this moment of arrested motion",
-    "transition_in": "Continuing from extreme close-up of flagstone, camera tilts upward 0.8s until eye-level with Ling Yun entering frame center from above",
-    "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"从石门洞深处吹出的穿堂风，带有石廊独特的低沉共鸣"},{"tag":"suspense_low","type":"emotion","prompt":"低频悬疑底音在镜头末段极轻微涌现，传递角色内心的紧绷与决意"}],
-    "emotional_tone": "紧张"
-  }
-  ... （继续输出剩余 {{ ExpectedShotsMinus2 }} 个分镜，格式与上述完全相同）
-]
-{% else %}
 ⚠️⚠️⚠️ 格式示例警告：以下 JSON 示例中所有人名（如"凌云"、"白雪"）、对白（"三年了……"）、场景（石庭废墟、门洞、玉坠）均为【虚构占位内容】，与本次章节完全无关。你的输出中绝对不得出现这些名字或照搬这些场景——只参考字段名称和数据类型结构。你必须完全根据下方【章节内容】生成分镜。
 
 格式示例（以下仅展示2个分镜作为格式参考，实际须生成{{ ExpectedShots }}个）：
@@ -600,8 +500,6 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "pan",
-    "camera_angle": "eye_level",
-    "shot_size": "medium",
     "duration": 5.0,
     "location": "<已命名场景中的精确名称，或自然语言描述>",
     "time_of_day": "afternoon",
@@ -625,8 +523,6 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
-    "camera_angle": "overhead",
-    "shot_size": "extreme_close_up",
     "duration": 4.0,
     "location": "<已命名场景中的精确名称，或自然语言描述>",
     "time_of_day": "afternoon",
@@ -650,8 +546,6 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你在里面，我却找不到你。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
-    "camera_angle": "eye_level",
-    "shot_size": "medium",
     "duration": 5.0,
     "location": "<已命名场景中的精确名称，或自然语言描述>",
     "time_of_day": "afternoon",
@@ -667,7 +561,6 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
   }
   ... （继续输出剩余 {{ ExpectedShotsMinus2 }} 个分镜，格式与上述完全相同）
 ]
-{% endif %}
 {% if Content %}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -463,7 +463,7 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
 		} else {
 			updatedLook, err = h.characterService.CreateLook(uint(id), character.NovelID, &model.CreateCharacterLookRequest{
-				Label: "默认形象", SetAsDefault: true, ChapterFrom: 1,
+				Label: "默认形象", SetAsDefault: true,
 			})
 			if err == nil {
 				updatedLook, err = h.characterService.UpdateLook(updatedLook.ID, lookReq)
@@ -480,7 +480,7 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 }
 
 // UploadCharacterLookImage 上传角色形象图片到指定形象
-// POST /api/v1/characters/:id/looks/:look_id/upload?type=portrait|three_view
+// POST /api/v1/characters/:id/looks/:look_id/upload
 func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -499,14 +499,7 @@ func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	imgType := c.Query("type")
-	updateReq := &model.UpdateCharacterLookRequest{}
-	switch imgType {
-	case "three_view":
-		updateReq.ThreeViewSheet = &imgURL
-	default: // "portrait" or empty
-		updateReq.Portrait = &imgURL
-	}
+	updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imgURL}
 	look, err := h.characterService.UpdateLook(uint(lookID), updateReq)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to save look image")
@@ -1115,7 +1108,7 @@ func (h *CharacterHandler) DeleteCharacterLook(c *gin.Context) {
 	respondOK(c, gin.H{"message": "deleted"})
 }
 
-// GetActiveLook GET /characters/:id/looks/active?chapter_no=N
+// GetActiveLook GET /characters/:id/looks/active
 func (h *CharacterHandler) GetActiveLook(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -1126,8 +1119,7 @@ func (h *CharacterHandler) GetActiveLook(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	chapterNo, _ := strconv.Atoi(c.Query("chapter_no"))
-	look, err := h.characterService.GetActiveLook(uint(id), chapterNo)
+	look, err := h.characterService.GetDefaultLook(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -1231,9 +1223,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Type         string `json:"type"` // "three_view" | "portrait"
 		Provider     string `json:"provider"`
-		FacePrompt   string `json:"face_prompt"`   // 可选：编辑框中未保存的最新面部提示词，优先于数据库存值
 		VisualPrompt string `json:"visual_prompt"` // 可选：编辑框中未保存的最新图像提示词，优先于数据库存值
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1243,14 +1233,12 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLookImageGen
 	// 的执行函数在 cmd/server/task_resume.go，用 t.EntityID(=lookID) + char_id 重新查
-	// look/character 拿 style/charName/currentPortrait，反序列化 type/provider/face_prompt/
-	// visual_prompt 调用同一套 GeneratePortrait/GenerateThreeViewSheet；face_prompt/visual_prompt
-	// 非空时优先于 look 的数据库存值，为空则回退查库，兼容章节批量生成等无表单场景）。
+	// look/character 拿 style/charName，反序列化 provider/visual_prompt 调用
+	// GenerateThreeViewSheet；visual_prompt 非空时优先于 look 的数据库存值，为空则回退查库，
+	// 兼容章节批量生成等无表单场景）。
 	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID), map[string]interface{}{
-		"type":          req.Type,
 		"char_id":       id,
 		"provider":      req.Provider,
-		"face_prompt":   req.FacePrompt,
 		"visual_prompt": req.VisualPrompt,
 	})
 	if err != nil {
@@ -1260,52 +1248,3 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "形象图片生成任务已提交")
 }
 
-// GenerateChapterCharacterImages POST /api/v1/novels/:id/chapters/:chapter_no/characters/generate-images
-// 根据章节内容为选定角色生成形象图（三视图），先用 AI 生成章节外形补充说明再合并生成。
-// 异步任务，立即返回 task_id。
-func (h *CharacterHandler) GenerateChapterCharacterImages(c *gin.Context) {
-	novelID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
-	if err != nil {
-		respondBadRequest(c, "invalid chapter_no")
-		return
-	}
-
-	var req struct {
-		CharacterIDs []uint `json:"character_ids"`
-		Provider     string `json:"provider,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
-		respondBadRequest(c, err.Error())
-		return
-	}
-	if len(req.CharacterIDs) == 0 {
-		respondBadRequest(c, "character_ids is required")
-		return
-	}
-
-	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "chapter not found")
-		return
-	}
-
-	tenantID := getTenantID(c)
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCharImageGen
-	// 的执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 分支用 t.EntityID
-	// 重新查章节，反序列化下面存的 novel_id/character_ids/provider 调用同一个
-	// h.characterService.GenerateChapterImages）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCharImageGen, "章节角色形象生成", "chapter", chapter.ID, map[string]interface{}{
-		"novel_id":      novelID,
-		"character_ids": req.CharacterIDs,
-		"provider":      req.Provider,
-	})
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	respondAccepted(c, task.TaskID, "角色形象生成任务已提交")
-}

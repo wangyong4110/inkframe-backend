@@ -42,6 +42,7 @@ const (
 	TaskTypeChapterReviewBatch       = "chapter_review_batch"
 	TaskTypeStoryboardReview         = "storyboard_review"
 	TaskTypeStoryboardOptimize       = "storyboard_optimize"
+	TaskTypeStoryboardSceneRegen     = "storyboard_scene_regen" // 单场次分镜重新生成（与整视频 storyboard_gen 区分）
 	TaskTypeImport                   = "import"
 	TaskTypeNovelAnalysis            = "novel_analysis"
 	TaskTypeRewriteAnalysis          = "rewrite_analysis" // Phase 0+1: literary analysis + bible generation
@@ -52,6 +53,8 @@ const (
 	TaskTypeCharReanalyze            = "char_reanalyze"
 	TaskTypeChapterCharExtract       = "chapter_char_extract"
 	TaskTypeChapterSceneExtract      = "chapter_scene_extract"
+	TaskTypeChapterItemExtract       = "chapter_item_extract"
+	TaskTypeScreenplayGen            = "screenplay_gen"
 	TaskTypeNovelOutlineGen          = "novel_outline_gen"
 	TaskTypeCharImageGen             = "char_image_gen"
 	TaskTypeVoicePreview             = "voice_preview"
@@ -294,6 +297,12 @@ func (s *TaskService) CreateWithParams(tenantID uint, taskType, title, entityTyp
 	return task, nil
 }
 
+// GetLatestByTypeAndEntity 返回指定类型+实体最近一次创建的任务（不存在时返回 gorm.ErrRecordNotFound）。
+// 供调用方做"冷却期"判断，避免同一实体在短时间内被重复触发同类任务。
+func (s *TaskService) GetLatestByTypeAndEntity(taskType, entityType string, entityID uint) (*model.AsyncTask, error) {
+	return s.repo.GetLatestByTypeAndEntity(taskType, entityType, entityID)
+}
+
 // SetRunning transitions the task to running.
 func (s *TaskService) SetRunning(taskID string) error {
 	if err := s.repo.UpdateFields(taskID, map[string]interface{}{"status": "running"}); err != nil {
@@ -424,6 +433,8 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeThreeView:            "三视图",
 		TaskTypeCharGen:              "角色生成",
 		TaskTypeItemExtract:          "道具提取",
+		TaskTypeChapterItemExtract:   "道具提取",
+		TaskTypeScreenplayGen:        "剧本生成",
 		TaskTypePlotExtract:          "情节提取",
 		TaskTypeAssetGen:             "素材",
 		TaskTypeSceneAnchorExtract:   "场景提取",

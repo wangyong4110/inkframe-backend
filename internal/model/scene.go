@@ -153,17 +153,13 @@ type SceneAnchor struct {
 	NovelID uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;index;not null"`
 
 	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
-	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary
 	Description string `json:"description" gorm:"type:text"`
 	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔，含风格/光照等）
 	RefImageURL string `json:"ref_image_url" gorm:"size:1000"` // 首次生成后存参考图URL
 
 	// 扩展字段（一致性评分相关）
 	RefImageLockedAt *time.Time `json:"ref_image_locked_at,omitempty" gorm:"index"`
-	UsageCount       int        `json:"usage_count" gorm:"default:0"`
 	AvgConsScore     float64    `json:"avg_cons_score" gorm:"type:decimal(4,3);default:0"`
-	ParentAnchorID   *uint      `json:"parent_anchor_id,omitempty" gorm:"index"`
-	Variant          string     `json:"variant" gorm:"size:50"` // day/night/winter/battle
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -182,6 +178,42 @@ type ChapterSceneAnchor struct {
 }
 
 func (ChapterSceneAnchor) TableName() string { return "ink_chapter_scene_anchor" }
+
+// ScreenplayScene 分场剧本：一章拆分为多场，每场再拆分为多个分镜（StoryboardShot.ScreenplaySceneID）。
+// 分场依据：地点变化 / 时间跳跃 / POV 切换，而非按字数硬切。
+type ScreenplayScene struct {
+	ID      uint `json:"id" gorm:"primaryKey"`
+	ChapterID uint `json:"chapter_id" gorm:"index:idx_screenplay_scene_chapter_no,priority:1;not null"`
+	NovelID   uint `json:"novel_id" gorm:"index;not null"`
+
+	SceneNo int    `json:"scene_no" gorm:"index:idx_screenplay_scene_chapter_no,priority:2;not null"` // 本章内第几场，从1开始
+	Heading string `json:"heading" gorm:"size:255"`                                                   // slugline，如"内景·客厅·日"
+
+	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"` // 关联现有场景锚点，保证地点视觉一致性
+
+	Synopsis      string        `json:"synopsis" gorm:"type:text"`
+	CharacterIDs  JSONUintSlice `json:"character_ids" gorm:"type:json"`
+	EmotionalTone string        `json:"emotional_tone" gorm:"size:100"`
+
+	// 本场内的叙事节拍：纯文本，每行一条；对话行格式为"角色名：台词"，其余行为动作/描写
+	// （原为结构化 []ScreenplayBeat 数组，改为纯文本以匹配前端合并单文本框编辑的方式）
+	Beats string `json:"beats" gorm:"column:beats;type:text"`
+
+	EstimatedShotCount int `json:"estimated_shot_count" gorm:"default:0"` // 分镜生成时按场次镜头数规划，替代按章节字数估算
+
+	// 人工审校确认后锁定：重新生成分镜时跳过本场剧本内容的重新生成，只重跑分镜
+	Locked bool `json:"locked" gorm:"default:false"`
+
+	// 是否被人工编辑过（即使未锁定）：章节保存后的自动剧本刷新只重新生成从未被人工改过的
+	// 场次，一旦用户编辑过 heading/synopsis/beats 就标记为 true，永久跳过自动刷新
+	// （除非用户显式再次触发"重新生成剧本"）。
+	Edited bool `json:"edited" gorm:"default:false"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ScreenplayScene) TableName() string { return "ink_screenplay_scene" }
 
 // SceneConsistencyLog 场景一致性评分日志
 type SceneConsistencyLog struct {

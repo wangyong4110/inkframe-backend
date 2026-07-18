@@ -386,6 +386,16 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
+	// 项目画面风格：将风格库（ink_image_style_preset，见 image_style_preset_service.go）中
+	// 配置的风格提示词注入 prompt 最前面，作为所有图像生成调用的统一入口。
+	// 去重判断：调用方（如分镜图生成 generateShotReferenceImage）可能已自行注入过同一段风格词，
+	// 此处按内容包含判断跳过，避免重复占用 prompt 长度。
+	if style != "" {
+		if styleDesc := resolveStyleIllustrationDesc(style); styleDesc != "" && !strings.Contains(prompt, styleDesc) {
+			prompt = styleDesc + ", " + prompt
+		}
+	}
+
 	weight := 1.0
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]

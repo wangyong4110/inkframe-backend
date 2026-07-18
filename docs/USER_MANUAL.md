@@ -340,8 +340,7 @@ Content-Type: application/json
   "description": "一个普通少年在修仙世界的成长故事",
   "genre": "玄幻",
   "target_chapters": 100,
-  "target_word_count": 300000,
-  "prompt_language": "zh"    # zh（中文）| en（英文）
+  "target_word_count": 300000
 }
 ```
 
@@ -1411,17 +1410,7 @@ GET /health
 
 **说明**：系统已自动处理——配音时长超过画面时长时会截断，短于时则以画面时长为准。如遇同步问题，尝试重新生成配音（`force: true`）。
 
-### Q6：如何支持中英文双语创作
-
-在小说设置中将 `prompt_language` 设置为 `"en"`，系统会：
-- 角色描述（`Description`）输出为英文
-- 物品描述输出为英文  
-- 视觉 Prompt（`VisualPrompt`）保持英文（图片生成始终使用英文）
-- 分镜画面描述（`Description`）输出为英文
-
-中文大纲/章节正文不受影响。
-
-### Q7：异步任务长时间停留在 pending/running 状态
+### Q6：异步任务长时间停留在 pending/running 状态
 
 **诊断步骤：**
 ```bash
@@ -1437,7 +1426,7 @@ grep task_id app.log
 - 并发视频生成任务过多（受 `VideoConcurrency` 配置限制）
 - 服务重启后任务会自动恢复，一般无需手动干预
 
-### Q8：Qdrant 未部署时能否使用
+### Q7：Qdrant 未部署时能否使用
 
 可以。将 `vector_db.type` 设为 `""` 或不配置，系统会禁用向量搜索功能，`KnowledgeService` 中的语义搜索会自动降级为关键词搜索。其余功能不受影响。
 

@@ -28,8 +28,6 @@ func TestRenderStoryboardGeneratePrompt(t *testing.T) {
 		"Content":       "第一章的内容，主角踏上了冒险之旅。",
 		"NovelTitle":    "我的小说",
 		"ChapterNo":     1,
-		"IsEn":          false,
-		"IsImageEn":     false,
 	})
 	if err != nil {
 		t.Fatalf("render storyboard_generate: %v", err)

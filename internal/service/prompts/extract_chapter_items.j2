@@ -16,35 +16,22 @@
 2. **明确排除**：普通家居用品（门、锁、碗、桌椅、门栓等）、无名路人道具、纯环境摆设、完全不影响情节的一次性道具
 3. 不要重复已有道具列表中的道具
 4. 不超过8个；若本章确实无符合条件的道具，输出空数组 []
-5. category 只能是：weapon / treasure / tool / document / artifact / other
-{% if PromptLanguage == "en" %}
-6. appearance (English): visual description — material and texture, primary color, form and dimensions, surface details; used for image generation
-7. description (English): item function and significance in the story (1-2 sentences)
-{% else %}
-6. appearance：外观描述，包含材质与质感、主色调、形态尺寸、表面特征；此字段会用于图像生成
-7. description：道具在故事中的作用与意义（1-2句）
-{% endif %}
-8. visual_prompt：英文图像生成提示词，词数80-150词，且严格不超过700个字符（部分图像模型会直接拒绝过长的提示词），必须包含：
-   - 道具类型与名称（如 ancient iron scissors, magical jade pendant）
-   - 材质：精确描述（如 "forged from old iron, slightly rusted surface"）
-   - 颜色：主色调 + 光效（如 "dull grey-black with faint metallic sheen"）
-   - 形态：尺寸感与形状细节（如 "palm-sized, curved blades, ring handles"）
-   - 表面细节：纹路/雕花/磨损痕迹等
-   - 特殊视觉效果（如有）：发光/气场/元素效果
-   - 陈设背景：展示方式（如 "placed on dark stone surface, soft side lighting, dark background"）
-   - 风格标签：fantasy concept art / realistic illustration，以及质量词（masterpiece, ultra-detailed）
-9. 严格输出 JSON 数组，不含任何说明文字
+5. location：道具当前所在位置（如"主角腰间"）；owner：当前持有者（如角色名），无法判断则留空字符串
+6. visual_prompt：英文图像生成提示词，词数60-120词，且严格不超过400个字符（部分图像模型会直接拒绝过长的提示词），只覆盖以下 4 项核心内容，不要涉及其他内容：
+   - 类型与材质：道具类型/名称 + 精确材质描述（如 "ancient iron scissors, forged from old iron, slightly rusted surface"）
+   - 颜色：主色调 + 次色调（如 "dull grey-black with faint metallic sheen"）
+   - 形态与细节：尺寸感、形状、表面纹路/雕花/磨损痕迹/关键配件（如 "palm-sized, curved blades, ring handles"）
+   - 特殊效果（仅当道具设定含魔法/能量属性时才写）：发光/气场
+   不要包含陈设背景、风格/画风、质量/渲染标签——这些由生成流程另行注入
+7. 严格输出 JSON 数组，不含任何说明文字
 
 {% include "fragments/user_prompt.j2" %}
 # 输出格式（JSON 数组）
 [
   {
     "name": "道具名",
-    "category": "weapon",
-    "appearance": "一柄古朴的长剑，剑身刻有符文",
-    "description": "主角的传家宝剑，能斩断任何束缚，是本章突破境界的关键道具",
     "location": "主角腰间",
     "owner": "主角名",
-    "visual_prompt": "ancient cultivation longsword, forged from matte black cold iron with faint silver-grey grain visible at angles. Blade: straight double-edged, three feet long, slight taper toward tip. Surface: ancient rune engravings etched along both flats of the blade, runes emit a faint pale-blue cold luminescence. Guard: cast bronze crossguard shaped as spread dragon wings, single deep crimson ruby set in each dragon eye. Grip: dark charcoal silk cord over bone-white ray skin, slightly worn. Special effect: thin wisps of frost mist drifting along blade edge. Displayed upright on weathered dark stone pedestal, dramatic cold side lighting, deep void black background. Style: Chinese fantasy concept art, masterpiece, ultra-detailed, 8k, cinematic lighting"
+    "visual_prompt": "ancient cultivation longsword, forged from matte black cold iron with faint silver-grey grain. Midnight black blade with pale-blue rune glow. Straight double-edged blade, three feet long, ancient rune engravings along both flats, cast bronze crossguard shaped as spread dragon wings with a crimson ruby in each eye, dark charcoal silk-wrapped grip. Thin wisps of frost mist drifting along the blade edge."
   }
 ]

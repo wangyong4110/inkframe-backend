@@ -116,3 +116,57 @@ func (r *SceneConsistencyLogRepository) ListByAnchorID(anchorID uint) ([]*model.
 	err := r.db.Where("anchor_id = ?", anchorID).Order("created_at DESC").Find(&items).Error
 	return items, err
 }
+
+// ─── ScreenplaySceneRepository 分场剧本仓库 ──────────────────────────────────
+
+type ScreenplaySceneRepository struct{ db *gorm.DB }
+
+func NewScreenplaySceneRepository(db *gorm.DB) *ScreenplaySceneRepository {
+	return &ScreenplaySceneRepository{db: db}
+}
+
+func (r *ScreenplaySceneRepository) Create(s *model.ScreenplayScene) error {
+	return r.db.Create(s).Error
+}
+
+func (r *ScreenplaySceneRepository) GetByID(id uint) (*model.ScreenplayScene, error) {
+	var s model.ScreenplayScene
+	if err := r.db.First(&s, id).Error; err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// ListByChapter 按场次编号顺序返回一章的全部分场剧本。
+func (r *ScreenplaySceneRepository) ListByChapter(chapterID uint) ([]*model.ScreenplayScene, error) {
+	var items []*model.ScreenplayScene
+	err := r.db.Where("chapter_id = ?", chapterID).Order("scene_no ASC").Find(&items).Error
+	return items, err
+}
+
+// ListByNovel 返回一部小说下的全部分场剧本（按章节+场次顺序），单次查询，供剧集列表等
+// 需要展示多章节场次明细的场景使用，避免逐章调用 ListByChapter 造成 N+1。
+func (r *ScreenplaySceneRepository) ListByNovel(novelID uint) ([]*model.ScreenplayScene, error) {
+	var items []*model.ScreenplayScene
+	err := r.db.Where("novel_id = ?", novelID).Order("chapter_id ASC, scene_no ASC").Find(&items).Error
+	return items, err
+}
+
+func (r *ScreenplaySceneRepository) Update(s *model.ScreenplayScene) error {
+	return r.db.Save(s).Error
+}
+
+// UpdateFields 只更新指定字段，避免全量 Save 覆盖其他字段（如已生成的 Beats）。
+func (r *ScreenplaySceneRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.ScreenplayScene{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// DeleteByChapter 删除一章的全部分场剧本（重新生成剧本前清空旧数据，仅针对未锁定场次的调用方需自行过滤）。
+func (r *ScreenplaySceneRepository) DeleteByChapter(chapterID uint) error {
+	return r.db.Where("chapter_id = ?", chapterID).Delete(&model.ScreenplayScene{}).Error
+}
+
+func (r *ScreenplaySceneRepository) Delete(id uint) error {
+	return r.db.Delete(&model.ScreenplayScene{}, id).Error
+}
+

@@ -21,44 +21,78 @@ import (
 )
 
 type VideoService struct {
-	videoRepo          *repository.VideoRepository
-	storyboardRepo     *repository.StoryboardRepository
-	chapterRepo        *repository.ChapterRepository
-	characterRepo      *repository.CharacterRepository
-	novelRepo          *repository.NovelRepository
-	tenantRepo         *repository.TenantRepository
-	aiService          *AIService
-	videoProviders     map[string]ai.VideoProvider
-	consistencyService *CharacterConsistencyService
-	bgmService         *BGMService
-	bgmRepo            *repository.VideoBGMSegmentRepository
-	sfxService         *SFXService
-	storageSvc         storage.Service
-	sceneAnchorSvc           *SceneAnchorService
-	sceneConsistencySvc      *SceneConsistencyService
-	chapterCharacterRepo     *repository.ChapterCharacterRepository
-	plotPointRepo        *repository.PlotPointRepository
-	systemSettingRepo  *repository.SystemSettingRepository
-	segmentRepo        *repository.ShotVoiceSegmentRepository
+	videoRepo             *repository.VideoRepository
+	storyboardRepo        *repository.StoryboardRepository
+	chapterRepo           *repository.ChapterRepository
+	characterRepo         *repository.CharacterRepository
+	novelRepo             *repository.NovelRepository
+	tenantRepo            *repository.TenantRepository
+	aiService             *AIService
+	videoProviders        map[string]ai.VideoProvider
+	consistencyService    *CharacterConsistencyService
+	bgmService            *BGMService
+	bgmRepo               *repository.VideoBGMSegmentRepository
+	sfxService            *SFXService
+	storageSvc            storage.Service
+	sceneAnchorSvc        *SceneAnchorService
+	sceneConsistencySvc   *SceneConsistencyService
+	screenplaySvc         *ScreenplayService
+	chapterCharacterRepo  *repository.ChapterCharacterRepository
+	plotPointRepo         *repository.PlotPointRepository
+	segmentRepo           *repository.ShotVoiceSegmentRepository
 	reviewRecordRepo      *repository.ReviewRecordRepository
 	ignoredSuggestionRepo *repository.IgnoredReviewIssueRepository
 	lookRepo              *repository.CharacterLookRepository
 	itemRepo              *repository.ItemRepository
 	chapterItemRepo       *repository.ChapterItemRepository
 	worldviewRepo         *repository.WorldviewRepository
-	taskSvc            *TaskService
-	charListCache      sync.Map      // novelID → *charListEntry (short-lived cache for batch voice gen)
-	lookRefCache       sync.Map      // lookID → composite URL (portrait+three-view merged, batch-lifetime cache)
+	taskSvc               *TaskService
+	charListCache         sync.Map // novelID → *charListEntry (short-lived cache for batch voice gen)
 	// 广场社交
 	videoLikeRepo    *repository.VideoLikeRepository
 	videoCommentRepo *repository.VideoCommentRepository
-	viewDedupCache   sync.Map     // fallback in-process dedup when Redis unavailable
+	viewDedupCache   sync.Map      // fallback in-process dedup when Redis unavailable
 	cache            *redis.Client // optional: cross-instance view dedup
 	cleanupOnce      sync.Once
-	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
-	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
-	backendBaseURL        string       // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
-	dbMediaReader         storage.Service // DB-backed storage for reading legacy /api/v1/media/* assets
+	stopCh           chan struct{}               // closed by Shutdown() to stop background goroutines
+	activePoll       sync.Map                    // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
+	backendBaseURL   string                      // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
+	dbMediaReader    storage.Service             // DB-backed storage for reading legacy /api/v1/media/* assets
+	assetRepo        *repository.AssetRepository // 分镜生成历史（每次图片/视频重新生成前，把即将被替换的旧素材存一份）
+}
+
+// WithAssetRepo 注入素材库仓库，用于记录分镜每次生成的历史版本（可选依赖，未注入时不记录历史）。
+func (s *VideoService) WithAssetRepo(repo *repository.AssetRepository) *VideoService {
+	s.assetRepo = repo
+	return s
+}
+
+// snapshotShotAsset 在覆盖 shot.ImageURL/VideoURL 之前，把即将被替换掉的旧素材存入素材库
+// （ink_asset，SubType="shot"），作为该分镜的生成历史；oldURL 为空（首次生成，没有旧版本可存）
+// 时安全跳过。tenantID 为 0 时仍会记录（不影响单租户/未启用租户隔离的部署）。
+func (s *VideoService) snapshotShotAsset(shot *model.StoryboardShot, assetType, oldURL string, tenantID uint) {
+	if oldURL == "" || s.assetRepo == nil {
+		return
+	}
+	shotID := shot.ID
+	videoID := shot.VideoID
+	asset := &model.Asset{
+		Scope:    model.AssetScopePersonal,
+		TenantID: tenantID,
+		Type:     assetType,
+		SubType:  "shot",
+		Status:   "active",
+		MediaMeta: model.AssetMediaMeta{
+			StorageURL: oldURL,
+		},
+		QualityMeta: model.AssetQualityMeta{
+			ShotID:  &shotID,
+			VideoID: &videoID,
+		},
+	}
+	if err := s.assetRepo.Create(asset); err != nil {
+		logger.Errorf("[VideoService] snapshotShotAsset failed shotID=%d type=%s: %v", shot.ID, assetType, err)
+	}
 }
 
 // maxLocalClipConcurrency 限制 BatchGenerateShotClips 的本地 FFmpeg 并发数（CPU 密集型，与 API 并发无关）。
@@ -105,11 +139,6 @@ func (s *VideoService) GetNovelVideoConfig(novelID uint) *model.NovelVideoConfig
 	return novel.VideoConfig
 }
 
-func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
-	s.systemSettingRepo = r
-	return s
-}
-
 func (s *VideoService) WithLookRepo(r *repository.CharacterLookRepository) *VideoService {
 	s.lookRepo = r
 	return s
@@ -152,6 +181,13 @@ func (s *VideoService) WithTaskService(svc *TaskService) *VideoService {
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
 	s.sceneAnchorSvc = svc
+	return s
+}
+
+// WithScreenplayService 注入分场剧本服务：注入后 GenerateStoryboardCtx 逐场调用生成分镜
+// （方案B），未注入时保持原有的按章节文本分段+内存节拍表的生成方式。
+func (s *VideoService) WithScreenplayService(svc *ScreenplayService) *VideoService {
+	s.screenplaySvc = svc
 	return s
 }
 
@@ -347,8 +383,6 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest, 
 	return s.CreateVideoFromReq(novelID, req, callerTenantID)
 }
 
-
-
 func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRequest, callerTenantID uint) (*model.Video, error) {
 	// Treat chapter_id=0 as absent (frontend may send 0 instead of omitting the field)
 	chapterID := req.ChapterID
@@ -397,7 +431,13 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		video.RenderConfig.QualityTier = "preview"
 	}
 	if video.Mode == "" {
-		video.Mode = "slideshow"
+		// 未显式指定生成模式时，继承项目设置里的"视频类型"：
+		// narration（图片解说）→ slideshow；animation（视频动画，默认）→ video。
+		if novel.VideoConf().VideoType == "narration" {
+			video.Mode = "slideshow"
+		} else {
+			video.Mode = "video"
+		}
 	}
 	return video, s.videoRepo.Create(video)
 }
@@ -844,9 +884,14 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 		return "", provErr
 	}
 
-	// 构建生成请求
+	// 构建生成请求：项目画面风格（novel.AIConfig.ImageStyle 优先，降级 video.RenderConfig.ArtStyle）
+	// 注入到 prompt 最前面，与分镜级视频生成（GenerateShotVideo）保持一致。
+	videoPrompt := fmt.Sprintf("%s — cinematic, high quality", video.Title)
+	if artStyle := s.resolveArtStyle(video.ID); artStyle != "" {
+		videoPrompt = resolveVideoStylePrefix(artStyle) + videoPrompt
+	}
 	req := &ai.VideoGenerateRequest{
-		Prompt:      fmt.Sprintf("%s — cinematic, high quality", video.Title),
+		Prompt:      videoPrompt,
 		AspectRatio: video.RenderConfig.AspectRatio,
 		Duration:    defaultShotDurationSecs,
 	}
@@ -956,7 +1001,6 @@ func (s *VideoService) hasVideoProvider(tenantID uint) bool {
 
 // GetStoryboard 获取分镜列表
 
-
 // GenerateSingleShot 触发单个分镜生成（异步）
 
 func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...string) (*model.StoryboardShot, error) {
@@ -994,7 +1038,24 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	hasProvider := s.hasVideoProvider(tenantID)
 	logger.Printf("GenerateSingleShot: shot %d videoID=%d mode=%q tenantID=%d hasVideoProvider=%v effectiveProvider=%q aspectRatio=%s",
 		shotID, videoID, video.Mode, tenantID, hasProvider, effectiveProvider, aspectRatio)
-	// 有视频提供商时优先调用 AI 视频模型，无论 video.Mode 如何
+	// video.Mode == "slideshow" 是用户在项目设置里显式选择的"图片解说"类型，即使配置了视频
+	// provider 也必须遵循用户的选择，不能静默升级为 AI 视频——否则"视频类型"设置形同虚设。
+	if video.Mode == "slideshow" {
+		logger.Printf("GenerateSingleShot: shot %d → slideshow mode (explicit videoMode=%q)", shotID, video.Mode)
+		if genErr := s.GenerateSlideshowShotVideo(shot, aspectRatio); genErr != nil {
+			if latest, dbErr := s.storyboardRepo.GetByID(shotID); dbErr == nil && latest.Status == "generating" {
+				_ = s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{
+					"status":        "failed",
+					"error_message": genErr.Error(),
+				})
+				shot.Status = "failed"
+				shot.TaskMeta.ErrorMessage = genErr.Error()
+			}
+			return shot, genErr
+		}
+		return shot, nil
+	}
+	// video.Mode == "video"（或未指定）：有视频提供商时优先调用 AI 视频模型
 	if hasProvider {
 		logger.Printf("GenerateSingleShot: shot %d → AI video mode (provider=%q, videoMode=%q)", shotID, effectiveProvider, video.Mode)
 		genErr := s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)

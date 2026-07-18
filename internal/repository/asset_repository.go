@@ -46,6 +46,15 @@ func (r *AssetRepository) GetByID(id uint) (*model.Asset, error) {
 
 func (r *AssetRepository) Update(a *model.Asset) error { return r.db.Save(a).Error }
 
+// ListByShotID 返回某个分镜历史生成过的所有素材（图片/视频），按生成时间倒序（最新在前）。
+// shot_id 存在 QualityMeta JSON 里（asset_quality_meta 列），用 MySQL JSON_EXTRACT 查询。
+func (r *AssetRepository) ListByShotID(shotID uint) ([]*model.Asset, error) {
+	var assets []*model.Asset
+	err := r.db.Where("sub_type = ? AND JSON_EXTRACT(asset_quality_meta, '$.shot_id') = ?", "shot", shotID).
+		Order("created_at DESC").Find(&assets).Error
+	return assets, err
+}
+
 func (r *AssetRepository) UpdateFields(id uint, fields map[string]interface{}) error {
 	return r.db.Model(&model.Asset{}).Where("id = ?", id).Updates(fields).Error
 }

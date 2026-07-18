@@ -51,6 +51,7 @@ type Repositories struct {
 	SceneAnchorRepo            *repository.SceneAnchorRepository
 	ChapterSceneAnchorRepo     *repository.ChapterSceneAnchorRepository
 	SceneConsistencyLogRepo    *repository.SceneConsistencyLogRepository
+	ScreenplaySceneRepo        *repository.ScreenplaySceneRepository
 	SystemSettingRepo          *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
 	ReviewRecordRepo           *repository.ReviewRecordRepository
@@ -97,6 +98,7 @@ type Repositories struct {
 	SensitiveWordRepo       *repository.SensitiveWordRuleRepository
 	FeedbackRepo            *repository.FeedbackRepository
 	DramaTemplateRepo       *repository.DramaTemplateRepository
+	ImageStylePresetRepo    *repository.ImageStylePresetRepository
 }
 
 // initRepositories 初始化仓库层
@@ -132,6 +134,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SceneAnchorRepo:            repository.NewSceneAnchorRepository(db),
 		ChapterSceneAnchorRepo:     repository.NewChapterSceneAnchorRepository(db),
 		SceneConsistencyLogRepo:    repository.NewSceneConsistencyLogRepository(db),
+		ScreenplaySceneRepo:        repository.NewScreenplaySceneRepository(db),
 		SystemSettingRepo:          repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
 		ReviewRecordRepo:           repository.NewReviewRecordRepository(db),
@@ -178,6 +181,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SensitiveWordRepo:       repository.NewSensitiveWordRuleRepository(db),
 		FeedbackRepo:            repository.NewFeedbackRepository(db),
 		DramaTemplateRepo:       repository.NewDramaTemplateRepository(db),
+		ImageStylePresetRepo:    repository.NewImageStylePresetRepository(db),
 	}
 }
 
@@ -227,6 +231,7 @@ type Services struct {
 	ConflictArcService          *service.ConflictArcService
 	PacingService               *service.PacingService
 	SceneAnchorService          *service.SceneAnchorService
+	ScreenplayService           *service.ScreenplayService
 	SceneConsistencyService     *service.SceneConsistencyService
 	RewriteService              *service.RewriteService
 	PlatformPublishService      *service.PlatformPublishService
@@ -247,6 +252,8 @@ type Services struct {
 	// ── Drama Template ──
 	DramaTemplateService   *service.DramaTemplateService
 	NarrativeMemoryService *service.NarrativeMemoryService
+	// ── Image Style Preset ──
+	ImageStylePresetService *service.ImageStylePresetService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -284,6 +291,7 @@ type contentSvcs struct {
 	Item              *service.ItemService
 	Skill             *service.SkillService
 	SceneAnchor       *service.SceneAnchorService
+	Screenplay        *service.ScreenplayService
 	ForeshadowCRUD    *service.ForeshadowCRUDService
 	NovelAnalysis     *service.NovelAnalysisService
 	NovelImport       *service.NovelImportService
@@ -433,6 +441,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo).
 		WithChapterSceneAnchorRepo(repos.ChapterSceneAnchorRepo)
+	screenplaySvc := service.NewScreenplayService(repos.ScreenplaySceneRepo, repos.ChapterRepo, repos.NovelRepo, repos.CharacterRepo, repos.SceneAnchorRepo, aiSvc)
 
 	// 伏笔 CRUD 服务（带 AI 提取能力）
 	foreshadowCRUDSvc := service.NewForeshadowCRUDService(repos.ForeshadowRepo).
@@ -462,7 +471,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
 		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
-		SceneAnchor: sceneAnchorSvc, ForeshadowCRUD: foreshadowCRUDSvc,
+		SceneAnchor: sceneAnchorSvc, Screenplay: screenplaySvc, ForeshadowCRUD: foreshadowCRUDSvc,
 		NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
 		Crawler:         crawlerSvc,
 		NarrativeMemory: narrativeMemorySvc,
@@ -498,12 +507,12 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithBGMService(bgmSvc)
 	videoSvc.WithBGMSegmentRepo(repos.VideoBGMSegmentRepo)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
-	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 	videoSvc.WithLookRepo(repos.CharacterLookRepo)
 	videoSvc.WithItemRepo(repos.ItemRepo)
 	videoSvc.WithChapterItemRepo(repos.ChapterItemRepo)
 	videoSvc.WithWorldviewRepo(repos.WorldviewRepo)
+	videoSvc.WithAssetRepo(repos.AssetRepo)
 
 	// 帧生成 / 一致性验证 / 小说转视频
 	frameGenSvc := service.NewFrameGeneratorService(aiSvc)
@@ -635,6 +644,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		ItemService:              content.Item,
 		SkillService:             content.Skill,
 		SceneAnchorService:       content.SceneAnchor,
+		ScreenplayService:        content.Screenplay,
 		NovelAnalysisService:     content.NovelAnalysis,
 		NovelImportService:       content.NovelImport,
 		CrawlerService:           content.Crawler,
@@ -716,6 +726,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			WithRedis(redisClient), // Fix: cross-instance SSE broadcast
 		// ── Drama Template ──
 		DramaTemplateService: service.NewDramaTemplateService(repos.DramaTemplateRepo),
+		// ── Image Style Preset ──
+		ImageStylePresetService: service.NewImageStylePresetService(repos.ImageStylePresetRepo),
 	}
 
 	// 素材删除后清理 SFX 查询缓存（防止已删除音效继续被复用）
@@ -774,6 +786,7 @@ type Handlers struct {
 	TaskHandler            *handler.TaskHandler
 	MediaHandler           *handler.MediaHandler
 	SceneAnchorHandler     *handler.SceneAnchorHandler
+	ScreenplayHandler      *handler.ScreenplayHandler
 	SystemHandler          *handler.SystemHandler
 	FsHandler              *handler.FsHandler
 	RewriteHandler         *handler.RewriteHandler
@@ -801,6 +814,7 @@ type Handlers struct {
 	SensitiveWordHandler   *handler.SensitiveWordHandler
 	FeedbackHandler        *handler.FeedbackHandler
 	DramaTemplateHandler   *handler.DramaTemplateHandler
+	ImageStylePresetHandler *handler.ImageStylePresetHandler
 }
 
 // mediaProxyAllowedHosts 构建 MediaHandler.ProxyImage 的目标域名白名单：
@@ -881,6 +895,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db).WithProxyAllowedHosts(mediaProxyAllowedHosts(cfg)...),
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
+		ScreenplayHandler:  handler.NewScreenplayHandler(services.ScreenplayService, services.ChapterService, services.NovelService).WithVideoService(services.VideoService).WithTaskService(services.TaskService),
 		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler:     handler.NewRewriteHandler(services.RewriteService),
@@ -933,7 +948,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithMcpService(services.McpService),
 		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
 		FeedbackHandler:      handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
-		DramaTemplateHandler: handler.NewDramaTemplateHandler(services.DramaTemplateService),
+		DramaTemplateHandler:    handler.NewDramaTemplateHandler(services.DramaTemplateService),
+		ImageStylePresetHandler: handler.NewImageStylePresetHandler(services.ImageStylePresetService),
 	}
 }
 

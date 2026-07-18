@@ -1,15 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/jpeg"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,11 +14,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/opentype"
-	"golang.org/x/image/math/fixed"
 )
-
 
 // ─── AI upsert helpers ───────────────────────────────────────────────────────
 
@@ -314,7 +304,7 @@ func (s *CharacterService) extractCharacterNameList(
 func (s *CharacterService) generateOneCharacterProfile(
 	ctx context.Context,
 	tenantID, novelID uint,
-	novelTitle, genre, promptLanguage, worldviewContext string,
+	novelTitle, genre, worldviewContext string,
 	entry charNameEntry,
 	shortSummaries string,
 ) (*analysisCharJSON, error) {
@@ -325,7 +315,6 @@ func (s *CharacterService) generateOneCharacterProfile(
 		"CharacterRole":    entry.Role,
 		"CharacterBrief":   entry.Brief,
 		"Summaries":        shortSummaries,
-		"PromptLanguage":   promptLanguage,
 		"GenreVisualHints": genreVisualHints(genre),
 		"WorldviewContext": worldviewContext,
 	})
@@ -375,15 +364,14 @@ func (s *CharacterService) generateOneCharacterProfile(
 // 用于"新建角色"弹窗的一键填充：不依赖章节内容，仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateCharacter 创建。
 // 与 generateOneCharacterProfile 不同——那个函数专用于从真实章节摘要重新分析已有角色，必须有 Summaries 才不会生成空泛内容。
 func (s *CharacterService) GenerateCharacterInfo(tenantID, novelID uint, name, role, userHint string) (string, error) {
-	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+	novelTitle, novelGenre := novelPromptContext(s.novelRepo, novelID)
 
 	rendered, tplErr := renderPrompt("generate_character_info", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"CharacterName":  name,
-		"CharacterRole":  role,
-		"UserHint":       userHint,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle":    novelTitle,
+		"Genre":         novelGenre,
+		"CharacterName": name,
+		"CharacterRole": role,
+		"UserHint":      userHint,
 	})
 	if tplErr != nil {
 		return "", fmt.Errorf("render generate_character_info: %w", tplErr)
@@ -456,6 +444,7 @@ func extractPartialCharacterObjects(raw string) []analysisCharJSON {
 	}
 	return results
 }
+
 // ============================================
 // CharacterService 角色服务
 // ============================================
@@ -463,10 +452,10 @@ func extractPartialCharacterObjects(raw string) []analysisCharJSON {
 // EffectiveCharacter 有效角色（合并项目级与章节级覆盖）
 type EffectiveCharacter struct {
 	model.Character
-	ChapterOverride     *model.ChapterCharacter `json:"chapter_override,omitempty"`
-	EffectiveDescription string                 `json:"effective_description"`
-	EffectiveStatus     string                  `json:"effective_status"`
-	EffectiveLocation   string                  `json:"effective_location"`
+	ChapterOverride      *model.ChapterCharacter `json:"chapter_override,omitempty"`
+	EffectiveDescription string                  `json:"effective_description"`
+	EffectiveStatus      string                  `json:"effective_status"`
+	EffectiveLocation    string                  `json:"effective_location"`
 }
 
 type CharacterService struct {
@@ -631,18 +620,9 @@ func suggestVoiceStyle(gender, age, role string, personalityTags []string, descr
 	return ""
 }
 
-// suggestVoiceLanguage 根据小说 PromptLanguage 推断配音语言编码（存入 voice_language 字段）。
-func suggestVoiceLanguage(promptLanguage string) string {
-	switch promptLanguage {
-	case "en":
-		return "en"
-	case "ja":
-		return "ja"
-	case "ko":
-		return "ko"
-	default:
-		return "zh-cmn" // 中文普通话
-	}
+// suggestVoiceLanguage 推荐配音语言编码（存入 voice_language 字段），固定为中文普通话。
+func suggestVoiceLanguage() string {
+	return "zh-cmn" // 中文普通话
 }
 
 func NewCharacterService(
@@ -790,7 +770,6 @@ func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharac
 func (s *CharacterService) GetCharacter(id uint) (*model.Character, error) {
 	return s.characterRepo.GetByID(id)
 }
-
 
 func (s *CharacterService) ListCharacters(novelID uint) ([]*model.Character, error) {
 	return s.characterRepo.ListByNovel(novelID)
@@ -969,8 +948,12 @@ func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*
 			ec.ChapterOverride = o
 			base := ch.Description
 			var parts []string
-			if o.Appearance != "" { parts = append(parts, "外貌（本章）："+o.Appearance) }
-			if o.Personality != "" { parts = append(parts, "性格（本章）："+o.Personality) }
+			if o.Appearance != "" {
+				parts = append(parts, "外貌（本章）："+o.Appearance)
+			}
+			if o.Personality != "" {
+				parts = append(parts, "性格（本章）："+o.Personality)
+			}
 			if len(parts) > 0 {
 				ec.EffectiveDescription = base + "\n" + strings.Join(parts, "\n")
 			} else {
@@ -1046,18 +1029,14 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
 
-	// 获取小说标题/类型/语言配置
+	// 获取小说标题/类型/世界观
 	novelTitle := "本小说"
 	novelGenre := ""
-	novelPromptLanguage := "zh"
 	worldviewContext := ""
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.PromptLanguage != "" {
-				novelPromptLanguage = novel.AIConfig.PromptLanguage
-			}
 			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
@@ -1098,7 +1077,7 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p, err := s.generateOneCharacterProfile(ctx, tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, e, shortSummaries)
+			p, err := s.generateOneCharacterProfile(ctx, tenantID, novelID, novelTitle, novelGenre, worldviewContext, e, shortSummaries)
 			results[idx] = profileResult{p, err}
 		}(i, entry)
 	}
@@ -1132,10 +1111,18 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 		description := p.Description
 		if description == "" {
 			var descParts []string
-			if p.Appearance != "" { descParts = append(descParts, "外貌："+p.Appearance) }
-			if p.Personality != "" { descParts = append(descParts, "性格："+p.Personality) }
-			if p.Background != "" { descParts = append(descParts, "背景："+p.Background) }
-			if p.CharacterArc != "" { descParts = append(descParts, "弧光："+p.CharacterArc) }
+			if p.Appearance != "" {
+				descParts = append(descParts, "外貌："+p.Appearance)
+			}
+			if p.Personality != "" {
+				descParts = append(descParts, "性格："+p.Personality)
+			}
+			if p.Background != "" {
+				descParts = append(descParts, "背景："+p.Background)
+			}
+			if p.CharacterArc != "" {
+				descParts = append(descParts, "弧光："+p.CharacterArc)
+			}
 			if len(p.DialogueStyle.Patterns) > 0 {
 				descParts = append(descParts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
 			} else if p.DialogueStyle.VocabularyLevel != "" {
@@ -1146,19 +1133,33 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 
 		suggestedVoice := suggestVoiceForCharacter(description, p.Gender, p.PersonalityTags, role, voiceModels)
 		suggestedStyle := suggestVoiceStyle(p.Gender, p.Age, role, p.PersonalityTags, description)
-		suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
+		suggestedLang := suggestVoiceLanguage()
 
 		if ch, ok := byName[p.Name]; ok {
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
 			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
-			if description != "" { ch.Description = description }
-			if p.Gender != "" { ch.Meta.Gender = p.Gender }
-			if p.Age != "" { ch.Meta.Age = p.Age }
+			if description != "" {
+				ch.Description = description
+			}
+			if p.Gender != "" {
+				ch.Meta.Gender = p.Gender
+			}
+			if p.Age != "" {
+				ch.Meta.Age = p.Age
+			}
 			// 用户手动配置字段仅在空时填充
-			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v }
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceID, suggestedVoice); ok { ch.VoiceConfig.VoiceID = v }
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceStyle, suggestedStyle); ok { ch.VoiceConfig.VoiceStyle = v }
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceLanguage, suggestedLang); ok { ch.VoiceConfig.VoiceLanguage = v }
+			if v, ok := fillIfEmpty(ch.Role, role); ok {
+				ch.Role = v
+			}
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceID, suggestedVoice); ok {
+				ch.VoiceConfig.VoiceID = v
+			}
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceStyle, suggestedStyle); ok {
+				ch.VoiceConfig.VoiceStyle = v
+			}
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceLanguage, suggestedLang); ok {
+				ch.VoiceConfig.VoiceLanguage = v
+			}
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
@@ -1268,15 +1269,11 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 
 	novelTitle := "本小说"
 	novelGenre := ""
-	novelPromptLanguage := "zh"
 	worldviewContext := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.PromptLanguage != "" {
-				novelPromptLanguage = novel.AIConfig.PromptLanguage
-			}
 			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
@@ -1301,7 +1298,7 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 		Brief: char.Description,
 	}
 
-	profile, err := s.generateOneCharacterProfile(ctx, tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, entry, shortSummaries)
+	profile, err := s.generateOneCharacterProfile(ctx, tenantID, char.NovelID, novelTitle, novelGenre, worldviewContext, entry, shortSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("AI reanalyze: %w", err)
 	}
@@ -1323,10 +1320,16 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 	}
 	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Meta.Gender, profile.PersonalityTags, char.Role, voiceModels)
 	suggestedStyle := suggestVoiceStyle(char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, char.Description)
-	suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, suggestedVoice); ok { char.VoiceConfig.VoiceID = v }
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, suggestedStyle); ok { char.VoiceConfig.VoiceStyle = v }
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, suggestedLang); ok { char.VoiceConfig.VoiceLanguage = v }
+	suggestedLang := suggestVoiceLanguage()
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, suggestedVoice); ok {
+		char.VoiceConfig.VoiceID = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, suggestedStyle); ok {
+		char.VoiceConfig.VoiceStyle = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, suggestedLang); ok {
+		char.VoiceConfig.VoiceLanguage = v
+	}
 
 	if err := s.characterRepo.Update(char); err != nil {
 		return nil, fmt.Errorf("save character: %w", err)
@@ -1385,12 +1388,10 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 
 	novelTitle := "本小说"
 	novelGenre := ""
-	novelPromptLanguage := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			novelPromptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -1409,7 +1410,6 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 		"Genre":            novelGenre,
 		"ExistingNames":    existingNames,
 		"Content":          content,
-		"PromptLanguage":   novelPromptLanguage,
 		"UserPrompt":       userPrompt,
 		"GenreVisualHints": genreVisualHints(novelGenre),
 	})
@@ -1490,7 +1490,7 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 
 		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, "minor", voiceModels)
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, "minor", c.PersonalityTags, finalDesc)
-		suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
+		suggestedLang := suggestVoiceLanguage()
 
 		char := &model.Character{
 			NovelID:     novelID,
@@ -1555,7 +1555,6 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 				CharacterID:  char.ID,
 				NovelID:      char.NovelID,
 				Label:        "默认形象",
-				ChapterFrom:  1,
 				VisualPrompt: c.VisualPrompt,
 			}
 			if e := s.lookRepo.Create(defaultLook); e != nil {
@@ -1657,11 +1656,11 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		defaultLookMap = map[uint]*model.CharacterLook{}
 	}
 
-	// force=true 全量重新生成；否则仅处理缺图的角色（三视图或 Portrait 缺一则需处理）
+	// force=true 全量重新生成；否则仅处理缺三视图的角色
 	var todo []*model.Character
 	for _, c := range chars {
 		look := defaultLookMap[c.ID]
-		if force || look == nil || look.ThreeViewSheet == "" || look.Portrait == "" {
+		if force || look == nil || look.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1693,25 +1692,21 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if charAppearance == "" {
 				charAppearance = char.Description
 			}
-			gender := InferGenderTag(charAppearance, char.Description)
 
-			// ── 一次生成三视图+面部参考图（同框合图，第4格自动裁剪为 Portrait）──
+			// ── 生成角色参考图（三视图+面部特写同框合图）──────────────────────
 			faceRef := ""
-			facePrompt := ""
 			if look != nil {
-				faceRef = look.Portrait
-				facePrompt = look.FacePrompt
+				faceRef = look.ThreeViewSheet
 			}
 
-			var newThreeURL, newPortraitURL string
-			if force || look == nil || look.ThreeViewSheet == "" || look.Portrait == "" {
-				sheet, sheetErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, facePrompt, imageStyle, gender, faceRef, provider)
+			var newThreeURL string
+			if force || look == nil || look.ThreeViewSheet == "" {
+				sheet, sheetErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, faceRef, provider)
 				if sheetErr != nil {
 					logger.Errorf("[CharacterService] BatchGenerateImages: character sheet gen for char %d (%s) failed: %v", char.ID, char.Name, sheetErr)
 					charFailed = true
 				} else {
 					newThreeURL = sheet.SheetURL
-					newPortraitURL = sheet.PortraitURL
 				}
 			}
 
@@ -1719,14 +1714,8 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			var savedLookID uint
 			if look != nil {
 				// 更新已有 Look
-				updateReq := &model.UpdateCharacterLookRequest{}
 				if newThreeURL != "" {
-					updateReq.ThreeViewSheet = &newThreeURL
-				}
-				if newPortraitURL != "" {
-					updateReq.Portrait = &newPortraitURL
-				}
-				if newThreeURL != "" || newPortraitURL != "" {
+					updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &newThreeURL}
 					if _, saveErr := s.UpdateLook(look.ID, updateReq); saveErr != nil {
 						logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
 						charFailed = true
@@ -1739,10 +1728,8 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 					CharacterID:    char.ID,
 					NovelID:        char.NovelID,
 					Label:          "默认形象",
-					ChapterFrom:    1,
 					VisualPrompt:   charAppearance,
 					ThreeViewSheet: newThreeURL,
-					Portrait:       newPortraitURL,
 				}
 				if createErr := s.lookRepo.Create(newLook); createErr != nil {
 					logger.Errorf("[CharacterService] BatchGenerateImages: create default look for char %d: %v", char.ID, createErr)
@@ -1874,123 +1861,45 @@ func (s *ImageGenerationService) GenerateCharacterImage(ctx context.Context, ten
 	return &GeneratedCharacterImage{URL: image.URL, Description: req.Description}, nil
 }
 
-// InferGenderTag extracts gender ("male" / "female" / "") from a character's VisualPrompt or
-// Description. VisualPrompt is AI-generated and typically starts with booru tokens (1girl / 1boy),
-// so those are checked first. Keyword fallback handles plain-text descriptions.
-// The result is passed to image generation functions to lock gender across all generated images.
-func InferGenderTag(visualPrompt, description string) string {
-	combined := strings.ToLower(visualPrompt + " " + description)
-	// Booru tokens — highest confidence; AI-generated VisualPrompt almost always starts with these.
-	if strings.Contains(combined, "1girl") || strings.Contains(combined, "1woman") {
-		return "female"
-	}
-	if strings.Contains(combined, "1boy") || strings.Contains(combined, "1man") {
-		return "male"
-	}
-	// Ordered keyword fallback — check female before male to avoid "woman"⊃"man" substring collisions.
-	for _, w := range []string{"female", "woman", "girl", "lady", "princess", "queen", "她", "女性", "女子", "女孩", "少女", "姑娘", "女士"} {
-		if strings.Contains(combined, w) {
-			return "female"
-		}
-	}
-	for _, w := range []string{"male", "man", "boy", "lord", "prince", "king", "他", "男性", "男子", "男孩", "少年", "男生"} {
-		if strings.Contains(combined, w) {
-			return "male"
-		}
-	}
-	return ""
-}
-
-// resolveStyleDesc maps image_style ID to an AI-prompt-friendly style description.
-// Falls back to the raw style string, or "日系动漫插画" when style is empty.
-func resolveStyleDesc(style string) string {
-	m := map[string]string{
-		"anime":             "日系动漫插画",
-		"realistic":         "写实摄影",
-		"real_person":       "真实人像摄影",
-		"ink_painting":      "水墨中国风插画",
-		"cyberpunk":         "赛博朋克风格插画",
-		"xianxia_style":     "古典仙侠国风插画",
-		"oil_painting":      "油画风格插画",
-		"watercolor":        "水彩插画",
-		"pixel_art":         "像素复古风格插画",
-		"chinese_animation": "国产动漫插画",
-		"game_concept":      "游戏原画概念设计",
-		"steampunk":         "蒸汽朋克风格插画",
-		"sketch":            "铅笔素描黑白插画",
-		"render_3d":         "三维立体渲染风格",
-		"ukiyo_e":           "日本浮世绘风格",
-		"gothic_dark":       "哥特暗黑风格插画",
-		"manhwa":            "韩漫风格插画",
-		"modern_urban":      "都市现代风格插画",
-		"fantasy_fairy":     "奇幻童话插画",
-		"wuxia_jianghu":     "武侠江湖水墨插画",
-		"shinkai":           "光影写实动漫插画",
-		"apocalypse":        "末日废土概念插画",
-		"retro_hk_comic":    "复古港漫风格插画",
-		"gongbi":            "工笔重彩国画风格",
-		"neon_dream":        "霓虹梦幻赛博插画",
-		"vintage_film":      "怀旧胶片摄影风格",
-	}
-	if d, ok := m[style]; ok {
-		return d
-	}
-	if style != "" {
-		return style
-	}
-	return "日系动漫插画"
-}
-
-// resolveStyleCategory 将风格 ID 归入大类，用于选择匹配的质量提升词。
+// resolveStyleCategory 从风格库（ImageStylePreset.PromptCategory，管理员可在 /image-style-presets
+// 管理页编辑）读取风格 ID 归入的大类，用于选择匹配的质量提升词/冲突清理词。
 // 返回值："realistic" / "anime" / "classic_illustration" / "dark_stylized" / "pixel" / "render_3d" / "" (未知)
 func resolveStyleCategory(styleID string) string {
-	switch styleID {
-	case "realistic", "real_person", "game_concept", "modern_urban", "vintage_film":
-		return "realistic"
-	case "anime", "chinese_animation", "ukiyo_e", "manhwa", "shinkai", "retro_hk_comic":
-		return "anime"
-	case "ink_painting", "xianxia_style", "watercolor", "oil_painting", "fantasy_fairy", "wuxia_jianghu", "gongbi":
-		return "classic_illustration"
-	case "cyberpunk", "steampunk", "gothic_dark", "apocalypse", "neon_dream":
-		return "dark_stylized"
-	case "pixel_art", "sketch":
-		return "pixel"
-	case "render_3d":
-		return "render_3d"
+	if c, ok := lookupStylePresetFromCache(styleID); ok {
+		return c.category
 	}
 	return ""
 }
 
 // universalQualityTags 是所有图像生成 prompt 必须携带的通用质量指令，保证输出基准一致。
-const universalQualityTags = "masterpiece, best quality, ultra-detailed, sharp focus, 8K, ultra high resolution, professional"
+const universalQualityTags = "杰作，最佳质量，超精细，锐利对焦，8K，超高分辨率，专业级"
 
-// resolveStyleQualityTokens 返回与风格匹配的英文质量提升词串，末尾不加逗号。
+// resolveStyleQualityTokens 返回与风格匹配的中文质量提升词串，末尾不加逗号。
 // 场景图和角色图共用同一套质量词，保证输出基准一致。
-// 重要：写实/3D 风格才使用 "8K, ultra high resolution" 等摄影写实信号；
+// 重要：写实/3D 风格才使用 "8K，超高分辨率" 等摄影写实信号；
 // 动漫/插画等风格禁止使用这些词，否则模型会偏向写实输出。
 func resolveStyleQualityTokens(styleID string) string {
 	// 写实/3D 专用基础词（含 8K/UHD 摄影信号）
 	realisticBase := universalQualityTags
 	// 插画/动漫基础词（不含 8K/UHD，避免推向写实）
-	illustrationBase := "masterpiece, best quality, ultra-detailed, sharp focus, professional"
+	illustrationBase := "杰作，最佳质量，超精细，锐利对焦，专业级"
 	switch resolveStyleCategory(styleID) {
 	case "realistic":
-		return realisticBase + ", photorealistic, cinematic lighting, 8k uhd"
+		return realisticBase + "，照片级真实感，电影感光效，8k超高清"
 	case "render_3d":
-		return realisticBase + ", 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+		return realisticBase + "，3D渲染，光线追踪，体积光，高保真3D"
 	case "anime":
-		return illustrationBase + ", vibrant colors, clean linework, professional anime illustration"
+		return illustrationBase + "，鲜艳色彩，干净线稿，专业动漫插画"
 	case "pixel":
-		return illustrationBase + ", crisp pixel art, clean sharp pixels, retro game aesthetic"
+		return illustrationBase + "，清晰像素画，锐利像素点，复古游戏美术风格"
 	case "classic_illustration":
-		return illustrationBase + ", exquisite brushwork, vibrant colors, professional illustration"
+		return illustrationBase + "，精湛笔触，鲜艳色彩，专业插画"
 	case "dark_stylized":
-		return illustrationBase + ", dramatic atmosphere, vibrant colors, professional digital art"
+		return illustrationBase + "，戏剧化氛围，鲜艳色彩，专业数字绘画"
 	default: // unknown
-		return illustrationBase + ", vibrant colors, clean linework, professional illustration"
+		return illustrationBase + "，鲜艳色彩，干净线稿，专业插画"
 	}
 }
-
 
 // removeConflictingQualityTokens strips style-conflicting quality tokens from a prompt.
 // Non-realistic styles: removes realistic/photography tokens from character VPs or old storyboard data.
@@ -2001,7 +1910,8 @@ func removeConflictingQualityTokens(prompt, styleID string) string {
 	var conflicts []string
 	switch cat {
 	case "realistic", "render_3d":
-		// Remove anime/illustration tokens that contaminate realistic/3D prompts
+		// Remove anime/illustration tokens that contaminate realistic/3D prompts.
+		// 保留旧版英文 token（清理历史存量数据），并追加中文等效表述（清理迁移后新生成的数据）。
 		conflicts = []string{
 			"anime illustration style",
 			"anime illustration",
@@ -2023,11 +1933,28 @@ func removeConflictingQualityTokens(prompt, styleID string) string {
 			"crisp retro pixels",
 			"pencil sketch illustration",
 			"graphite line work",
+			"动漫插画风格",
+			"平涂赛璐璐上色",
+			"赛璐璐上色",
+			"干净线稿",
+			"专业动漫插画",
+			"国产动画风格",
+			"水墨画风格",
+			"笔触质感，单色水墨",
+			"宣纸质感",
+			"仙侠奇幻插画",
+			"水彩插画风格",
+			"柔和色彩晕染",
+			"像素画风格",
+			"清晰复古像素",
+			"铅笔素描插画",
+			"石墨线条",
 		}
 	case "":
 		return prompt // unknown style: keep all tokens
 	default:
 		// For non-realistic styles: remove tokens that belong exclusively to realistic photography.
+		// 保留旧版英文 token（清理历史存量数据），并追加中文等效表述（清理迁移后新生成的数据）。
 		conflicts = []string{
 			"photorealistic, cinematic lighting, 8k uhd",
 			"photorealistic, cinematic lighting",
@@ -2043,6 +1970,17 @@ func removeConflictingQualityTokens(prompt, styleID string) string {
 			"DSLR photography",
 			"hyperrealistic",
 			"ultra realistic",
+			"照片级真实感，电影感光效，8k超高清",
+			"照片级真实感，电影感光效",
+			"照片级真实感",
+			"电影感光效",
+			"复古胶片摄影美术风格",
+			"胶片摄影",
+			"写实皮肤质感",
+			"8k超高清",
+			"单反相机拍摄",
+			"单反摄影",
+			"超写实",
 		}
 	}
 	result := prompt
@@ -2077,56 +2015,19 @@ func removeConflictingQualityTokens(prompt, styleID string) string {
 	return strings.TrimRight(strings.TrimLeft(result, ", "), ", ")
 }
 
-// resolveStyleIllustrationDesc returns English-language style descriptor tokens for non-realistic styles.
-// Replaces the Chinese-language style names that were previously embedded in English prompts,
-// improving tokenizer coverage and semantic precision.
+// resolveStyleIllustrationDesc returns Chinese-language style descriptor tokens for non-realistic styles.
 func resolveStyleIllustrationDesc(style string) string {
-	m := map[string]string{
-		"anime":             "anime illustration style, vibrant colors, clean lineart, flat color cel shading",
-		"chinese_animation": "Chinese donghua animation style, clean lineart, vibrant flat colors",
-		"ink_painting":      "Chinese ink wash painting style, brush stroke texture, monochrome ink wash, xuan paper aesthetic",
-		"xianxia_style":     "Chinese xianxia fantasy illustration, ethereal ink-wash atmosphere, intricate traditional patterns",
-		"oil_painting":      "oil painting style, rich impasto texture, visible brushstrokes, classical portrait painting",
-		"watercolor":        "watercolor illustration style, soft color washes, wet-on-wet blending, translucent layered pigment",
-		"pixel_art":         "pixel art style, crisp retro pixels, limited palette, 16-bit game sprite aesthetic",
-		"cyberpunk":         "cyberpunk digital concept art, neon accent lighting, high contrast, near-future sci-fi aesthetic",
-		"steampunk":         "steampunk illustration, intricate mechanical details, warm brass and sepia tones, Victorian industrial fantasy",
-		"gothic_dark":       "gothic dark fantasy illustration, dramatic chiaroscuro shadows, deep jewel tones, macabre atmosphere",
-		"sketch":            "pencil sketch illustration, graphite line work, subtle cross-hatching, monochrome drawing",
-		"render_3d":         "3D rendered character, subsurface scattering skin, physically-based rendering, high-fidelity 3D model",
-		"ukiyo_e":           "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period art",
-		"game_concept":      "game concept art illustration, professional character design, detailed rendering, RPG fantasy style",
-		"manhwa":            "Korean manhwa comic style, bold clean linework, expressive character design, webtoon aesthetic",
-		"modern_urban":      "modern urban realism illustration, contemporary fashion, city lifestyle, clean detailed rendering",
-		"fantasy_fairy":     "fantasy fairy tale illustration, enchanted magical atmosphere, soft luminous colors, storybook art style",
-		"wuxia_jianghu":     "Chinese wuxia martial arts illustration, flowing robes, dynamic action poses, traditional ink-inspired style",
-		"shinkai":           "Makoto Shinkai inspired anime, spectacular light rays and lens flares, photorealistic backgrounds, painterly sky",
-		"apocalypse":        "post-apocalyptic concept art, gritty wasteland aesthetic, desaturated earthy tones, dramatic survival atmosphere",
-		"retro_hk_comic":    "retro Hong Kong manhua comic style, bold dynamic lines, dramatic action poses, vintage print aesthetic",
-		"gongbi":            "Chinese gongbi meticulous brushwork, rich mineral pigments, intricate fine-line detail, traditional Chinese court painting",
-		"neon_dream":        "neon dream illustration, vibrant glowing neon accents, dreamy surreal atmosphere, synthwave aesthetic",
-		"vintage_film":      "vintage film photography aesthetic, warm film grain, faded nostalgic color grading, analog photography look",
+	// 风格库（管理员可在 /image-style-presets 管理页编辑 prompt 字段）是风格描述词的唯一来源。
+	if c, ok := lookupStylePresetFromCache(style); ok && c.prompt != "" {
+		return c.prompt
 	}
-	if d, ok := m[style]; ok {
-		return d
+	// 自定义画风（用户在"自定义"风格页填写的自然语言描述）不在风格库中，
+	// 但已经是完整的风格描述文本（含中文或空格），应直接透传而非被通用兜底词静默替换；
+	// 只有真正无法识别的短 ID（如失效的旧预设）才落到下面的通用兜底。
+	if style != "" && (containsChinese(style) || strings.Contains(style, " ")) {
+		return style
 	}
-	return "detailed digital illustration, professional character design, clean linework"
-}
-
-// resolveGenderInfo returns (promptTag, negativeFragment) for a given gender.
-// promptTag is the booru-style leading token for positive prompts ("1boy" / "1girl" / "androgynous" / "").
-// negativeFragment lists opposite-gender tokens to suppress in the negative prompt.
-func resolveGenderInfo(gender string) (tag string, neg string) {
-	switch gender {
-	case "male":
-		return "1boy", "female, girl, woman, 女性, 女生, 裙子, 女装, feminine"
-	case "female":
-		return "1girl", "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine"
-	case "neutral":
-		return "androgynous", ""
-	default:
-		return "", ""
-	}
+	return "精细数字插画，专业角色设计，干净线稿"
 }
 
 // animalKeywords 用于检测纯动物（非人形）角色的关键词。
@@ -2195,306 +2096,74 @@ func condenseVisualPrompt(s string, maxWords int) string {
 	return strings.TrimRight(strings.Join(words[:cutIdx], " "), ", ")
 }
 
-// GeneratedCharacterSheet 是合并生成（三视图 + 面部特写同框，见 GenerateThreeViewSheet）的结果。
-// PortraitURL 由 SheetURL 第 4 格自动裁剪而来，裁剪失败时为空（非致命，调用方应降级用 SheetURL 做参考）。
+// GeneratedCharacterSheet 是 GenerateThreeViewSheet 的生成结果。
 type GeneratedCharacterSheet struct {
 	SheetURL    string
-	PortraitURL string
 	Description string
 }
 
-// GenerateThreeViewSheet 生成角色参考图：正面/侧面/背面/面部特写，4格横版布局
-// （AI 生成 1600x720，本地合成顶部 80px 角色名留白条后最终为 1600x800）。
-// 一次 AI 调用同时产出三视图与面部参考图（不再单独生成 Portrait）——
-// 生成结果经 composeCharacterSheet 合成角色名标注，并从面部特写格裁出独立 Portrait URL，
-// 供分镜生成时做一致性参考。ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
-func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, facePrompt, style, gender, referenceImage, provider string) (*GeneratedCharacterSheet, error) {
-	genderTag, genderNeg := resolveGenderInfo(gender)
-	qualityTokens := resolveStyleQualityTokens(style)
-
+// GenerateThreeViewSheet 生成角色参考图：横版16:9，左侧大幅胸部以上特写肖像 +
+// 右侧三格全身视图（正面/四分之三侧面/背面），顶部由 AI 直接生成名称标牌。
+// ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
+func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, referenceImage, provider string) (*GeneratedCharacterSheet, error) {
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
 		aiRef = ""
 	}
 
-	// facePrompt 为面部特写专用提示词（CharacterLook.FacePrompt）；为空时降级用完整外观描述。
-	faceDesc := facePrompt
-	if faceDesc == "" {
-		faceDesc = appearance
+	// 人形/动物角色的版式+规则文案见 characterSheetFormatHumanoid / characterSheetFormatAnimal 常量。
+	format := characterSheetFormatHumanoid
+	if isAnimalCharacter(appearance) {
+		format = characterSheetFormatAnimal
 	}
-	condensedFace := condenseVisualPrompt(faceDesc, 40)
-
-	// 人形角色布局：3 格全身（A-pose + 侧面解剖约束）+ 第 4 格面部特写
-	layoutDetails :=
-		"four equal-width panels side by side, horizontal wide format, " +
-			"PANEL 1 front view: facing camera directly, symmetrical, neutral expression, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"PANEL 2 90-degree side profile: pure side view facing left, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"PANEL 3 back view: facing away from camera, back of head visible, no face visible, full body from head to toe, entire legs and feet fully visible, standing pose, " +
-			"PANEL 4 face close-up headshot: front-facing, head and shoulders only, face and hair fill the frame, neutral expression, " + condensedFace + ", " +
-			"A-pose arms 30-45 degrees from sides in panels 1-3, same ground baseline in panels 1-3, same character height in panels 1-3, no cropping in panels 1-3"
-
-	// 动物角色布局：去掉 A-pose 手臂指令，第 4 格改为面部/头部特写
-	animalLayoutDetails :=
-		"four equal-width panels side by side, horizontal wide format, " +
-			"PANEL 1 front view: facing camera directly, full body from head to toe, entire figure visible, neutral pose, " +
-			"PANEL 2 90-degree side profile: pure side view, full body from head to toe, entire figure visible, " +
-			"PANEL 3 back view: facing away from camera, full body from head to toe, entire figure visible, " +
-			"PANEL 4 head close-up: front-facing head only, face and head fill the frame, " + condensedFace + ", " +
-			"same ground baseline in panels 1-3, same character scale in panels 1-3, no cropping in panels 1-3"
+	condensedFace := condenseVisualPrompt(appearance, 40)
+	layoutDetails := fmt.Sprintf(format, condensedFace, name)
 
 	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）。
 	// appearance 此处已是完整外观描述（含服装/鞋履/配饰），由 GenerateLookVisualPrompt
 	// 与面部提示词同一次 AI 调用独立产出，不需要再从中提取/剥离任何内容。
 	condensedAppearance := condenseVisualPrompt(appearance, 80)
 
-	// 动物角色跳过人类性别 token（1boy/1girl 会强制生成人形体型）
-	animal := isAnimalCharacter(appearance)
-	if animal {
-		genderTag = ""
-		genderNeg = "human body, human figure, humanoid, bipedal human, human silhouette, human proportions"
-	}
-
-	activeLayoutDetails := layoutDetails
-	if animal {
-		activeLayoutDetails = animalLayoutDetails
-	}
-
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
-	styleType := "other"
-	if style == "realistic" || style == "real_person" {
-		styleType = style
-	}
-	genderPrefix := ""
-	if !animal {
-		if style == "realistic" || style == "real_person" {
-			genderPrefix = map[string]string{
-				"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
-			}[gender]
-		} else if genderTag != "" {
-			genderPrefix = genderTag + ", "
-		}
-	}
+	// 名称标牌由 AI 直接在图中生成（见 layoutDetails 规则），不再由程序事后拼接；
+	// prompt 内容固定为「外观描述 + 版式规则」，无需负向提示词，故不再走模板引擎。
+	prompt := condensedAppearance + "，" + layoutDetails
 
-	rendered, tplErr := renderPrompt("image_three_view_sheet", map[string]interface{}{
-		"StyleType":           styleType,
-		"StyleDesc":           resolveStyleIllustrationDesc(style),
-		"QualityTokens":       qualityTokens,
-		"GenderPrefix":        genderPrefix,
-		"GenderNeg":           genderNeg,
-		"CondensedAppearance": condensedAppearance,
-		"LayoutDetails":       activeLayoutDetails,
-		"IsAnimal":            animal,
-	})
-	if tplErr != nil {
-		return nil, fmt.Errorf("render image_three_view_sheet: %w", tplErr)
-	}
-	prompt, negativePrompt := splitImagePrompt(rendered)
-
-	// AI 只负责生成四格本体（正面/侧面/背面/面部特写，各占 characterSheetPanelWidthPx 宽），
-	// 不要求 AI 预留名称留白——扩散模型对"留出精确像素空白"这类指令服从度不可靠。
-	// 顶部的角色名留白条由 composeCharacterSheet 在生成后用程序拼接（100%可控的画布合成，
-	// 不依赖 AI 配合），避免依赖 AI 遵循留白指令导致文字与内容重叠或裁剪错位。
 	// 一致性权重设为 0.4（低权重）：合图需要 prompt 主导布局结构，
 	// DreamO（weight>=0.7）以参考图为主会压制多面板布局 prompt 导致所有格都生成正面图。
 	// 0.4 → selectImageModel 选 SeedEditV3（volcengine-visual 路径），prompt 主导效果更好。
-	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetPanelHeightPx)
+	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetCanvasHeight)
 	refs := []string{}
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, size, 0, 0.4)
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, "", size, 0, 0.4)
 	if err != nil {
 		return nil, err
 	}
 
-	sheetURL, portraitURL, composeErr := s.composeCharacterSheet(ctx, url, name)
-	if composeErr != nil {
-		logger.Errorf("GenerateThreeViewSheet: %s compose (name stamp + face crop) failed, using raw sheet without name label: %v", name, composeErr)
-		sheetURL = url
-	}
 	return &GeneratedCharacterSheet{
-		SheetURL:    sheetURL,
-		PortraitURL: portraitURL,
-		Description: name + " character sheet (front/side/back/face)",
+		SheetURL:    url,
+		Description: name + " character sheet (portrait + front/three-quarter/back)",
 	}, nil
 }
 
 const (
-	characterSheetPanelWidthPx  = 400
-	characterSheetPanelCount    = 4
-	characterSheetPanelHeightPx = 720
-	characterSheetNameMarginPx  = 80
-	characterSheetCanvasWidth   = characterSheetPanelWidthPx * characterSheetPanelCount
-	characterSheetFontPath      = "assets/fonts/YShiNewHeiGGJ-Regular.ttf"
-	characterSheetFontSizePt    = 36
+	// 横版16:9：左侧40%胸部以上特写肖像 + 右侧三格全身视图（正面/四分之三侧面/背面）。
+	characterSheetCanvasWidth  = 1600
+	characterSheetCanvasHeight = characterSheetCanvasWidth * 9 / 16
 )
 
-var (
-	characterSheetFontOnce sync.Once
-	characterSheetFont     *opentype.Font
-	characterSheetFontErr  error
+// characterSheetFormatHumanoid / characterSheetFormatAnimal 是角色三视图的版式+规则文案，
+// 占位符依次为：condensedFace（胸部以上/头部特写的外观锚点）、name（顶部名称标牌文字）。
+const (
+	characterSheetFormatHumanoid = "格式：角色设计稿，横版16:9，四格布局。左侧面板（最大，约占40%%宽度）：胸部以上的特写肖像，高细节，清晰展示面部、发型、配饰和上装，%s。右侧（3个面板，各约占20%%宽度）：三个全身视图——正面、四分之三侧面、背面。全身面板使用A-Pose站姿。所有全身视图必须展示从头到脚的完整人物，鞋子完全可见且不被裁切。顶部包含大尺寸高对比名称标牌\"%s\"（字号明显增大、优先保证清晰可读）。纯白(#FFFFFF)背景，无环境元素，背景无阴影。" +
+		"规则：角色在所有四个面板中必须看起来完全一致——相同的面部、发型、服装、配饰。静态A-Pose站姿，无动作姿势，鞋子清晰可见且不被遮挡。不添加水印或多余文字。特写肖像必须达到高分辨率品质，可见皮肤纹理、眼部细节和配饰细节。"
+
+	characterSheetFormatAnimal = "格式：角色设计稿，横版16:9，四格布局。左侧面板（最大，约占40%%宽度）：头部特写，高细节，清晰展示面部、毛发/皮肤质感，%s。右侧（3个面板，各约占20%%宽度）：三个全身视图——正面、四分之三侧面、背面，自然站立姿势，均展示完整身形，不被裁切。顶部包含大尺寸高对比名称标牌\"%s\"（字号明显增大、优先保证清晰可读）。纯白(#FFFFFF)背景，无环境元素，背景无阴影。" +
+		"规则：角色在所有四个面板中必须看起来完全一致——相同的毛色/皮肤、体型特征。静态自然站姿，无动作姿势。不添加水印或多余文字。特写肖像必须达到高分辨率品质，可见毛发/皮肤纹理与眼部细节。"
 )
-
-// loadCharacterSheetFont 懒加载并缓存内置中文字体（角色名标注用），避免每次生成都重新解析字体文件。
-func loadCharacterSheetFont() (*opentype.Font, error) {
-	characterSheetFontOnce.Do(func() {
-		data, readErr := os.ReadFile(characterSheetFontPath)
-		if readErr != nil {
-			characterSheetFontErr = fmt.Errorf("read font %s: %w", characterSheetFontPath, readErr)
-			return
-		}
-		f, parseErr := opentype.Parse(data)
-		if parseErr != nil {
-			characterSheetFontErr = fmt.Errorf("parse font %s: %w", characterSheetFontPath, parseErr)
-			return
-		}
-		characterSheetFont = f
-	})
-	return characterSheetFont, characterSheetFontErr
-}
-
-// drawCenteredText 把 text 用给定字号（pt）水平垂直居中绘制到 dst 图像的指定矩形区域。
-func drawCenteredText(dst draw.Image, area image.Rectangle, text string, sizePt float64) error {
-	f, err := loadCharacterSheetFont()
-	if err != nil {
-		return err
-	}
-	face, err := opentype.NewFace(f, &opentype.FaceOptions{Size: sizePt, DPI: 72, Hinting: font.HintingFull})
-	if err != nil {
-		return fmt.Errorf("create font face: %w", err)
-	}
-	defer face.Close()
-
-	drawer := &font.Drawer{Dst: dst, Src: image.NewUniform(color.Black), Face: face}
-	textWidth := drawer.MeasureString(text).Ceil()
-	fm := face.Metrics()
-	textHeight := (fm.Ascent + fm.Descent).Ceil()
-	x := area.Min.X + (area.Dx()-textWidth)/2
-	y := area.Min.Y + (area.Dy()+textHeight)/2 - fm.Descent.Ceil()
-	drawer.Dot = fixed.P(x, y)
-	drawer.DrawString(text)
-	return nil
-}
-
-// composeCharacterSheet 下载 AI 生成的原始四格合图（正/侧/背/面部特写，无留白），
-// 拼接出一张顶部带 characterSheetNameMarginPx 像素白色留白条的新画布，程序把角色名
-// 居中绘制在留白条上（见 drawCenteredText 注释：不依赖扩散模型渲染文字），原图整体下移
-// 拼接进画布下半部分——留白条完全由代码合成、不依赖 AI 配合，避免文字与画面内容重叠或错位。
-// 再从面部特写格（第4格，位置由代码固定计算，不受 AI 实际留白影响）裁出独立 Portrait；
-// 两者各自重新编码上传，返回最终 URL。失败时非致命——调用方应降级使用原始 rawURL 作为 sheet，Portrait 留空。
-func (s *ImageGenerationService) composeCharacterSheet(ctx context.Context, rawURL, name string) (sheetURL, portraitURL string, err error) {
-	if s.aiService == nil || s.aiService.storageSvc == nil || rawURL == "" {
-		return "", "", fmt.Errorf("compose unavailable: storage service or sheet URL missing")
-	}
-	data, err := s.aiService.downloadImageBytes(ctx, rawURL)
-	if err != nil {
-		return "", "", fmt.Errorf("download raw sheet: %w", err)
-	}
-	src, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return "", "", fmt.Errorf("decode raw sheet: %w", err)
-	}
-
-	srcBounds := src.Bounds()
-	canvasRect := image.Rect(0, 0, srcBounds.Dx(), characterSheetNameMarginPx+srcBounds.Dy())
-	canvas := image.NewRGBA(canvasRect)
-	draw.Draw(canvas, canvasRect, image.NewUniform(color.White), image.Point{}, draw.Src)
-	panelsRect := image.Rect(0, characterSheetNameMarginPx, canvasRect.Max.X, canvasRect.Max.Y)
-	draw.Draw(canvas, panelsRect, src, srcBounds.Min, draw.Src)
-
-	marginRect := image.Rect(0, 0, canvasRect.Max.X, characterSheetNameMarginPx)
-	if drawErr := drawCenteredText(canvas, marginRect, name, characterSheetFontSizePt); drawErr != nil {
-		logger.Errorf("composeCharacterSheet: draw name failed (sheet keeps blank margin): %v", drawErr)
-	}
-
-	var sheetBuf bytes.Buffer
-	if err := jpeg.Encode(&sheetBuf, canvas, &jpeg.Options{Quality: 92}); err != nil {
-		return "", "", fmt.Errorf("encode composed sheet: %w", err)
-	}
-	uploadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	sheetKey := fmt.Sprintf("images/%s.jpg", uuid.New().String())
-	sheetURL, err = s.aiService.storageSvc.Upload(uploadCtx, sheetKey, bytes.NewReader(sheetBuf.Bytes()), int64(sheetBuf.Len()), "image/jpeg")
-	if err != nil {
-		return "", "", fmt.Errorf("upload composed sheet: %w", err)
-	}
-
-	panelWidth := canvasRect.Dx() / characterSheetPanelCount
-	faceX0 := canvasRect.Min.X + panelWidth*(characterSheetPanelCount-1)
-	faceRect := image.Rect(faceX0, characterSheetNameMarginPx, canvasRect.Max.X, canvasRect.Max.Y)
-	faceCrop := canvas.SubImage(faceRect)
-
-	var faceBuf bytes.Buffer
-	if err := jpeg.Encode(&faceBuf, faceCrop, &jpeg.Options{Quality: 92}); err != nil {
-		return sheetURL, "", fmt.Errorf("encode face crop: %w", err)
-	}
-	faceUploadCtx, faceCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer faceCancel()
-	faceKey := fmt.Sprintf("images/face-%s.jpg", uuid.New().String())
-	portraitURL, err = s.aiService.storageSvc.Upload(faceUploadCtx, faceKey, bytes.NewReader(faceBuf.Bytes()), int64(faceBuf.Len()), "image/jpeg")
-	if err != nil {
-		return sheetURL, "", fmt.Errorf("upload face crop: %w", err)
-	}
-	return sheetURL, portraitURL, nil
-}
-
-// GeneratePortrait 基于三视图（threeViewURL 作为 DreamO 参考图）生成单张角色正面半身像。
-// Portrait 比 4 格 ThreeViewSheet 更适合作为分镜生成时 DreamO 的 IP-Adapter 输入：
-//   - 单张图聚焦面部特征，避免模型在多视角间分散注意力
-//   - DreamO 对单人正面半身像提取 embedding 的效果最佳
-//
-// facePrompt 应为面部特写专用提示词（CharacterLook.FacePrompt，与完整外观提示词由
-// GenerateLookVisualPrompt 同一次 AI 调用独立产出，只含身份+面部+发型）；调用方在其为空
-// 时（尚未用新流程重新生成过形象）应传入完整外观提示词兜底。
-//
-// 生成后存入 CharacterLook.Portrait；分镜图片生成时优先使用 Portrait 作为参考。
-func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID uint, name, facePrompt, style, gender, threeViewURL, provider string) (*GeneratedCharacterImage, error) {
-	genderTag, genderNeg := resolveGenderInfo(gender)
-	qualityTokens := resolveStyleQualityTokens(style)
-	condensedFace := condenseVisualPrompt(facePrompt, 40)
-
-	styleType := "other"
-	if style == "realistic" || style == "real_person" {
-		styleType = style
-	}
-	genderPrefix := ""
-	if style == "realistic" || style == "real_person" {
-		genderPrefix = map[string]string{
-			"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
-		}[gender]
-	} else if genderTag != "" {
-		genderPrefix = genderTag + ", "
-	}
-
-	rendered, tplErr := renderPrompt("image_portrait", map[string]interface{}{
-		"StyleType":     styleType,
-		"StyleDesc":     resolveStyleIllustrationDesc(style),
-		"QualityTokens": qualityTokens,
-		"GenderPrefix":  genderPrefix,
-		"GenderNeg":     genderNeg,
-		"CondensedFace": condensedFace,
-	})
-	if tplErr != nil {
-		return nil, fmt.Errorf("render image_portrait: %w", tplErr)
-	}
-	prompt, negativePrompt := splitImagePrompt(rendered)
-
-	// 直接传 threeViewURL（包括相对路径），GenerateCharacterThreeViewMulti 内部会通过
-	// dbMediaReader 或 serverBaseURL 将相对路径转 base64，不在这里提前过滤。
-	refs := []string{}
-	if threeViewURL != "" {
-		refs = []string{threeViewURL}
-	}
-
-	logger.Printf("GeneratePortrait: %s style=%s ref=%v", name, style, threeViewURL != "")
-	// 1024x1024 正方形：规避 768x1024（3:4 竖版）触发模型生成全身站立图像的偏差
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1024x1024", 0)
-	if err != nil {
-		return nil, err
-	}
-	return &GeneratedCharacterImage{URL: url, Description: name + " portrait"}, nil
-}
 
 // ─── CharacterLook methods ────────────────────────────────────────────────────
 
@@ -2506,16 +2175,9 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 		CharacterID:    characterID,
 		NovelID:        novelID,
 		Label:          req.Label,
-		ChapterFrom:    req.ChapterFrom,
-		ChapterTo:      req.ChapterTo,
 		Description:    req.Description,
 		VisualPrompt:   req.VisualPrompt,
-		FacePrompt:     req.FacePrompt,
 		ThreeViewSheet: req.ThreeViewSheet,
-		Portrait:       req.Portrait,
-	}
-	if look.ChapterFrom == 0 {
-		look.ChapterFrom = 1
 	}
 	if err := s.lookRepo.Create(look); err != nil {
 		return nil, err
@@ -2575,7 +2237,6 @@ func (s *CharacterService) upsertDefaultLookVisualPrompt(charID, novelID uint, v
 			CharacterID:  charID,
 			NovelID:      novelID,
 			Label:        "默认形象",
-			ChapterFrom:  1,
 			VisualPrompt: visualPrompt,
 		}
 		if err := s.lookRepo.Create(newLook); err == nil {
@@ -2609,12 +2270,6 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 	if req.Label != nil {
 		look.Label = *req.Label
 	}
-	if req.ChapterFrom != nil {
-		look.ChapterFrom = *req.ChapterFrom
-	}
-	if req.ChapterTo != nil {
-		look.ChapterTo = *req.ChapterTo
-	}
 	if req.SetAsDefault != nil && *req.SetAsDefault {
 		if err := s.characterRepo.UpdateDefaultLookID(look.CharacterID, look.ID); err != nil {
 			return nil, fmt.Errorf("set default look: %w", err)
@@ -2626,14 +2281,8 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 	if req.VisualPrompt != nil {
 		look.VisualPrompt = *req.VisualPrompt
 	}
-	if req.FacePrompt != nil {
-		look.FacePrompt = *req.FacePrompt
-	}
 	if req.ThreeViewSheet != nil {
 		look.ThreeViewSheet = *req.ThreeViewSheet
-	}
-	if req.Portrait != nil {
-		look.Portrait = *req.Portrait
 	}
 	if err := s.lookRepo.Update(look); err != nil {
 		return nil, err
@@ -2673,22 +2322,6 @@ func (s *CharacterService) DeleteLook(id uint) error {
 	return nil
 }
 
-// GetActiveLook 返回指定章节号的激活形象；先按章节范围匹配，无匹配则返回默认形象。
-func (s *CharacterService) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
-	if s.lookRepo == nil {
-		return nil, nil //nolint:nilnil
-	}
-	look, err := s.lookRepo.GetActiveLook(characterID, chapterNo)
-	if err != nil {
-		return nil, err
-	}
-	if look != nil {
-		return look, nil
-	}
-	// Fallback: default look
-	return s.GetDefaultLook(characterID)
-}
-
 // buildWorldviewVisualContext 从世界观中提取与角色外观强相关的字段（地理格局/文明发展
 // 水平、历史时代脉络、文化习俗与服饰传统），供图像提示词生成时保持服装/时代背景与世界观
 // 一致。与 chapter_service.go 的 buildWorldRulesText 不同——那个面向写作叙事约束
@@ -2716,29 +2349,21 @@ func buildWorldviewVisualContext(wv *model.Worldview) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// LookVisualPromptResult 是 GenerateLookVisualPrompt 的结构化返回值：同一次 AI 调用
-// 直接产出两份提示词，FacePrompt 仅含身份+面部+发型，VisualPrompt 含完整外观
-// （服装/鞋履/配饰/姿态等）。两者独立自洽，不互相派生。
+// LookVisualPromptResult 是 GenerateLookVisualPrompt 的结构化返回值。
 type LookVisualPromptResult struct {
 	VisualPrompt string `json:"visual_prompt"`
-	FacePrompt   string `json:"face_prompt"`
 }
 
-// GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像 Prompt。
-// 语言跟随小说 PromptLanguage 设置：zh 输出中文，en 输出英文。
+// GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像 Prompt（固定输出中文）。
 func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantID, characterID uint, lookDesc string) (*LookVisualPromptResult, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
 		return nil, err
 	}
-	promptLanguage := "zh"
 	worldviewContext := ""
 	novelContext := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 			novelContext = strings.TrimSpace(fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description))
 		}
@@ -2752,17 +2377,15 @@ func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantI
 	if lookDesc != "" {
 		extraSection = lookDesc
 	}
-	// GenderAnchor：与 GenerateCostumeDesign 合并前保持一致的性别锚定标签，让 face_prompt/
-	// visual_prompt 都以该 tag 开头，提升扩散模型对角色性别的稳定还原。
-	genderAnchor := "1person"
+	// GenderAnchor：性别锚定标签，让 visual_prompt 以该 tag 开头，提升扩散模型对角色性别的稳定还原。
+	genderAnchor := "人物"
 	switch char.Meta.Gender {
 	case "male":
-		genderAnchor = "1boy"
+		genderAnchor = "男孩"
 	case "female":
-		genderAnchor = "1girl"
+		genderAnchor = "女孩"
 	}
 	sysPrompt, err := renderPrompt("character_visual_prompt", map[string]interface{}{
-		"PromptLanguage":   promptLanguage,
 		"WorldviewContext": worldviewContext,
 		"NovelContext":     novelContext,
 		"BasePrompt":       basePrompt,
@@ -2787,195 +2410,18 @@ func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantI
 		return nil, fmt.Errorf("parse character_visual_prompt JSON: %w", err)
 	}
 	parsed.VisualPrompt = strings.TrimSpace(parsed.VisualPrompt)
-	parsed.FacePrompt = strings.TrimSpace(parsed.FacePrompt)
 	if parsed.VisualPrompt == "" {
 		return nil, fmt.Errorf("character_visual_prompt: empty visual_prompt in AI response")
 	}
 	return &parsed, nil
 }
 
-// chapterAppearanceResult AI 返回的角色形象更新结果
-type chapterAppearanceResult struct {
-	VisualPrompt string `json:"visual_prompt"`
-	Description  string `json:"description"`
-}
-
-// GenerateChapterImages 根据章节内容，用 AI 重写选定角色的视觉描述（visual_prompt + description），并生成形象图片。
-// 返回 (succeeded, failed, error)。
-func (s *CharacterService) GenerateChapterImages(
-	ctx context.Context,
-	tenantID, novelID uint,
-	chapter *model.Chapter,
-	characterIDs []uint,
-	provider string,
-	progressFn func(int),
-) (succeeded, failed int, err error) {
-	all, e := s.characterRepo.ListByNovel(novelID)
-	if e != nil {
-		return 0, 0, fmt.Errorf("list characters: %w", e)
-	}
-	idSet := make(map[uint]bool, len(characterIDs))
-	for _, id := range characterIDs {
-		idSet[id] = true
-	}
-	var chars []*model.Character
-	for _, c := range all {
-		if idSet[c.ID] {
-			chars = append(chars, c)
-		}
-	}
-	if len(chars) == 0 {
-		return 0, 0, nil
-	}
-
-	promptLanguage := "zh"
-	imageStyle := ""
-	worldviewContext := ""
-	var novelTitle string
-	if s.novelRepo != nil {
-		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
-			imageStyle = novel.AIConfig.ImageStyle
-			novelTitle = novel.Title
-			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
-		}
-	}
-
-	imgSvc := NewImageGenerationService(s.aiService)
-	total := len(chars)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var done int
-
-	for _, char := range chars {
-		char := char
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			charFailed := false
-
-			// 已有面部参考图 + 三视图时跳过：无需再花一次 LLM 提取 + 两次图片生成的成本去
-			// 重新生成用户已经拥有的图片。
-			if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil &&
-				existingLook.Portrait != "" && existingLook.ThreeViewSheet != "" {
-				mu.Lock()
-				succeeded++
-				done++
-				cur := done
-				mu.Unlock()
-				if progressFn != nil && total > 0 {
-					progressFn(cur * 99 / total)
-				}
-				return
-			}
-
-			baseDesc := char.Description
-			promptText, renderErr := renderPrompt("chapter_character_appearance", map[string]interface{}{
-				"CharacterName":        char.Name,
-				"CharacterDescription": baseDesc,
-				"ChapterContent":       truncateForPrompt(chapter.Content, 4000),
-				"PromptLanguage":       promptLanguage,
-				"WorldviewContext":     worldviewContext,
-			})
-			if renderErr != nil {
-				logger.Errorf("[CharacterService] GenerateChapterImages render char %d: %v", char.ID, renderErr)
-				charFailed = true
-			} else {
-				result, llmErr := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_character_appearance",
-					promptText, "")
-				if llmErr != nil {
-					logger.Errorf("[CharacterService] GenerateChapterImages LLM char %d (%s): %v", char.ID, char.Name, llmErr)
-					charFailed = true
-				} else {
-					cleaned := extractJSON(strings.TrimSpace(result))
-					var res chapterAppearanceResult
-					if jsonErr := json.Unmarshal([]byte(cleaned), &res); jsonErr != nil {
-						logger.Errorf("[CharacterService] GenerateChapterImages parse char %d: %v raw=%q", char.ID, jsonErr, result)
-						charFailed = true
-					} else {
-						if res.Description != "" {
-							updateReq := &model.UpdateCharacterRequest{Name: char.Name, Description: res.Description}
-							if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
-								logger.Errorf("[CharacterService] GenerateChapterImages save char %d: %v", char.ID, saveErr)
-								charFailed = true
-							}
-						}
-						if res.VisualPrompt != "" {
-							s.upsertDefaultLookVisualPrompt(char.ID, char.NovelID, res.VisualPrompt)
-
-							// 生成实际图片：面部特写 + 三视图
-							genCtx := ctx
-							if novelTitle != "" {
-								genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
-							}
-							appearance := res.VisualPrompt
-							gender := InferGenderTag(appearance, res.Description)
-
-							lookUpdateReq := &model.UpdateCharacterLookRequest{}
-							needUpdate := false
-
-							// 使用现有 portrait/face_prompt 作为参考（如有）
-							existingPortrait := ""
-							existingFacePrompt := ""
-							if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil {
-								existingPortrait = existingLook.Portrait
-								existingFacePrompt = existingLook.FacePrompt
-							}
-							// 一次调用同时生成三视图+面部参考图（同框合图，第4格自动裁剪为 Portrait）
-							if sheet, sheetErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, existingFacePrompt, imageStyle, gender, existingPortrait, provider); sheetErr == nil {
-								lookUpdateReq.ThreeViewSheet = &sheet.SheetURL
-								needUpdate = true
-								if sheet.PortraitURL != "" {
-									lookUpdateReq.Portrait = &sheet.PortraitURL
-								}
-							} else {
-								logger.Errorf("[CharacterService] GenerateChapterImages character sheet for char %d (%s): %v", char.ID, char.Name, sheetErr)
-							}
-
-							if needUpdate {
-								if defaultLook, e3 := s.GetDefaultLook(char.ID); e3 == nil && defaultLook != nil {
-									if _, saveErr := s.UpdateLook(defaultLook.ID, lookUpdateReq); saveErr != nil {
-										logger.Errorf("[CharacterService] GenerateChapterImages save look %d: %v", defaultLook.ID, saveErr)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			mu.Lock()
-			if charFailed {
-				failed++
-			} else {
-				succeeded++
-			}
-			done++
-			cur := done
-			mu.Unlock()
-			if progressFn != nil && total > 0 {
-				progressFn(cur * 99 / total)
-			}
-		}()
-	}
-	wg.Wait()
-	logger.Printf("[CharacterService] GenerateChapterImages done: novelID=%d chapterNo=%d succeeded=%d failed=%d",
-		novelID, chapter.ChapterNo, succeeded, failed)
-	return succeeded, failed, nil
-}
-
 // GenerateCostumeDesign 基于角色描述和世界观背景，AI 生成符合时代背景的统一形象提示词。
-// 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook 的 VisualPrompt/FacePrompt。
+// 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook 的 VisualPrompt。
 //
 // 复用 GenerateLookVisualPrompt 的同一次 AI 调用（同一模板 character_visual_prompt.j2，已
 // 合并原 character_costume_design.j2 的人种/时代/身份/分层设计规则），不再单独渲染模板、
-// 单独调用 LLM——原先两套独立实现除了都要求"根据角色描述+世界观生成形象提示词"外，
-// 世界观上下文的取材范围、人种/时代规则的详细程度都不一致，且本方法从不产出 face_prompt，
-// 导致只用过"设计"入口（这里）而没点过"形象提示词"入口的角色，永远无法生成面部特写图
-// （见 task_resume.go look_image_gen 里 "该形象还没有面部专用提示词" 的报错）。合并后两个
-// 入口共享同一次生成结果，此方法只负责其特有的落库位置（AppearancePrompt 字段）。
+// 单独调用 LLM。此方法只负责其特有的落库位置（AppearancePrompt 字段）。
 func (s *CharacterService) GenerateCostumeDesign(ctx context.Context, tenantID, characterID uint) (string, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
@@ -2996,19 +2442,10 @@ func (s *CharacterService) GenerateCostumeDesign(ctx context.Context, tenantID, 
 		logger.Errorf("[GenerateCostumeDesign] update char %d AppearancePrompt: %v", characterID, err)
 	}
 
-	// 同步更新默认 look 的 VisualPrompt + FacePrompt（确保 look-based 生成路径也受益，
-	// 包括之前该方法从未提供过的面部特写专用提示词）
+	// 同步更新默认 look 的 VisualPrompt（确保 look-based 生成路径也受益）
 	s.upsertDefaultLookVisualPrompt(characterID, char.NovelID, result.VisualPrompt)
-	if result.FacePrompt != "" && s.lookRepo != nil {
-		if defaultLook, e := s.GetDefaultLook(characterID); e == nil && defaultLook != nil {
-			defaultLook.FacePrompt = result.FacePrompt
-			if e := s.lookRepo.Update(defaultLook); e != nil {
-				logger.Errorf("[GenerateCostumeDesign] update look %d FacePrompt: %v", defaultLook.ID, e)
-			}
-		}
-	}
 
-	logger.Printf("[GenerateCostumeDesign] charID=%d generated visual=%d chars face=%d chars",
-		characterID, len(result.VisualPrompt), len(result.FacePrompt))
+	logger.Printf("[GenerateCostumeDesign] charID=%d generated visual=%d chars",
+		characterID, len(result.VisualPrompt))
 	return result.VisualPrompt, nil
 }

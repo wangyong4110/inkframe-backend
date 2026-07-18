@@ -258,7 +258,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 
 	// 1. 提取结构化标签：始终通过 LLM 分析，规则兜底
 	logger.Printf("[SFXService] shot %d calling AI analyze", shot.ID)
-	tagItems, analyzeErr := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", "")
+	tagItems, analyzeErr := s.analyzeSingleShotSFX(ctx, shot, tenantID, "")
 	if analyzeErr != nil || len(tagItems) == 0 {
 		if analyzeErr != nil {
 			logger.Errorf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, analyzeErr)

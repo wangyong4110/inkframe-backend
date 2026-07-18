@@ -13,36 +13,18 @@
 3. role 只能是：protagonist / antagonist / supporting
 4. gender：性别，只能是 male / female / neutral 之一
 5. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
-{% if PromptLanguage == "en" %}6. description (English): background story only — origin, key experiences, motivations, and how they became who they are. One coherent paragraph, 150 words max{% else %}6. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内{% endif %}
-{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words but strictly no more than 700 characters total (some image models hard-reject longer prompts), covering 12 dimensions in order. No art style, quality, or rendering tags. No violent, gory, death-related, or sexually explicit content.{% if GenreVisualHints %} {{ GenreVisualHints }}{% endif %}
-
-   [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
-   [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
-   [3] EYES: eye shape, size, iris color (precise hue), default gaze quality
-   [4] BROWS (natural): shape, density, color; natural lash length — no cosmetics
-   [5] NOSE & LIPS: bridge height, tip shape, nostril width; lip fullness, cupid's bow, bare lip color and texture
-   [6] SKIN: precise tone, surface finish, birthmarks or natural distinguishing marks only
-   [7] HAIR: color and treatment, texture, density, length, styling, bangs
-   [8] OUTFIT (layer by layer): each garment — type, cut, neckline, sleeves, hem, fabric, colors, decorative details
-   [9] FOOTWEAR: type, heel, material, color
-   [10] ACCESSORIES & CARRIED ITEMS: each item — name, material, style, placement; for weapons/implements describe visual form and ornamentation only
-   [11] POSTURE: default standing pose, hand position, characteristic tilt
-   [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/finish/placement{% else %}5. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止画风/质量/渲染标签。
+6. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内
+5. visual_prompt（中文）：图像生成提示词，约60-100字，严格不超过500个字符（部分图像模型会直接拒绝过长的提示词），只覆盖以下 7 项内容，按此顺序，不要涉及其他内容。禁止画风/质量/渲染标签——这些由生成流程另行注入。
    ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。
 {% if GenreVisualHints %}   {{ GenreVisualHints }}
 {% endif %}
-   [1] 性别体型：性别、年龄感、种族、身高、体型、肩宽、腰臀比
-   [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
-   [3] 眼睛：眼型、大小、精确瞳色、默认目光质感
-   [4] 眉毛（自然）：眉形、密度、眉色；自然睫毛形态——禁止任何妆容描述
-   [5] 鼻唇：鼻梁高度、鼻头形态、鼻翼；唇厚、唇峰、裸唇色与质感
-   [6] 肤色：精确肤色描述词、肤感，仅可写先天性标记（痣、胎记）
-   [7] 发型：发色与处理方式、发质、发量、发长、造型方式、刘海
-   [8] 服装（逐层）：每件——品类、廓形、领口、袖型、下摆、面料、颜色、装饰细节
-   [9] 鞋履：鞋型、跟高、材质、颜色
-   [10] 配饰与随身物件：逐件描述外观——名称、材质、风格、佩戴位置
-   [11] 体态：默认站姿、手部位置、特征性倾斜
-   [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/光泽/位置{% endif %}
+   [1] 身高：具体估值（如"178cm"）或明确的身高印象（高大/中等/矮小）
+   [2] 头身比：体型比例风格（如"8头身英雄比例"用于偏动漫/插画风格，或"真实成人比例"用于写实风格）
+   [3] 人种：人类角色必填；非人类种族则描述其种族特征
+   [4] 体型：体格/身形，以及标志性的姿态或气质
+   [5] 发型：颜色、长度、发质、造型
+   [6] 面部特征：脸型、眼睛（形状/颜色/神韵）、眉型、鼻型、唇型、下颌线、显著标记、惯常表情
+   [7] 服饰与道具：所穿服装（符合时代背景），以及任何标志性随身物件或武器（如有，须点名）
 7. 若信息不足，结合小说类型和角色定位合理推断，不要留空
 8. 严格输出 JSON 数组，不含任何说明文字
 
@@ -54,32 +36,6 @@
     "gender": "male",
     "age": "约20岁",
     "description": "出身修仙世家，自幼被视为天才传人，却在十六岁那年遭至亲与同门联手背叛，家族覆灭，身负重伤流亡天涯。此后独自修行，以复仇为唯一支柱，游历各地历经磨砺，逐渐掌握失传已久的天罚剑诀。数年追查真相的过程中，他意外发现背叛背后另有更大阴谋，复仇的目标从个人恩怨扩展至整个修仙界的黑暗势力。",
-    "visual_prompt": "{% if PromptLanguage == "en" %}young male cultivator, appears early-to-mid 20s, East Asian facial features. Tall lean build, approximately 185 cm, broad shoulders tapering to a narrow waist, long limbs with understated lean muscle.
-
-Facial structure: sharply angular oval face with slightly elongated proportions, prominent high cheekbones, clean defined jawline, pointed chin, standard eye spacing. Skin: cool porcelain complexion, smooth satin finish, flawless and nearly luminous, no visible blemishes.
-
-Eyes: long narrow phoenix eyes with a natural outer-corner upswept angle, pure black irises with deep obsidian tone, iris catches light with a faint icy gleam, default gaze is cold and distant yet acutely perceptive. Brows: straight bold sword-brows, thick even density, dark black, sitting high with a slight natural arch at the outer third, no filling or shaping product visible — natural refined look. No eye makeup.
-
-Nose: high and defined straight bridge, refined pointed tip, narrow nostrils. Lips: medium fullness, clearly defined cupid's bow, corners naturally neutral, lips in bare natural tone, faint cool-rose hue, matte finish with natural skin texture.
-
-Hair: long silky midnight-black hair, uniform deep blue-black tone with no highlights, bone-straight glossy texture, reaches lower back, loosely gathered at the nape with a slender white jade hairpin — most of the hair flows freely down the back with a few loose strands falling across the left cheek and forehead. Clean straight hairline, no bangs.
-
-Attire: flowing three-layer ensemble — innermost is a silver-grey fitted inner robe with stand collar; mid-layer is a white wide-sleeved over-robe in matte heavy silk with subtle cloud-and-lightning embroidery in fine silver thread along cuffs, hem and collar edge; cinched at the waist with a narrow pale grey satin sash tied in a flat bow at the front. Ancient straight sword in a plain black lacquer scabbard with minimal fittings suspended from the left hip sash. White flat cultivation boots in smooth matte leather, low profile.
-
-Accessories: single white jade thumb ring on the right hand, surface polished to a warm satin glow — no other adornment. Posture: perfectly upright, weight balanced, right hand relaxed at side, left hand resting with fingertips lightly touching the sword hilt. Color story: primary color — matte white (~60% of the look, outer robe) / secondary color — silver-grey (~30%, inner robe and sash, cool metallic undertone) / accent — deep black (~10%, sword scabbard and lacquer details); the palette reads as ascetic purity with restrained authority, deliberately avoiding warmth. Overall silhouette: elongated column with shoulder-wide top — a vertical line interrupted only by the sword's diagonal. Signature iconic element: a slender white jade hairpin, the single ornament worn, holding the entire length of black hair loosely at the nape — understated to the point of near-austerity, yet unmistakably aristocratic. Styling narrative: the white-and-grey ensemble is not innocence but chosen distance — a cultivator who refuses the world's colors. Every element is stripped to its essential form: no embellishment without purpose, no softness that invites approach. The sword at the hip is the only thing that names him for what he is.{% else %}年轻男性修仙者，年龄感二十出头，东亚面孔，身高约185厘米，高挑精瘦体型，宽肩窄腰，四肢修长，肌肉线条内敛有力。
-
-面部骨骼：棱角分明的偏长鹅蛋脸，三庭均衡微偏长，颧骨高而立体，下颌线清晰锋利，下巴略尖，眼距标准。肤色：冷调瓷白，肌肤质感如绸缎，近乎透亮无瑕，无明显毛孔或瑕疵。
-
-眼睛：细长丹凤眼，外眼角自然上扬，瞳色纯黑如深邃漆器，瞳孔边缘隐有冷光折射，默认目光凌厉疏远却锐利洞察。眉毛：平直剑眉，眉毛浓密均匀，眉色深黑，眉头直起、眉峰位于眉尾三分之一处有轻微自然弧度，无修饰痕迹，自然而硬朗。无眼妆。
-
-鼻部：鼻梁高挺笔直，鼻头精致略尖，鼻翼细窄。唇部：唇厚适中，唇峰线条清晰，唇角自然平中，唇色为裸色自然调，隐隐带冷玫瑰色调，哑光质感。
-
-发型：及腰的漆黑长直发，发色为统一的深蓝黑色调无挑染，发丝顺滑光泽感强，发质骨直细腻，大部分散落背后，以一根细白玉簪在颈后松松束住，额前与左颊各有几缕自然垂落的碎发。发际线平直清晰，无刘海。
-
-服装：三层叠穿——最内层为银灰色立领贴身内衫；中层为白色宽袖外袍，哑面重磅真丝质感，袖口、领边与下摆绣有细密银色云雷纹刺绣；腰间以浅灰缎带束腰，前方系平结。左腰悬黑漆素鞘古直剑，剑装简朴无华。白色平底修仙靴，哑面光滑皮质，低调利落。
-
-配饰：右手单枚白玉扳指，表面打磨至温润哑光泽，无其他装饰。体态：挺拔端正，重心平稳，右手自然垂落，左手指尖轻搭剑柄。
-
-色彩叙事：主色——哑面纯白（约60%，外袍主体，禁欲克制）/辅色——银灰（约30%，内衫与腰带，冷金属调）/点缀色——深黑（约10%，剑鞘与漆器细节）；整套配色拒绝温度感，以苍白与寒铁的组合塑造出超然物外的修仙者孤峻美学。整体廓形：肩宽腰直的修长立柱形，仅腰间长剑打破垂直线条，形成单一斜向张力。标志性造型元素：颈后松束全发的那根细白玉簪——整套造型唯一的装饰品，极简到接近苦修，却因玉质与手法透出不可撼动的贵族气息。造型逻辑：一身白并非纯洁，而是刻意的疏离——一个拒绝融入人间色彩的修仙者的宣言。每一个造型元素都被剥除至最本质的形式，没有无意义的装饰，没有邀请亲近的柔软，腰间那把剑是唯一在说他是什么人的东西。{% endif %}"
+    "visual_prompt": "身高约185厘米，真实成人比例，东亚面孔，高挑精瘦体型，肌肉线条内敛有力，站姿挺拔端正。及腰漆黑长直发，颈后以一根白玉簪松松束起。棱角分明的偏长鹅蛋脸，颧骨高而立体，细长丹凤眼瞳色纯黑，目光凌厉疏远，剑眉平直。三层叠穿白色与银灰云纹真丝长袍，腰束缎带，左腰悬黑漆素鞘古剑，白色平底修仙靴。"
   }
 ]

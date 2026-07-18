@@ -284,6 +284,10 @@ func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 		if len(allowedOrigins) == 0 || originSet[origin] {
 			// 允许该来源：返回实际 origin（而非通配符），以兼容带凭据的请求
 			c.Header("Access-Control-Allow-Origin", origin)
+			// 前端 useNovelEvents.ts 用 withCredentials:true 打开 SSE 长连接，
+			// 浏览器要求响应必须带上这个头（且 Allow-Origin 不能是通配符）才会放行；
+			// 之前一直缺失，导致该连接被 CORS 拦截（页面上表现为持续的"保存失败"提示）。
+			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Request-ID")

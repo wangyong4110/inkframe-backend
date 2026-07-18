@@ -4514,7 +4514,7 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 
 	_ = w.Write([]string{
 		"shot_no", "description", "dialogue", "narration",
-		"duration_s", "camera_type", "shot_size",
+		"duration_s", "camera_type",
 		"image_url", "video_url",
 	})
 
@@ -4526,7 +4526,6 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 			shot.Narration,
 			strconv.FormatFloat(shot.Duration, 'f', 2, 64),
 			shot.CamDir.CameraType,
-			shot.CamDir.ShotSize,
 			shot.ImageURL,
 			shot.VideoURL,
 		})
@@ -4567,7 +4566,7 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 
 	headers := []string{
 		"镜号", "画面描述", "旁白", "台词", "字幕", "时长(秒)",
-		"镜头类型", "景别", "机位角度", "转场",
+		"镜头类型", "转场",
 		"角色", "道具", "场景锚点", "场景描述",
 	}
 	for i, h := range headers {
@@ -4662,8 +4661,6 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 			shot.GenMeta.Subtitle,
 			shot.Duration,
 			shot.CamDir.CameraType,
-			shot.CamDir.ShotSize,
-			shot.CamDir.CameraAngle,
 			shot.CamDir.Transition,
 			strings.Join(characters, "、"),
 			strings.Join(items, "、"),
@@ -4677,7 +4674,7 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 	}
 
 	// 描述/台词类文本列加宽，避免默认列宽下内容被截断
-	for _, col := range []string{"B", "C", "D", "E", "K", "L", "N"} {
+	for _, col := range []string{"B", "C", "D", "E", "I", "J", "L"} {
 		_ = f.SetColWidth(sheet, col, col, 32)
 	}
 

@@ -15,7 +15,7 @@ import (
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，返回 tag 列表。
 // 输出格式：[{"tag":"...","type":"action|ambient|emotion","prompt":"..."}, ...]
 // tag 字段始终输出英文（最多 3 词），prompt 字段为中文自然语言（供 Kling SFX / AudioLDM 使用）。
-func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) ([]sfxTagItem, error) {
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) ([]sfxTagItem, error) {
 	// 过渡闪切镜头（< 1s）直接跳过 AI 调用
 	if shot.Duration < 1.0 {
 		return nil, nil
@@ -25,9 +25,6 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	var sceneCtx strings.Builder
 	fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
 	fmt.Fprintf(&sceneCtx, "时长：%.1f 秒\n", shot.Duration)
-	if shot.CamDir.ShotSize != "" {
-		fmt.Fprintf(&sceneCtx, "景别：%s\n", shot.CamDir.ShotSize)
-	}
 	if shot.CamDir.CameraType != "" && shot.CamDir.CameraType != "static" {
 		fmt.Fprintf(&sceneCtx, "运镜：%s\n", shot.CamDir.CameraType)
 	}
@@ -47,9 +44,8 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		fmt.Fprintf(&sceneCtx, "额外背景（最高优先级）：%s\n", userContext)
 	}
 
-	// 时长策略 & 景别 & 运镜
+	// 时长策略 & 运镜
 	durationStrategy := buildDurationStrategy(shot.Duration)
-	sizeGuide := shotSizeGuide(shot.CamDir.ShotSize)
 	motionSection := ""
 	if mg := cameraMotionGuide(shot.CamDir.CameraType); mg != "" {
 		motionSection = "**运镜**：" + mg
@@ -57,7 +53,6 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 	prompt, err := renderPrompt("sfx_analyze", map[string]interface{}{
 		"DurationStrategy": durationStrategy,
-		"SizeGuide":        sizeGuide,
 		"MotionSection":    motionSection,
 		"SceneContext":     sceneCtx.String(),
 	})
@@ -131,11 +126,11 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 // AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词。
 // force=true 时强制重新分析所有镜头；force=false 时跳过已有 SFX 条目的镜头。
 // 每个分镜独立分析，并发度最多 15，单个失败不影响其余镜头。
-func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string, force bool) error {
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, force bool) error {
 	if len(shots) == 0 {
 		return nil
 	}
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (lang=%s force=%v)", len(shots), promptLanguage, force)
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (force=%v)", len(shots), force)
 
 	const maxConcurrency = 15
 	sem := make(chan struct{}, maxConcurrency)
@@ -159,7 +154,7 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		go func(sh *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext, promptLanguage)
+			_, err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext)
 			if err != nil {
 				logger.Errorf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
 				failed.Add(1)

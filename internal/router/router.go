@@ -40,6 +40,7 @@ type Config struct {
 	TaskHandler        *handler.TaskHandler
 	MediaHandler       *handler.MediaHandler
 	SceneAnchorHandler *handler.SceneAnchorHandler
+	ScreenplayHandler  *handler.ScreenplayHandler
 	SystemHandler      *handler.SystemHandler
 	FsHandler          *handler.FsHandler
 	RewriteHandler     *handler.RewriteHandler
@@ -67,6 +68,7 @@ type Config struct {
 	SensitiveWordHandler   *handler.SensitiveWordHandler
 	FeedbackHandler        *handler.FeedbackHandler
 	DramaTemplateHandler   *handler.DramaTemplateHandler
+	ImageStylePresetHandler *handler.ImageStylePresetHandler
 }
 
 // SetupRouter 配置路由
@@ -320,6 +322,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 视频
 			novels.GET("/:id/videos", cfg.VideoHandler.ListVideos)
 			novels.POST("/:id/videos", cfg.VideoHandler.CreateVideo)
+			novels.GET("/:id/episodes-summary", cfg.VideoHandler.ListEpisodeSummaries)
 
 			// 从已有小说生成视频
 			novels.POST("/:id/generate-video", cfg.ImportHandler.GenerateVideoFromNovel)
@@ -362,7 +365,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
 			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
 			novels.POST("/:id/chapters/:chapter_no/characters/ai-extract", cfg.CharacterHandler.AIExtractMinorCharacters)
-			novels.POST("/:id/chapters/:chapter_no/characters/generate-images", cfg.CharacterHandler.GenerateChapterCharacterImages)
 
 			// 剧情点（小说级）
 			if cfg.PlotPointHandler != nil {
@@ -470,6 +472,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/ignored-issues", cfg.ChapterHandler.IgnoreChapterIssue)
 			chapters.DELETE("/:id/ignored-issues/:iid", cfg.ChapterHandler.UnignoreChapterIssue)
 
+			// 分场剧本
+			chapters.POST("/:id/screenplay/generate", cfg.ScreenplayHandler.GenerateScreenplay)
+			chapters.GET("/:id/screenplay", cfg.ScreenplayHandler.ListScreenplayScenes)
+
 			// 大纲审查
 			if cfg.OutlineReviewHandler != nil {
 				chapters.POST("/:id/outline-review", cfg.OutlineReviewHandler.ReviewChapter)
@@ -545,6 +551,14 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				sceneAnchors.POST("/:id/ai-analyze", cfg.SceneAnchorHandler.AIAnalyzeSceneAnchor)
 				sceneAnchors.POST("/:id/edit-ref-image", cfg.SceneAnchorHandler.EditRefImage)
 				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
+			}
+
+			screenplayScenes := v1.Group("/screenplay-scenes")
+			{
+				screenplayScenes.PUT("/:id", cfg.ScreenplayHandler.UpdateScreenplayScene)
+				screenplayScenes.PUT("/:id/lock", cfg.ScreenplayHandler.LockScreenplayScene)
+				screenplayScenes.DELETE("/:id", cfg.ScreenplayHandler.DeleteScreenplayScene)
+				screenplayScenes.POST("/:id/regenerate-storyboard", cfg.ScreenplayHandler.RegenerateSceneStoryboard)
 			}
 		}
 
@@ -670,6 +684,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/items", cfg.VideoHandler.SetShotItems)
 			// 绑定变化后手动同步提示词
 			videos.POST("/:id/shots/:shot_id/regenerate-prompt", cfg.VideoHandler.RegenerateShotPrompt)
+			// 分镜历次生成的图片/视频素材（视频生成历史面板）
+			videos.GET("/:id/shots/:shot_id/asset-history", cfg.VideoHandler.ListShotAssetHistory)
+			videos.POST("/:id/shots/:shot_id/asset-history/:asset_id/restore", cfg.VideoHandler.RestoreShotAsset)
 		}
 
 		// 分镜
@@ -741,6 +758,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				dt.POST("", cfg.DramaTemplateHandler.CreateTemplate)
 				dt.PUT("/:id", cfg.DramaTemplateHandler.UpdateTemplate)
 				dt.DELETE("/:id", cfg.DramaTemplateHandler.DeleteTemplate)
+			}
+		}
+
+		// 画风预设（风格库）
+		if cfg.ImageStylePresetHandler != nil {
+			isp := v1.Group("/image-style-presets")
+			{
+				isp.GET("", cfg.ImageStylePresetHandler.ListImageStylePresets)
+				isp.GET("/:id", cfg.ImageStylePresetHandler.GetImageStylePreset)
+				isp.POST("", cfg.ImageStylePresetHandler.CreateImageStylePreset)
+				isp.PUT("/:id", cfg.ImageStylePresetHandler.UpdateImageStylePreset)
+				isp.DELETE("/:id", cfg.ImageStylePresetHandler.DeleteImageStylePreset)
 			}
 		}
 

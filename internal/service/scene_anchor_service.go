@@ -89,20 +89,14 @@ func (s *SceneAnchorService) UnbindChapterAnchor(chapterID, anchorID uint) error
 
 // CreateSceneAnchorReq 创建请求
 type CreateSceneAnchorReq struct {
-	Name           string `json:"name" binding:"required"`
-	Type           string `json:"type"`
-	Description    string `json:"description"`
-	Variant        string `json:"variant"`
-	ParentAnchorID *uint  `json:"parent_anchor_id"`
+	Name        string `json:"name" binding:"required"`
+	Description string `json:"description"`
 }
 
 // UpdateSceneAnchorReq 更新请求
 type UpdateSceneAnchorReq struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Description    string `json:"description"`
-	Variant        string `json:"variant"`
-	ParentAnchorID *uint  `json:"parent_anchor_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 func (s *SceneAnchorService) GetByID(id uint) (*model.SceneAnchor, error) {
@@ -127,10 +121,7 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 			return nil, fmt.Errorf("restore soft-deleted scene anchor: %w", err)
 		}
 		existing.DeletedAt.Valid = false
-		existing.Type = req.Type
 		existing.Description = req.Description
-		existing.Variant = req.Variant
-		existing.ParentAnchorID = req.ParentAnchorID
 		// 清空旧的参考图：用户是在创建一个"新"场景（只是复用了同名的旧行），不应该带着
 		// 已删除锚点残留的参考图，否则画面和新填的描述对不上。
 		existing.RefImageURL = ""
@@ -142,12 +133,9 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 	}
 
 	anchor := &model.SceneAnchor{
-		NovelID:        novelID,
-		Name:           req.Name,
-		Type:           req.Type,
-		Description:    req.Description,
-		Variant:        req.Variant,
-		ParentAnchorID: req.ParentAnchorID,
+		NovelID:     novelID,
+		Name:        req.Name,
+		Description: req.Description,
 	}
 	if err := s.repo.Create(anchor); err != nil {
 		return nil, err
@@ -155,21 +143,18 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 	return anchor, nil
 }
 
-// GenerateSceneAnchorInfo 根据场景名称、类型、变体（及用户可选的草稿描述提示）AI 生成场景的视觉描述。
+// GenerateSceneAnchorInfo 根据场景名称（及用户可选的草稿描述提示）AI 生成场景的视觉描述。
 // 用于"新建场景"弹窗的一键填充：不依赖章节内容，仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 Create 创建。
 // 生成的 description 会直接作为 image_scene_ref 模板生成参考图时的核心视觉约束注入 prompt（见 GenerateRefImage），
 // 因此要求覆盖建筑/材质/色彩/光线等视觉维度，而非叙事性文字。
-func (s *SceneAnchorService) GenerateSceneAnchorInfo(tenantID, novelID uint, name, sceneType, variant, userHint string) (string, error) {
-	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+func (s *SceneAnchorService) GenerateSceneAnchorInfo(tenantID, novelID uint, name, userHint string) (string, error) {
+	novelTitle, novelGenre := novelPromptContext(s.novelRepo, novelID)
 
 	rendered, tplErr := renderPrompt("generate_scene_anchor_info", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"AnchorName":     name,
-		"SceneType":      sceneType,
-		"Variant":        variant,
-		"UserHint":       userHint,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle": novelTitle,
+		"Genre":      novelGenre,
+		"AnchorName": name,
+		"UserHint":   userHint,
 	})
 	if tplErr != nil {
 		return "", fmt.Errorf("render generate_scene_anchor_info: %w", tplErr)
@@ -200,21 +185,12 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 	if req.Name != "" {
 		anchor.Name = req.Name
 	}
-	if req.Type != "" {
-		anchor.Type = req.Type
-	}
 	if req.Description != "" {
 		logger.Printf("[SceneAnchorService] Update id=%d: description BEFORE len=%d prev=%.120q", id, len(anchor.Description), anchor.Description)
 		logger.Printf("[SceneAnchorService] Update id=%d: description AFTER  len=%d new=%.120q", id, len(req.Description), req.Description)
 		anchor.Description = req.Description
 	} else {
 		logger.Printf("[SceneAnchorService] Update id=%d: req.Description is empty, NOT updated (DB has len=%d val=%.80q)", id, len(anchor.Description), anchor.Description)
-	}
-	if req.Variant != "" {
-		anchor.Variant = req.Variant
-	}
-	if req.ParentAnchorID != nil {
-		anchor.ParentAnchorID = req.ParentAnchorID
 	}
 	if err := s.repo.Update(anchor); err != nil {
 		return nil, err
@@ -306,7 +282,7 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	anchorName = anchor.Name
 	fragment := anchor.Description
 	if anchor.Name != "" && fragment != "" {
-		fragment = fmt.Sprintf("[scene: %s] %s", anchor.Name, fragment)
+		fragment = fmt.Sprintf("[场景：%s] %s", anchor.Name, fragment)
 	}
 	// 追加 PromptLock 锁定关键词（风格/色调/光线等约束）
 	if anchor.PromptLock != "" {
@@ -328,11 +304,8 @@ func (s *SceneAnchorService) SetShotAnchor(shotID uint, anchorID *uint) error {
 // extractedAnchor LLM 返回的 JSON 锚点结构
 type extractedAnchor struct {
 	Name        string `json:"name"`
-	Type        string `json:"type"`
 	Description string `json:"description"`
-	PromptLock  string `json:"prompt_lock"`  // 视觉锁定词，逗号分隔，注入每个分镜 prompt
-	Variant     string `json:"variant"`      // day/night/winter/battle 等变体标签
-	ParentName  string `json:"parent_name"`  // 父级锚点名称（变体时填写，用于解析 ParentAnchorID）
+	PromptLock  string `json:"prompt_lock"` // 视觉锁定词，逗号分隔，注入每个分镜 prompt
 }
 
 // extractAnchorResponse 是新版 LLM 返回格式
@@ -425,20 +398,11 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d existingAnchors=%d names=%v",
 		novelID, len(existing), existingNameList)
 
-	// 获取提示词语言配置
-	promptLanguage := "zh"
-	if s.novelRepo != nil {
-		if novel, nErr := s.novelRepo.GetByID(novelID); nErr == nil && novel.AIConfig.PromptLanguage != "" {
-			promptLanguage = novel.AIConfig.PromptLanguage
-		}
-	}
-
 	// 渲染 prompt
 	anchorPrompt, err := renderPrompt("scene_anchor_extract", map[string]interface{}{
 		"NovelTitle":      novelTitle,
 		"ExistingAnchors": existingEntries,
 		"ChapterContent":  truncateForPrompt(chapterContent, 8000),
-		"PromptLanguage":  promptLanguage,
 		"UserPrompt":      userPrompt,
 	})
 	if err != nil {
@@ -480,32 +444,17 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			logger.Printf("[SceneAnchorService] ExtractFromChapter: skip duplicate anchor %q", e.Name)
 			continue
 		}
-		anchorType := e.Type
-		if anchorType == "" {
-			anchorType = "exterior"
-		}
 		anchor := &model.SceneAnchor{
 			NovelID:     novelID,
 			Name:        e.Name,
-			Type:        anchorType,
 			Description: e.Description,
 			PromptLock:  e.PromptLock,
-			Variant:     e.Variant,
-		}
-		if e.ParentName != "" {
-			for _, a := range existing {
-				if a.Name == e.ParentName || normalizeAnchorName(a.Name) == normalizeAnchorName(e.ParentName) {
-					id := a.ID
-					anchor.ParentAnchorID = &id
-					break
-				}
-			}
 		}
 		if err := s.repo.Create(anchor); err != nil {
 			logger.Errorf("[SceneAnchorService] ExtractFromChapter: create anchor %q: %v", e.Name, err)
 			continue
 		}
-		logger.Printf("[SceneAnchorService] ExtractFromChapter: created anchor %q id=%d type=%s", anchor.Name, anchor.ID, anchor.Type)
+		logger.Printf("[SceneAnchorService] ExtractFromChapter: created anchor %q id=%d", anchor.Name, anchor.ID)
 		created = append(created, anchor)
 		existingNames[e.Name] = true
 		normalizedNames[normName] = true
@@ -571,9 +520,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 
 // AIAnalyzeSceneAnchorResult AI 分析返回的建议字段（不含 name，name 由用户维护）
 type AIAnalyzeSceneAnchorResult struct {
-	Type        string `json:"type"`        // interior / exterior / imaginary
 	Description string `json:"description"` // 视觉提示词
-	Variant     string `json:"variant"`     // 可选变体，如 day/night/winter
 }
 
 // AIAnalyze 用 AI 分析场景锚点，返回建议参数（不自动保存，由前端填入表单后用户确认）
@@ -586,15 +533,11 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 	novelTitle := ""
 	novelDesc := ""
 	novelGenre := ""
-	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
 			novelTitle = novel.Title
 			novelDesc = novel.Meta.Description
 			novelGenre = novel.Meta.Genre // 与 NovelDesc 合并传给模板
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 		}
 	}
 	_ = novelGenre // 合入 NovelDesc 字段，避免 unused 警告
@@ -633,7 +576,6 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		"NovelDesc":           truncateForPrompt(novelDesc+novelGenre, 400),
 		"ChapterExcerpts":     excerpts,
 		"ExistingDescription": truncateForPrompt(anchor.Description, 400),
-		"PromptLanguage":      promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render scene_anchor_analyze: %w", err)
@@ -650,19 +592,13 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		return nil, fmt.Errorf("parse AI response: %w (raw: %.200s)", err, jsonStr)
 	}
 
-	// 校验并兜底 type
-	switch result.Type {
-	case "interior", "exterior", "imaginary":
-	default:
-		if anchor.Type != "" {
-			result.Type = anchor.Type
-		} else {
-			result.Type = "exterior"
-		}
-	}
-
 	return &result, nil
 }
+
+// sceneRefFormatRules 是场景参考图的版式+规则文案，占位符依次为：
+// nameQuoted（标题旁引号内的场景名，可为空）、titleNote（顶部标题标牌的补充说明，可为空）。
+const sceneRefFormatRules = "格式：场景概念设计稿%s，横版16:9，多角度布局。至少4个面板从不同摄影角度/方向展示同一场景：全景定场镜头、对向视角、俯瞰/鸟瞰视角、低角度或细节特写。如有剧情需要，各面板可变化光照或时间段。顶部包含标题标牌%s，底部包含氛围色条。不添加细节标注或平面图——完全聚焦于全场景视图。" +
+	"规则：不包含角色或人物——纯环境展示。场景在所有面板中必须看起来一致且可辨认（相同的建筑、道具、布局）。不添加水印或多余文字。"
 
 // GenerateRefImage 使用 AI 图像生成为锚点生成参考图并锁定
 // descriptionOverride 非空时优先于数据库中的 anchor.Description（用于编辑框尚未保存的最新内容），为空则回退查库。
@@ -680,13 +616,11 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 
 	// 查询小说的图片风格（用于模型选择）和标题（用于 OSS 路径）
 	imageStyle := ""
-	aspectRatio := ""
 	if s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr != nil {
 			logger.Errorf("[SceneAnchorService] GenerateRefImage: fetch novel novelID=%d: %v (using defaults)", anchor.NovelID, nErr)
 		} else {
 			imageStyle = novel.AIConfig.ImageStyle
-			aspectRatio = novel.VideoConf().VideoAspectRatio
 			if novel.Title != "" {
 				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 			}
@@ -694,23 +628,24 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 
 	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(description), description, anchor.PromptLock)
-	sceneType := anchor.Type
-	if sceneType == "" {
-		sceneType = "exterior"
+	nameQuoted, titleNote := "", ""
+	if anchor.Name != "" {
+		nameQuoted = fmt.Sprintf("\"%s\"", anchor.Name)
+		titleNote = fmt.Sprintf("，居中显示加粗场景标题\"%s\"", anchor.Name)
 	}
+	formatRules := fmt.Sprintf(sceneRefFormatRules, nameQuoted, titleNote)
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
-		"Name":          anchor.Name,
-		"Description":   description,
-		"PromptLock":    anchor.PromptLock,
-		"SceneType":     sceneType,
-		"QualityTokens": universalQualityTags,
+		"Description": description,
+		"PromptLock":  anchor.PromptLock,
+		"FormatRules": formatRules,
 	})
 	if tplErr != nil {
 		return nil, fmt.Errorf("render image_scene_ref: %w", tplErr)
 	}
 	prompt, sceneNegative := splitImagePrompt(rendered)
 
-	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
+	// 场景概念设计稿固定横版16:9多角度布局，不跟随小说的视频画幅比例。
+	sizeOverride := imageAspectRatioToSize("16:9", "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
@@ -767,8 +702,6 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 	return s.repo.GetByID(id)
 }
 
-// UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）。
-// 使用原子 SQL 避免并发下的读-改-写竞态：avg = (avg*n + score) / (n+1)。
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
 // force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
 // 外层并发度固定为 3（避免大批量时无限创建 goroutine），内层 imageSem 进一步限流。

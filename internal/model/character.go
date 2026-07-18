@@ -91,15 +91,12 @@ type Item struct {
 
 	Name string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_item_novel_name,priority:2"`
 
-	Description string `json:"description" gorm:"type:text"` // 统一描述（含类别、外观等所有描述性信息）
-	Location    string `json:"location" gorm:"size:200"`      // 当前/最后已知位置
-	Owner    string `json:"owner" gorm:"size:100"`    // 当前持有者
+	Location string `json:"location" gorm:"size:200"` // 当前/最后已知位置
+	Owner    string `json:"owner" gorm:"size:100"`     // 当前持有者
 
 	ImageURL          string `json:"image_url" gorm:"size:1000"`
 	VisualPrompt      string `json:"visual_prompt" gorm:"type:text"`       // 用于 AI 图像生成的英文提示词
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:1000"` // 参考图 URL（已上传到 OSS）
-
-	Status string `json:"status" gorm:"size:20;default:active"` // active/lost/destroyed/unknown
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -152,30 +149,21 @@ type ChapterCharacter struct {
 
 func (ChapterCharacter) TableName() string { return "ink_chapter_character" }
 
-// CharacterLook 角色形象（不同时期的外观版本）
-// 选取规则：chapter_from <= chapterNo AND (chapter_to == 0 OR chapter_to >= chapterNo)
-// 多条匹配时取 chapter_from 最大的；无匹配时使用 Character.DefaultLookID 指向的形象。
+// CharacterLook 角色形象。每个角色可以有多个形象记录，通过 Character.DefaultLookID 指定当前使用的形象。
 type CharacterLook struct {
 	ID          uint `json:"id" gorm:"primaryKey"`
 	CharacterID uint `json:"character_id" gorm:"index:idx_look_char_novel,priority:1;not null"`
 	NovelID     uint `json:"novel_id" gorm:"index:idx_look_char_novel,priority:2;not null"`
 
-	Label       string `json:"label" gorm:"size:100"`         // 形象名称，如"少年时期""伪装成书生""觉醒后"
-	ChapterFrom int    `json:"chapter_from" gorm:"default:1"` // 起始章节（含）；0=从头
-	ChapterTo   int    `json:"chapter_to" gorm:"default:0"`   // 结束章节（含）；0=无限延伸
+	Label string `json:"label" gorm:"size:100"` // 形象名称，如"少年时期""伪装成书生""觉醒后"
 
 	// 外观描述（中文，供用户阅读和编辑）
 	Description string `json:"description" gorm:"type:text"`
 	// AI 图像生成提示词：完整外观（含服装/鞋履/配饰/姿态），用于三视图生成
 	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
-	// 面部特写专用提示词（仅身份+面部+发型），用于面部参考图生成。
-	// 与 VisualPrompt 由同一次 AI 调用（GenerateLookVisualPrompt）结构化输出、一并产出，
-	// 不从 VisualPrompt 解析派生——避免维护额外的文本分类逻辑。
-	FacePrompt string `json:"face_prompt,omitempty" gorm:"type:text"`
 
-	// 该形象的参考图像
+	// 该形象的参考图像：正面/侧面/背面/面部特写合图
 	ThreeViewSheet string `json:"three_view_sheet" gorm:"size:1000"`
-	Portrait       string `json:"portrait" gorm:"size:1000"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -221,22 +209,18 @@ type GenerateImageRequest struct {
 
 type CreateItemRequest struct {
 	Name         string `json:"name" binding:"required"`
-	Description  string `json:"description"`
 	Location     string `json:"location"`
 	Owner        string `json:"owner"`
 	VisualPrompt string `json:"visual_prompt"`
-	Status       string `json:"status"`
 }
 
 type UpdateItemRequest struct {
 	Name              string `json:"name"`
-	Description       string `json:"description"`
 	Location          string `json:"location"`
 	Owner             string `json:"owner"`
 	VisualPrompt      string `json:"visual_prompt"`
 	ImageURL          string `json:"image_url"`
 	ReferenceImageURL string `json:"reference_image_url"`
-	Status            string `json:"status"`
 }
 
 type UpsertChapterItemRequest struct {
@@ -260,25 +244,17 @@ type UpsertChapterCharacterRequest struct {
 // CreateCharacterLookRequest 创建角色形象请求
 type CreateCharacterLookRequest struct {
 	Label          string `json:"label"`
-	ChapterFrom    int    `json:"chapter_from"`
-	ChapterTo      int    `json:"chapter_to"`
 	SetAsDefault   bool   `json:"set_as_default"` // 是否将此形象设为默认
 	Description    string `json:"description"`
 	VisualPrompt   string `json:"visual_prompt"`
-	FacePrompt     string `json:"face_prompt"` // 面部特写专用提示词，与 VisualPrompt 同一次 AI 调用产出
 	ThreeViewSheet string `json:"three_view_sheet"`
-	Portrait       string `json:"portrait"`
 }
 
 // UpdateCharacterLookRequest 更新角色形象请求
 type UpdateCharacterLookRequest struct {
 	Label          *string `json:"label"`
-	ChapterFrom    *int    `json:"chapter_from"`
-	ChapterTo      *int    `json:"chapter_to"`
 	SetAsDefault   *bool   `json:"set_as_default"` // 是否将此形象设为默认
 	Description    *string `json:"description"`
 	VisualPrompt   *string `json:"visual_prompt"`
-	FacePrompt     *string `json:"face_prompt"` // 面部特写专用提示词，与 VisualPrompt 同一次 AI 调用产出
 	ThreeViewSheet *string `json:"three_view_sheet"`
-	Portrait       *string `json:"portrait"`
 }

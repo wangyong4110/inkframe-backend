@@ -331,9 +331,6 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	if req.ImageStyle != "" {
 		fields["image_style"] = req.ImageStyle
 	}
-	if req.PromptLanguage != "" {
-		fields["prompt_language"] = req.PromptLanguage
-	}
 	if req.ChapterMode != "" {
 		fields["chapter_mode"] = req.ChapterMode
 	}
@@ -382,7 +379,7 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		req.VideoAspectRatio != "" || req.CharConsistencyWeight != nil ||
 		req.NarrationVoice != "" || req.SubtitleEnabled != nil || req.SubtitlePosition != "" ||
 		req.SubtitleFontSize != nil || req.SubtitleColor != "" || req.SubtitleBgStyle != "" ||
-		req.SubtitleFont != "" || req.ColorGrade != "" || req.ContrastLevel != nil ||
+		req.SubtitleFont != "" || req.ContrastLevel != nil ||
 		req.Saturation != nil || req.FilmGrain != nil || req.Vignette != nil ||
 		req.ChromaticAberration != nil || req.KlingProForAction != nil
 	if hasVideoFields {
@@ -427,9 +424,6 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		}
 		if req.SubtitleFont != "" {
 			vc.Config.SubtitleFont = req.SubtitleFont
-		}
-		if req.ColorGrade != "" {
-			vc.Config.ColorGrade = req.ColorGrade
 		}
 		if req.ContrastLevel != nil {
 			vc.Config.ContrastLevel = *req.ContrastLevel

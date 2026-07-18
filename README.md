@@ -973,7 +973,7 @@ make docs           # 生成 Swagger（swag）
 
 | 表名 | 说明 |
 |------|------|
-| `ink_novel` | 小说（含 `prompt_language`） |
+| `ink_novel` | 小说 |
 | `ink_chapter` | 章节内容 & 状态 |
 | `ink_chapter_version` | 章节版本历史 |
 | `ink_character` | 角色（`description` 统一描述字段） |

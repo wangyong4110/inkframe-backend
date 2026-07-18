@@ -66,14 +66,9 @@ func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*m
 			return nil, fmt.Errorf("restore soft-deleted item: %w", err)
 		}
 		existing.DeletedAt.Valid = false
-		existing.Description = req.Description
 		existing.Location = req.Location
 		existing.Owner = req.Owner
 		existing.VisualPrompt = req.VisualPrompt
-		existing.Status = req.Status
-		if existing.Status == "" {
-			existing.Status = "active"
-		}
 		// 清空旧的图片字段：用户是在创建一个"新"道具（只是复用了同名的旧行），不应该带着
 		// 已删除道具残留的参考图/生成图，否则画面和新填的描述对不上。
 		existing.ImageURL = ""
@@ -85,14 +80,9 @@ func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*m
 		NovelID:      novelID,
 		UUID:         uuid.New().String(),
 		Name:         req.Name,
-		Description:  req.Description,
 		Location:     req.Location,
 		Owner:        req.Owner,
 		VisualPrompt: req.VisualPrompt,
-		Status:       req.Status,
-	}
-	if item.Status == "" {
-		item.Status = "active"
 	}
 	return item, s.itemRepo.Create(item)
 }
@@ -121,9 +111,6 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	if req.Name != "" {
 		item.Name = req.Name
 	}
-	if req.Description != "" {
-		item.Description = req.Description
-	}
 	if req.Location != "" {
 		item.Location = req.Location
 	}
@@ -138,9 +125,6 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	}
 	if req.ReferenceImageURL != "" {
 		item.ReferenceImageURL = req.ReferenceImageURL
-	}
-	if req.Status != "" {
-		item.Status = req.Status
 	}
 	return item, s.itemRepo.Update(item)
 }
@@ -165,14 +149,10 @@ func (s *ItemService) DeleteItem(id uint) error {
 // generateItemImageCore is the shared AI call for item image generation.
 // It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
 // and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
-func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage string) (string, error) {
+func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle string) (string, error) {
 	prompt := item.VisualPrompt
 	if prompt == "" {
-		if promptLanguage == "en" {
-			prompt = fmt.Sprintf("%s, %s, fantasy item illustration, fine details, concept art", item.Name, item.Description)
-		} else {
-			prompt = fmt.Sprintf("%s，%s，奇幻道具插画，精细细节，概念艺术", item.Name, item.Description)
-		}
+		prompt = fmt.Sprintf("%s，奇幻道具插画，精细细节，概念艺术", item.Name)
 	}
 	aiRefURL := item.ReferenceImageURL
 	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
@@ -181,18 +161,14 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if novelTitle != "" {
 		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
 	}
-	itemNegPrompt := "blurry, low quality, deformed, extra limbs, bad anatomy, malformed, " +
-		"watermark, text, logo, signature, multiple items, cluttered background, " +
-		"oversaturated, overexposed, underexposed, cropped, out of frame"
-	var suffix string
-	if promptLanguage == "en" {
-		suffix = ", item design, white background, studio lighting, " + universalQualityTags
-	} else {
-		suffix = "，道具设计，白色背景，摄影棚光效，" + universalQualityTags
-	}
-	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+suffix, aiRefURL, imageStyle, itemNegPrompt, sizeOverride)
+	// 道具设定图固定横版4:3，不跟随小说的视频画幅比例。
+	sizeOverride := imageAspectRatioToSize("4:3", "master")
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+itemRefFormatRules, aiRefURL, imageStyle, "", sizeOverride)
 }
+
+// itemRefFormatRules 是道具参考图的版式+规则文案，拼在 item.VisualPrompt（外观描述）之后。
+const itemRefFormatRules = "，格式：道具设定图，横版4:3。画面只展示同一道具的四个视角：一个最能体现外观特征的主视角，以及正面、侧面、背面三视图。主视角主体最大最清晰，三视图完整展示道具整体造型与结构。纯白背景。" +
+	"规则：禁止出现任何文字、字母、数字、标注、说明文字、材质色条、尺寸线、箭头、局部细节特写面板或爆炸分解图。道具在所有视角中必须保持完全一致。无环境元素，无角色，不添加水印。"
 
 // referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用
 // provider 可选：指定使用的图像生成提供者，空字符串 = 自动选择
@@ -212,16 +188,14 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	var novelTitle, imageStyle, aspectRatio, promptLanguage string
+	var novelTitle, imageStyle string
 	if s.novelRepo != nil && item.NovelID > 0 {
 		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil {
 			novelTitle = novel.Title
 			imageStyle = novel.AIConfig.ImageStyle
-			aspectRatio = novel.VideoConf().VideoAspectRatio
-			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
-	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
+	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -247,13 +221,11 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	}
 	total := len(todo)
 
-	var novelTitle, imageStyle, aspectRatio, promptLanguage string
+	var novelTitle, imageStyle string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			imageStyle = novel.AIConfig.ImageStyle
-			aspectRatio = novel.VideoConf().VideoAspectRatio
-			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -266,7 +238,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
 			if genErr != nil {
 				logger.Errorf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()
@@ -329,13 +301,11 @@ func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []ui
 	}
 	total := len(items)
 
-	var novelTitle, imageStyle, aspectRatio, promptLanguage string
+	var novelTitle, imageStyle string
 	if s.novelRepo != nil {
 		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
 			novelTitle = novel.Title
 			imageStyle = novel.AIConfig.ImageStyle
-			aspectRatio = novel.VideoConf().VideoAspectRatio
-			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -348,7 +318,7 @@ func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []ui
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
 			mu.Lock()
 			done++
 			cur := done
@@ -390,14 +360,10 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 	// 获取小说标题/类型
 	novelTitle := "本小说"
 	novelGenre := ""
-	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 		}
 	}
 	if summariesText == "" {
@@ -412,17 +378,15 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 
 	existingJSON := marshalExistingNames(existing, func(it *model.Item) any {
 		return struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}{it.Name, it.Description}
+			Name string `json:"name"`
+		}{it.Name}
 	})
 
 	// 使用与分析流程相同的富格式 extract_items.j2
 	itemsPrompt, err := renderPrompt("extract_items", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"Summaries":      summariesText,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle": novelTitle,
+		"Genre":      novelGenre,
+		"Summaries":  summariesText,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_items: %w", err)
@@ -448,17 +412,9 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 		if e.Name == "" {
 			continue
 		}
-		// 校正 category
-		validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
-		if !validCat[e.Category] {
-			e.Category = "other"
-		}
-
-		extractedDesc := buildItemDescription(e.Category, e.Appearance, e.Description)
 		if it, ok := byName[e.Name]; ok {
 			// 更新：用 AI 数据填充空缺字段
 			var changed bool
-			if v, ok := fillIfEmpty(it.Description, extractedDesc); ok { it.Description = v; changed = true }
 			if v, ok := fillIfEmpty(it.Location, e.Location); ok { it.Location = v; changed = true }
 			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { it.Owner = v; changed = true }
 			if v, ok := fillIfEmpty(it.VisualPrompt, s.aiService.FilterPrompt(e.VisualPrompt)); ok { it.VisualPrompt = v; changed = true }
@@ -481,11 +437,9 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 				NovelID:      novelID,
 				UUID:         uuid.New().String(),
 				Name:         e.Name,
-				Description:  extractedDesc,
 				Location:     e.Location,
 				Owner:        e.Owner,
 				VisualPrompt: s.aiService.FilterPrompt(e.VisualPrompt),
-				Status:       "active",
 			}
 			if err := s.itemRepo.Create(item); err != nil {
 				logger.Errorf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
@@ -585,16 +539,15 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 func (s *ItemService) extractItemsFromContent(
 	ctx context.Context,
 	tenantID, novelID uint,
-	novelTitle, genre, promptLanguage, content, userPrompt string,
+	novelTitle, genre, content, userPrompt string,
 	existingNames []string,
 ) ([]analysisItemJSON, error) {
 	chItemsPrompt, err := renderPrompt("extract_chapter_items", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          genre,
-		"ExistingNames":  existingNames,
-		"Content":        content,
-		"UserPrompt":     userPrompt,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+		"UserPrompt":    userPrompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
@@ -642,14 +595,10 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 
 	novelTitle := "本小说"
 	novelGenre := ""
-	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 		}
 	}
 
@@ -702,7 +651,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 			if content == "" {
 				content = c.Summary
 			}
-			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, "", existingNames)
+			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, content, "", existingNames)
 			results[idx] = chResult{items, err}
 		}(i, ch)
 	}
@@ -750,24 +699,18 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 	logger.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, candidate items=%d, freq-filtered=%d", len(candidates), len(itemMap), len(allItems))
 
 	// 统一入库（单线程，无竞争）
-	validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
 	upserted := make([]*model.Item, 0, len(allItems))
 	for _, e := range allItems {
 		if e.Name == "" {
 			continue
 		}
-		if !validCat[e.Category] {
-			e.Category = "other"
-		}
 		item := &model.Item{
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         e.Name,
-			Description:  buildItemDescription(e.Category, e.Appearance, e.Description),
 			Location:     e.Location,
 			Owner:        e.Owner,
 			VisualPrompt: e.VisualPrompt,
-			Status:       "active",
 		}
 		if err := s.itemRepo.Create(item); err != nil {
 			logger.Errorf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
@@ -796,14 +739,10 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 
 	novelTitle := "本小说"
 	novelGenre := ""
-	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 		}
 	}
 
@@ -817,7 +756,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 
 	// 渲染+调用 LLM+解析 JSON 复用 extractItemsFromContent（与分析流水线的
 	// AIExtractAllFromNovel 共享同一份实现，见该函数上的注释）。
-	items, err := s.extractItemsFromContent(context.Background(), tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, userPrompt, existingNames)
+	items, err := s.extractItemsFromContent(context.Background(), tenantID, novelID, novelTitle, novelGenre, content, userPrompt, existingNames)
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter items: %w", err)
 	}
@@ -832,11 +771,9 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         it.Name,
-			Description:  buildItemDescription(it.Category, it.Appearance, it.Description),
 			Location:     it.Location,
 			Owner:        it.Owner,
 			VisualPrompt: s.aiService.FilterPrompt(it.VisualPrompt),
-			Status:       "active",
 		}
 		if e := s.itemRepo.Create(item); e != nil {
 			logger.Errorf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
@@ -860,54 +797,35 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	return created, nil
 }
 
-// GenerateItemInfo 根据道具名称（及用户可选的草稿描述提示）AI 生成完整的道具档案。
+// GenerateItemInfo 根据道具名称（及用户可选的草稿提示）AI 生成视觉提示词。
 // 用于"添加道具"弹窗的一键填充：仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateItem 创建。
-func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint string) (description, visualPrompt string, err error) {
-	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint string) (visualPrompt string, err error) {
+	novelTitle, novelGenre := novelPromptContext(s.novelRepo, novelID)
 
 	rendered, tplErr := renderPrompt("generate_item_info", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"ItemName":       name,
-		"UserHint":       userHint,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle": novelTitle,
+		"Genre":      novelGenre,
+		"ItemName":   name,
+		"UserHint":   userHint,
 	})
 	if tplErr != nil {
-		return "", "", fmt.Errorf("render generate_item_info: %w", tplErr)
+		return "", fmt.Errorf("render generate_item_info: %w", tplErr)
 	}
 
 	result, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_item_info", rendered, "")
 	if genErr != nil {
-		return "", "", fmt.Errorf("AI generate item info: %w", genErr)
+		return "", fmt.Errorf("AI generate item info: %w", genErr)
 	}
 
 	type itemInfoJSON struct {
-		Category     string `json:"category"`
-		Appearance   string `json:"appearance"`
-		Description  string `json:"description"`
 		VisualPrompt string `json:"visual_prompt"`
 	}
 	var info itemInfoJSON
 	cleaned := extractJSON(strings.TrimSpace(result))
 	if parseErr := json.Unmarshal([]byte(cleaned), &info); parseErr != nil {
 		logger.Errorf("[ItemService] GenerateItemInfo: parse error: %v, raw: %.300s", parseErr, result)
-		return "", "", fmt.Errorf("parse item info JSON: %w", parseErr)
+		return "", fmt.Errorf("parse item info JSON: %w", parseErr)
 	}
 
-	return buildItemDescription(info.Category, info.Appearance, info.Description), s.aiService.FilterPrompt(info.VisualPrompt), nil
-}
-
-// buildItemDescription 将外观和叙事说明合并为统一描述字段。
-// appearance 始终置于首段，description 紧随其后。
-func buildItemDescription(category, appearance, description string) string {
-	var parts []string
-	if appearance != "" {
-		parts = append(parts, "【外观】"+appearance)
-	}
-	if description != "" {
-		parts = append(parts, description)
-	} else if category != "" {
-		parts = append(parts, category)
-	}
-	return strings.Join(parts, "\n")
+	return s.aiService.FilterPrompt(info.VisualPrompt), nil
 }

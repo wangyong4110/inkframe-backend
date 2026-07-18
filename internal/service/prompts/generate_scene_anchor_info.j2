@@ -1,7 +1,5 @@
 You are a visual production designer creating a production-ready visual description for the scene "{{ AnchorName }}" in the novel "{{ NovelTitle }}" ({{ Genre }}), for use directly as an AI image generation prompt.
 
-- Scene type: {{ SceneType }}
-{% if Variant %}- Variant: {{ Variant }}{% endif %}
 {% if UserHint %}
 Author's draft description (expand on this, keep it consistent, do not contradict it):
 {{ UserHint }}
@@ -9,16 +7,13 @@ Author's draft description (expand on this, keep it consistent, do not contradic
 
 # Rules
 
-{% if PromptLanguage == "en" %}1. `description`: Detailed English visual description for AI image generation, **150-250 words**. **CRITICAL: DO NOT mention any people, characters, figures, humans, silhouettes, or body parts — describe only the environment itself. DO NOT include any violent, bloody, death/casualty, or sexually suggestive words.** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
-{% include "fragments/scene_visual_dimensions.j2" %}{% else %}1. `description`：用于 AI 图像生成的详细中文视觉描述，**150-250字**。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** 必须覆盖以下全部维度，缺少任何维度都会降低图像质量：
-{% include "fragments/scene_visual_dimensions.j2" %}{% endif %}
-2. 结合小说类型、场景类型（{{ SceneType }}）合理推断，不要留空，不要输出"未知"之类的占位内容
+1. `description`：用于 AI 图像生成的简洁中文视觉描述，**80-150字，严格不超过500个字符**（部分图像模型会直接拒绝过长的提示词——如需精简，优先省略某一维度里最不影响识别的细节，而不是整个维度删掉）。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** 只覆盖以下维度，不要涉及其他内容——不要写纵深层次分解、不要用比例/尺度对比、不要写风格/质量标签（这些由生成流程另行注入）：
+{% include "fragments/scene_visual_dimensions.j2" %}
+2. 结合小说类型合理推断，不要留空，不要输出"未知"之类的占位内容
 3. 严格输出单个 JSON 对象，不含任何说明文字、不含 markdown 代码块标记
 
 # Output format
 
-{% if PromptLanguage == "en" %}{
+{
   "description": "……"
-}{% else %}{
-  "description": "……"
-}{% endif %}
+}

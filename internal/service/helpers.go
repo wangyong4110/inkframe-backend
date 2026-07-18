@@ -12,11 +12,11 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
-// novelPromptContext 取小说标题/类型/AI提示词语言，供各类"从名称/简介 AI 生成详细信息"
-// 场景的 prompt 组装使用（item/character/scene anchor 等的单条目 AI 生成均需要这三项）。
-// novelRepo 为 nil 或查询失败时返回默认值（本小说/空类型/中文）。
-func novelPromptContext(novelRepo *repository.NovelRepository, novelID uint) (title, genre, promptLanguage string) {
-	title, promptLanguage = "本小说", "zh"
+// novelPromptContext 取小说标题/类型，供各类"从名称/简介 AI 生成详细信息"
+// 场景的 prompt 组装使用（item/character/scene anchor 等的单条目 AI 生成均需要这两项）。
+// novelRepo 为 nil 或查询失败时返回默认值（本小说/空类型）。
+func novelPromptContext(novelRepo *repository.NovelRepository, novelID uint) (title, genre string) {
+	title = "本小说"
 	if novelRepo == nil {
 		return
 	}
@@ -26,9 +26,6 @@ func novelPromptContext(novelRepo *repository.NovelRepository, novelID uint) (ti
 	}
 	title = novel.Title
 	genre = novel.Meta.Genre
-	if novel.AIConfig.PromptLanguage != "" {
-		promptLanguage = novel.AIConfig.PromptLanguage
-	}
 	return
 }
 

@@ -88,6 +88,37 @@ func (r *StoryboardRepository) BatchGetByIDs(ids []uint) ([]*model.StoryboardSho
 	return shots, nil
 }
 
+// ShotCounts 单个视频的分镜总数与已生成视频的分镜数。
+type ShotCounts struct {
+	Total     int
+	WithVideo int
+}
+
+// CountShotsGroupedByVideo 按 video_id 分组统计分镜总数和已生成视频的分镜数（单次 SQL，
+// 避免调用方按视频逐个查询分镜列表再本地计数——用于剧集列表等需要展示多个视频完成度的场景）。
+func (r *StoryboardRepository) CountShotsGroupedByVideo(videoIDs []uint) (map[uint]ShotCounts, error) {
+	result := make(map[uint]ShotCounts, len(videoIDs))
+	if len(videoIDs) == 0 {
+		return result, nil
+	}
+	var rows []struct {
+		VideoID   uint
+		Total     int
+		WithVideo int
+	}
+	if err := r.db.Model(&model.StoryboardShot{}).
+		Select("video_id, COUNT(*) AS total, SUM(CASE WHEN video_url != '' THEN 1 ELSE 0 END) AS with_video").
+		Where("video_id IN ?", videoIDs).
+		Group("video_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.VideoID] = ShotCounts{Total: row.Total, WithVideo: row.WithVideo}
+	}
+	return result, nil
+}
+
 // Delete 硬删除单个分镜
 func (r *StoryboardRepository) Delete(shotID uint) error {
 	return r.db.Unscoped().Delete(&model.StoryboardShot{}, shotID).Error

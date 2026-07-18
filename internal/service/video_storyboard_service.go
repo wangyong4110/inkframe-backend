@@ -11,8 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +37,32 @@ const (
 	charRuneOverlapThreshold = 0.7    // 角色名模糊匹配汉字重叠比例阈值（需≥70%重叠，避免"炎少"误匹配"萧炎"）
 	shiftTempOffset          = 100000 // 两阶段 shot_no 位移时使用的临时偏移量，避免 MySQL 唯一键冲突
 )
+
+// beatDialogueLineRe 匹配纯文本节拍行里的"角色名：台词"对话格式，其余整行视为动作/描写。
+// 与前端 ScreenplayTab.vue 的 serializeBeats/deserializeBeats 采用同一约定，保持前后端一致
+// （ScreenplayScene.Beats 现在按行存纯文本，不再是结构化 []ScreenplayBeat 数组）。
+var beatDialogueLineRe = regexp.MustCompile(`^([^：:]{1,20})[：:]\s*(.+)$`)
+
+// parseBeatLine 解析一行节拍文本，返回节拍类型（action/dialogue）、说话人（非对话行为空）、内容。
+func parseBeatLine(line string) (beatType, speaker, text string) {
+	if m := beatDialogueLineRe.FindStringSubmatch(line); m != nil {
+		return "dialogue", m[1], m[2]
+	}
+	return "action", "", line
+}
+
+// splitBeatLines 把 ScreenplayScene.Beats 纯文本拆成非空行。
+func splitBeatLines(beats string) []string {
+	raw := strings.Split(beats, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, l := range raw {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
 
 // validEmotionalTones 是 storyboard_generate.j2 中 emotional_tone 字段的合法值集合。
 // AI 偶尔会输出列表外的值（如英文词或自创词），校验后统一回落到"平静"。
@@ -292,17 +320,13 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		}
 	}
 
-	// 获取小说的 PromptLanguage、Genre、ImageStyle、标题、世界观摘要
-	promptLanguage := "zh"
+	// 获取小说的 Genre、ImageStyle、标题、世界观摘要
 	genre := ""
 	imageStyle := ""
 	novelTitle := ""
 	worldviewDesc := ""
 	if s.novelRepo != nil && video.NovelID > 0 {
 		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
-			if novel.AIConfig.PromptLanguage != "" {
-				promptLanguage = novel.AIConfig.PromptLanguage
-			}
 			genre = novel.Meta.Genre
 			imageStyle = novel.AIConfig.ImageStyle
 			novelTitle = novel.Title
@@ -330,67 +354,102 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	logger.Printf("[Storyboard] arc ready (%d chars)", len(arcPlan))
 
 	totalRunes := len([]rune(content))
-	totalShots := calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
-
-	// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
-	// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
-	beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots)
-	logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
-
-	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限，
-	// 同时降低单次 AI 调用逼近 provider 默认超时（300s）的概率。
-	// P0 优化：20 → 14，单段输出 token 从约 14000 降到约 9800（≈30%），单段更快完成、超时概率更低；
-	// 段数会相应增加，但配合下方窗口化并发（P1）不会拖慢整体耗时。
-	const maxShotsPerAICall = 14
-	dynSegRunes := maxSegmentRunes
-	if totalShots > maxShotsPerAICall && totalRunes > 0 {
-		// 使每段镜头数 ≤ maxShotsPerAICall：segRunes = totalRunes * maxShotsPerAICall / totalShots
-		dynSegRunes = totalRunes * maxShotsPerAICall / totalShots
-		if dynSegRunes < 500 {
-			dynSegRunes = 500 // 最小 500 字保证 AI 上下文充足
-		}
-	}
-	segments := splitContentSegments(content, dynSegRunes)
-
-	chIDStr := "nil"
-	if chapterID != nil {
-		chIDStr = fmt.Sprintf("%d", *chapterID)
-	}
-	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d dynSegRunes=%d segments=%d chars=%d anchors=%d plotPoints=%d",
-		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, dynSegRunes, len(segments), len(characters), len(anchors), len(plotPoints))
-
-	// P1 优化：按窗口并发生成段落，而不是严格逐段串行等待。
-	// 窗口内的段落共享同一份"上一窗口末尾镜头"快照作为上文（并发执行，无法互相等待对方产出），
-	// 窗口之间仍严格传递真实的 prevTailShots，保留大部分跨段连贯性——
-	// 这是"牺牲窗口内部分衔接精度换并发提速"的折中：比完全并发（零上下文）质量更好，
-	// 比严格串行（零并发）速度更快。窗口越大提速越明显，但也更依赖 provider 并发配额。
-	const storyboardConcurrentWindow = 3
-	const prevTailN = 5 // 传递上一窗口末尾多少个镜头（更多上下文 → 跨段衔接更自然）
-	type segResult struct {
-		shots []*model.StoryboardShot
-		err   error
-	}
-	results := make([]segResult, len(segments))
-
-	genCtx := ctx
-	// Each segment produces 8–15K chars of JSON. A 4096-token limit truncates it.
-	// The AI API silently caps max_tokens at the model's own maximum when it exceeds it,
-	// so requesting 16384 on a model that only supports 4096 is safe (no API error).
-	segOverrides := overrides
-	if segOverrides.MaxTokens < 16384 {
-		segOverrides.MaxTokens = 16384
-	}
 
 	// 预计算各段的镜头分配、百分比区间、节拍子集——纯本地计算，不涉及 AI 调用。
-	// 从"逐段串行时顺带算"的写法中拆出来，使下面的窗口化并发成为可能。
 	type segPlan struct {
 		segShotCount int
 		segStartPct  int
 		segEndPct    int
 		segBeatSheet []map[string]interface{}
 	}
-	plans := make([]segPlan, len(segments))
-	{
+
+	var segments []string
+	var plans []segPlan
+	var sceneIDs []uint // 与 segments 一一对应的 ScreenplaySceneID；非分场模式下为 nil
+	var totalShots int
+
+	// 方案B：已注入 ScreenplayService 且该章节存在分场剧本时，逐场生成分镜（每场=一个"段"），
+	// 剧本内容替代原文分段+内存节拍表作为 AI 输入；未注入或无剧本数据时，走原有的文本分段路径。
+	usedScreenplay := false
+	if s.screenplaySvc != nil && chapterID != nil {
+		scenes, scErr := s.screenplaySvc.ListScenes(*chapterID)
+		if scErr != nil {
+			logger.Errorf("[Storyboard] screenplaySvc.ListScenes chapterID=%d: %v", *chapterID, scErr)
+		}
+		if len(scenes) == 0 {
+			logger.Printf("[Storyboard] no screenplay scenes for chapterID=%d, auto-generating", *chapterID)
+			scenes, scErr = s.screenplaySvc.GenerateScreenplayScenes(tenantID, *chapterID, provider, true)
+			if scErr != nil {
+				logger.Errorf("[Storyboard] auto-generate screenplay chapterID=%d: %v (falling back to text segmentation)", *chapterID, scErr)
+			}
+		}
+		if len(scenes) > 0 {
+			usedScreenplay = true
+			segments = make([]string, len(scenes))
+			plans = make([]segPlan, len(scenes))
+			sceneIDs = make([]uint, len(scenes))
+			for i, sc := range scenes {
+				var b strings.Builder
+				fmt.Fprintf(&b, "【场次 %d】%s\n%s\n", sc.SceneNo, sc.Heading, sc.Synopsis)
+				var segBeatSheet []map[string]interface{}
+				for j, line := range splitBeatLines(sc.Beats) {
+					beatType, speaker, text := parseBeatLine(line)
+					if beatType == "dialogue" {
+						fmt.Fprintf(&b, "%d. （对话）%s：%s\n", j+1, speaker, text)
+					} else {
+						fmt.Fprintf(&b, "%d. （%s）%s\n", j+1, beatType, text)
+					}
+					segBeatSheet = append(segBeatSheet, map[string]interface{}{
+						"No":             j + 1,
+						"BeatType":       beatType,
+						"ContentSummary": text,
+						"Location":       sc.Heading,
+						"Characters":     speaker,
+						"SuggestedShots": 0,
+					})
+				}
+				segments[i] = b.String()
+				shotCount := sc.EstimatedShotCount
+				if shotCount < 1 {
+					shotCount = 3
+				}
+				plans[i] = segPlan{
+					segShotCount: shotCount,
+					segStartPct:  i * 100 / len(scenes),
+					segEndPct:    (i + 1) * 100 / len(scenes),
+					segBeatSheet: segBeatSheet,
+				}
+				sceneIDs[i] = sc.ID
+				totalShots += shotCount
+			}
+			logger.Printf("[Storyboard] using screenplay scenes chapterID=%d scenes=%d totalShots=%d", *chapterID, len(scenes), totalShots)
+		}
+	}
+
+	if !usedScreenplay {
+		totalShots = calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
+
+		// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
+		// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
+		beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots)
+		logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
+
+		// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限，
+		// 同时降低单次 AI 调用逼近 provider 默认超时（300s）的概率。
+		// P0 优化：20 → 14，单段输出 token 从约 14000 降到约 9800（≈30%），单段更快完成、超时概率更低；
+		// 段数会相应增加，但配合下方窗口化并发（P1）不会拖慢整体耗时。
+		const maxShotsPerAICall = 14
+		dynSegRunes := maxSegmentRunes
+		if totalShots > maxShotsPerAICall && totalRunes > 0 {
+			// 使每段镜头数 ≤ maxShotsPerAICall：segRunes = totalRunes * maxShotsPerAICall / totalShots
+			dynSegRunes = totalRunes * maxShotsPerAICall / totalShots
+			if dynSegRunes < 500 {
+				dynSegRunes = 500 // 最小 500 字保证 AI 上下文充足
+			}
+		}
+		segments = splitContentSegments(content, dynSegRunes)
+		plans = make([]segPlan, len(segments))
+
 		shotsAllocated := 0
 		runesProcessed := 0
 		for segIdx, seg := range segments {
@@ -440,6 +499,35 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		}
 	}
 
+	chIDStr := "nil"
+	if chapterID != nil {
+		chIDStr = fmt.Sprintf("%d", *chapterID)
+	}
+	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d segments=%d screenplayMode=%v chars=%d anchors=%d plotPoints=%d",
+		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, len(segments), usedScreenplay, len(characters), len(anchors), len(plotPoints))
+
+	// P1 优化：按窗口并发生成段落，而不是严格逐段串行等待。
+	// 窗口内的段落共享同一份"上一窗口末尾镜头"快照作为上文（并发执行，无法互相等待对方产出），
+	// 窗口之间仍严格传递真实的 prevTailShots，保留大部分跨段连贯性——
+	// 这是"牺牲窗口内部分衔接精度换并发提速"的折中：比完全并发（零上下文）质量更好，
+	// 比严格串行（零并发）速度更快。窗口越大提速越明显，但也更依赖 provider 并发配额。
+	const storyboardConcurrentWindow = 3
+	const prevTailN = 5 // 传递上一窗口末尾多少个镜头（更多上下文 → 跨段衔接更自然）
+	type segResult struct {
+		shots []*model.StoryboardShot
+		err   error
+	}
+	results := make([]segResult, len(segments))
+
+	genCtx := ctx
+	// Each segment produces 8–15K chars of JSON. A 4096-token limit truncates it.
+	// The AI API silently caps max_tokens at the model's own maximum when it exceeds it,
+	// so requesting 16384 on a model that only supports 4096 is safe (no API error).
+	segOverrides := overrides
+	if segOverrides.MaxTokens < 16384 {
+		segOverrides.MaxTokens = 16384
+	}
+
 	var prevTailShots []*model.StoryboardShot // 上一窗口末尾镜头，首窗口为 nil
 	cancelled := false
 	for winStart := 0; winStart < len(segments) && !cancelled; winStart += storyboardConcurrentWindow {
@@ -468,7 +556,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 				p := plans[segIdx]
 				shots, err := s.generateStoryboardSegment(genCtx, video, segments[segIdx], userPrompt, segIdx, len(segments),
 					p.segShotCount, characters, anchors, plotPoints, effectiveItems, winPrevTail,
-					overrides.VoiceMode, promptLanguage, genre, arcPlan, imageStyle,
+					overrides.VoiceMode, genre, arcPlan, imageStyle,
 					chapterNo, novelTitle, worldviewDesc, p.segStartPct, p.segEndPct, charVisualPrompts,
 					p.segBeatSheet, tenantID, provider, segOverrides, videoID, chapterID)
 				results[segIdx] = segResult{shots: shots, err: err}
@@ -516,6 +604,10 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		for _, shot := range r.shots {
 			shotCounter++
 			shot.ShotNo = shotCounter
+			if sceneIDs != nil {
+				sceneID := sceneIDs[idx]
+				shot.ScreenplaySceneID = &sceneID
+			}
 		}
 		allShots = append(allShots, r.shots...)
 	}
@@ -610,6 +702,370 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	}, nil
 }
 
+// fetchSceneRegenContext 为单场次分镜重新生成拉取所需的上下文（角色/场景锚点/情节点/道具/
+// 角色形象/小说与世界观信息/章节内容）。逻辑与 GenerateStoryboardCtx 中的预取块
+// （见上文并行预取部分）保持一致的"章节级绑定优先，回退小说全量"策略，但顺序执行而非
+// 并发——单场次重新生成不是高频路径，牺牲一点延迟换取不改动、不复用那段已调优的并发代码，
+// 避免为了去重而给整视频生成引入回归风险。
+func (s *VideoService) fetchSceneRegenContext(video *model.Video, chapterID uint) (
+	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
+	effectiveItems []*EffectiveItem, charVisualPrompts map[uint]string,
+	genre, imageStyle, novelTitle, worldviewDesc string, chapterNo int, content string,
+) {
+	novelID := video.NovelID
+
+	if chapterID != 0 && s.chapterCharacterRepo != nil {
+		if bindings, e := s.chapterCharacterRepo.ListByChapter(chapterID); e == nil && len(bindings) > 0 {
+			ids := make([]uint, 0, len(bindings))
+			for _, b := range bindings {
+				ids = append(ids, b.CharacterID)
+			}
+			if chars, e2 := s.characterRepo.ListByIDs(ids); e2 == nil {
+				characters = chars
+			}
+		}
+	}
+	if len(characters) == 0 && novelID > 0 {
+		characters, _ = s.characterRepo.ListByNovel(novelID)
+	}
+
+	if s.sceneAnchorSvc != nil && novelID > 0 {
+		if chapterID != 0 {
+			anchors, _ = s.sceneAnchorSvc.ListChapterAnchors(novelID, chapterID)
+		}
+		if len(anchors) == 0 {
+			anchors, _ = s.sceneAnchorSvc.ListByNovel(novelID)
+		}
+	}
+
+	if s.plotPointRepo != nil {
+		if chapterID != 0 {
+			plotPoints, _ = s.plotPointRepo.ListByChapter(chapterID)
+		}
+		if len(plotPoints) == 0 && novelID > 0 {
+			plotPoints, _ = s.plotPointRepo.ListByNovel(novelID, "", true)
+		}
+	}
+
+	if s.itemRepo != nil && novelID > 0 {
+		if allItems, err := s.itemRepo.ListByNovel(novelID); err == nil && len(allItems) > 0 {
+			overrideMap := make(map[uint]*model.ChapterItem)
+			if chapterID != 0 && s.chapterItemRepo != nil {
+				if overrides, e := s.chapterItemRepo.ListByChapter(chapterID); e == nil {
+					for _, ci := range overrides {
+						overrideMap[ci.ItemID] = ci
+					}
+				}
+			}
+			for _, item := range allItems {
+				ei := &EffectiveItem{Item: *item, EffectiveLocation: item.Location, EffectiveOwner: item.Owner}
+				if ov, ok := overrideMap[item.ID]; ok {
+					ei.ChapterOverride = ov
+					if ov.Location != "" {
+						ei.EffectiveLocation = ov.Location
+					}
+					if ov.Owner != "" {
+						ei.EffectiveOwner = ov.Owner
+					}
+				}
+				effectiveItems = append(effectiveItems, ei)
+			}
+		}
+	}
+
+	charVisualPrompts = make(map[uint]string)
+	if s.lookRepo != nil && len(characters) > 0 {
+		lookIDs := make([]uint, 0, len(characters))
+		charToLook := make(map[uint]uint)
+		for _, c := range characters {
+			if c.DefaultLookID != 0 {
+				lookIDs = append(lookIDs, c.DefaultLookID)
+				charToLook[c.ID] = c.DefaultLookID
+			}
+		}
+		if len(lookIDs) > 0 {
+			if looksMap, err := s.lookRepo.BatchGetLooksByIDs(lookIDs); err == nil {
+				for charID, lookID := range charToLook {
+					if look, ok := looksMap[lookID]; ok && look != nil && look.VisualPrompt != "" {
+						charVisualPrompts[charID] = look.VisualPrompt
+					}
+				}
+			}
+		}
+	}
+
+	if s.novelRepo != nil && novelID > 0 {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			genre = novel.Meta.Genre
+			imageStyle = novel.AIConfig.ImageStyle
+			novelTitle = novel.Title
+			if s.worldviewRepo != nil && novel.WorldviewID != nil {
+				if wv, wvErr := s.worldviewRepo.GetByID(*novel.WorldviewID); wvErr == nil && wv != nil {
+					desc := wv.Description
+					if runes := []rune(desc); len(runes) > 300 {
+						desc = string(runes[:300]) + "…"
+					}
+					worldviewDesc = desc
+				}
+			}
+		}
+	}
+	if imageStyle == "" {
+		imageStyle = video.RenderConfig.ArtStyle
+	}
+
+	if s.chapterRepo != nil && chapterID != 0 {
+		if chapter, chErr := s.chapterRepo.GetByID(chapterID); chErr == nil && chapter != nil {
+			content = chapter.Content
+			chapterNo = chapter.ChapterNo
+		}
+	}
+
+	return
+}
+
+// findSceneInsertionPoint 为一个当前尚无任何分镜的场次，找出其分镜应插入的位置——取该章节内
+// 场次序号（SceneNo）小于本场的所有场次里，最大的分镜序号（shot_no）；若都没有（本场是章节
+// 第一场，或此前从未生成过分镜），返回 0（插入到最前）。
+func (s *VideoService) findSceneInsertionPoint(allShots []*model.StoryboardShot, scene *model.ScreenplayScene) int {
+	siblings, err := s.screenplaySvc.ListScenes(scene.ChapterID)
+	if err != nil {
+		return 0
+	}
+	precedingSceneIDs := make(map[uint]bool)
+	for _, sib := range siblings {
+		if sib.SceneNo < scene.SceneNo {
+			precedingSceneIDs[sib.ID] = true
+		}
+	}
+	maxNo := 0
+	for _, sh := range allShots {
+		if sh.ScreenplaySceneID != nil && precedingSceneIDs[*sh.ScreenplaySceneID] && sh.ShotNo > maxNo {
+			maxNo = sh.ShotNo
+		}
+	}
+	return maxNo
+}
+
+// getVideoByChapterID 按章节 id 查找其关联的（唯一的）视频项目。
+func (s *VideoService) getVideoByChapterID(tenantID, chapterID uint) (*model.Video, error) {
+	videos, _, err := s.videoRepo.List(nil, &chapterID, "", tenantID, 1, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(videos) == 0 {
+		return nil, fmt.Errorf("本章节尚未创建视频项目，无法重新生成分镜")
+	}
+	return videos[0], nil
+}
+
+// GetVideoIDForScreenplayScene 供 handler 在创建异步任务前解析场次归属的视频 id
+// （任务记录需要一个明确的 entity_id，才能像整视频分镜生成一样支持 /videos/:id/progress 轮询）。
+func (s *VideoService) GetVideoIDForScreenplayScene(tenantID, sceneID uint) (uint, error) {
+	if s.screenplaySvc == nil {
+		return 0, fmt.Errorf("screenplay service not configured")
+	}
+	scene, err := s.screenplaySvc.GetScene(sceneID)
+	if err != nil {
+		return 0, fmt.Errorf("screenplay scene not found: %w", err)
+	}
+	video, err := s.getVideoByChapterID(tenantID, scene.ChapterID)
+	if err != nil {
+		return 0, err
+	}
+	return video.ID, nil
+}
+
+// RegenerateShotsForScene 只重新生成单个分场剧本对应的分镜，不影响该视频其它场次的分镜内容，
+// 但会在必要时整体位移后续场次的 shot_no（保持全视频 1..N 连续编号，其它功能——审查/优化/
+// 插入删除分镜——均假设这一点成立）。
+//
+// 与整视频重新生成（GenerateStoryboardCtx）共用同一把 Redis 锁（video 级别，而非 scene 级别），
+// 防止"整视频重新生成"与"单场次重新生成"并发写同一批分镜行导致数据损坏。
+//
+// 重新生成后会作废该视频当前所有待处理（pending）的分镜审查建议——它们按旧 shot_no 记录，
+// 位移之后会指向错误的分镜（见 fetchSceneRegenContext 之上的说明）。
+func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sceneID uint, provider string, progressFn func(int)) (*StoryboardGenResult, error) {
+	if s.screenplaySvc == nil {
+		return nil, fmt.Errorf("screenplay service not configured")
+	}
+	scene, err := s.screenplaySvc.GetScene(sceneID)
+	if err != nil {
+		return nil, fmt.Errorf("screenplay scene not found: %w", err)
+	}
+	chapterID := scene.ChapterID
+
+	video, err := s.getVideoByChapterID(tenantID, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkTenantAccess(video.NovelID); err != nil {
+		return nil, err
+	}
+
+	if s.cache != nil {
+		redisKey := lockKey("storyboard", "gen", video.ID)
+		ok, lockErr := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
+		if lockErr == nil {
+			if !ok {
+				return nil, fmt.Errorf("该视频当前正在生成分镜，请稍候再试")
+			}
+			defer s.cache.Del(context.Background(), redisKey)
+		}
+	}
+
+	resolvedTenantID := s.videoTenantID(video)
+	characters, anchors, plotPoints, effectiveItems, charVisualPrompts,
+		genre, imageStyle, novelTitle, worldviewDesc, chapterNo, content :=
+		s.fetchSceneRegenContext(video, chapterID)
+	arcPlan := s.generateStoryboardArc(content, characters, resolvedTenantID, video.NovelID, provider)
+	if progressFn != nil {
+		progressFn(20)
+	}
+
+	allShots, err := s.storyboardRepo.ListByVideo(video.ID)
+	if err != nil {
+		return nil, err
+	}
+	var sceneShots []*model.StoryboardShot
+	for _, sh := range allShots {
+		if sh.ScreenplaySceneID != nil && *sh.ScreenplaySceneID == sceneID {
+			sceneShots = append(sceneShots, sh)
+		}
+	}
+	oldCount := len(sceneShots)
+	firstShotNo := 0
+	if oldCount > 0 {
+		firstShotNo = sceneShots[0].ShotNo - 1
+	} else {
+		firstShotNo = s.findSceneInsertionPoint(allShots, scene)
+	}
+
+	const prevTailN = 5
+	var prevTailShots []*model.StoryboardShot
+	for _, sh := range allShots {
+		if sh.ShotNo <= firstShotNo {
+			prevTailShots = append(prevTailShots, sh)
+		}
+	}
+	if len(prevTailShots) > prevTailN {
+		prevTailShots = prevTailShots[len(prevTailShots)-prevTailN:]
+	}
+
+	// 单场次的 segment 文本 = 【场次 N】heading + synopsis + 逐条节拍，与
+	// GenerateStoryboardCtx 里"方案B：逐场生成"分支（usedScreenplay）构造 segment 的方式一致。
+	var segBuilder strings.Builder
+	fmt.Fprintf(&segBuilder, "【场次 %d】%s\n%s\n", scene.SceneNo, scene.Heading, scene.Synopsis)
+	var segBeatSheet []map[string]interface{}
+	for j, line := range splitBeatLines(scene.Beats) {
+		beatType, speaker, text := parseBeatLine(line)
+		if beatType == "dialogue" {
+			fmt.Fprintf(&segBuilder, "%d. （对话）%s：%s\n", j+1, speaker, text)
+		} else {
+			fmt.Fprintf(&segBuilder, "%d. （%s）%s\n", j+1, beatType, text)
+		}
+		segBeatSheet = append(segBeatSheet, map[string]interface{}{
+			"No": j + 1, "BeatType": beatType, "ContentSummary": text,
+			"Location": scene.Heading, "Characters": speaker, "SuggestedShots": 0,
+		})
+	}
+	segShotCount := scene.EstimatedShotCount
+	if segShotCount < 1 {
+		segShotCount = 3
+	}
+
+	segOverrides := StoryboardOverrides{MaxTokens: 16384}
+
+	newShots, err := s.generateStoryboardSegment(ctx, video, segBuilder.String(), "", 0, 1, segShotCount,
+		characters, anchors, plotPoints, effectiveItems, prevTailShots,
+		"", genre, arcPlan, imageStyle,
+		chapterNo, novelTitle, worldviewDesc, 0, 100, charVisualPrompts,
+		segBeatSheet, resolvedTenantID, provider, segOverrides, video.ID, &chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if len(newShots) == 0 {
+		return nil, fmt.Errorf("未能生成该场次的分镜，请重试")
+	}
+	if progressFn != nil {
+		progressFn(70)
+	}
+
+	if s.sceneAnchorSvc != nil {
+		s.autoMatchShotAnchors(newShots, anchors)
+	}
+	s.autoMatchShotCharacters(newShots, characters)
+	s.autoMatchShotItems(newShots, effectiveItems)
+	for _, sh := range newShots {
+		sh.ScreenplaySceneID = &sceneID
+		sh.ChapterID = &chapterID
+	}
+	if progressFn != nil {
+		progressFn(85)
+	}
+
+	newCount := len(newShots)
+	delta := newCount - oldCount
+
+	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if oldCount > 0 {
+			oldIDs := make([]uint, 0, oldCount)
+			for _, sh := range sceneShots {
+				oldIDs = append(oldIDs, sh.ID)
+			}
+			if err := tx.Unscoped().Where("shot_id IN ?", oldIDs).Delete(&model.ShotVoiceSegment{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Where("id IN ?", oldIDs).Delete(&model.StoryboardShot{}).Error; err != nil {
+				return err
+			}
+		}
+		if delta != 0 {
+			// 两阶段位移（与 InsertShot 相同的技巧）：先加大偏移量避开唯一键冲突区间，再减回目标值。
+			// 此时本场旧分镜行已删除，"shot_no > firstShotNo" 与"shot_no > firstShotNo+oldCount"
+			// 在这个事务内等价（(firstShotNo, firstShotNo+oldCount] 区间内已经没有任何行）。
+			if err := tx.Exec(
+				"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
+				shiftTempOffset, video.ID, firstShotNo,
+			).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(
+				"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? - ? WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
+				delta, shiftTempOffset, video.ID, firstShotNo+shiftTempOffset,
+			).Error; err != nil {
+				return err
+			}
+		}
+		for i, sh := range newShots {
+			sh.ShotNo = firstShotNo + i + 1
+		}
+		return tx.Create(newShots).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("保存分镜失败: %w", err)
+	}
+
+	if s.reviewRecordRepo != nil {
+		if err := s.reviewRecordRepo.DeletePendingByEntity(model.ReviewEntityStoryboard, video.ID); err != nil {
+			logger.Errorf("[Storyboard] failed to invalidate pending reviews videoID=%d: %v", video.ID, err)
+		}
+	}
+
+	video.PublishMeta.TotalShots += delta
+	if err := s.videoRepo.Update(video); err != nil {
+		logger.Errorf("[VideoService] failed to update video %d after scene regen: %v", video.ID, err)
+	}
+	if progressFn != nil {
+		progressFn(99)
+	}
+
+	logger.Infof("[Storyboard] scene regen finished videoID=%d sceneID=%d oldCount=%d newCount=%d",
+		video.ID, sceneID, oldCount, newCount)
+
+	return &StoryboardGenResult{Shots: newShots, RequestedShots: segShotCount, FailedSegments: 0, TotalSegments: 1}, nil
+}
+
 // generateStoryboardSegment 为单个内容分段生成分镜，含最多 3 次重试。
 // P0 优化：重试因超时触发时（ai.IsTimeoutError）会同步下调期望镜头数，用更小的输出体量
 // 换取在 provider 超时窗口内完成的概率；因空响应/解析失败/镜头数不足触发的重试维持原目标，
@@ -619,7 +1075,7 @@ func (s *VideoService) generateStoryboardSegment(
 	segIdx, totalSegments, segShotCount int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
 	items []*EffectiveItem, prevTailShots []*model.StoryboardShot,
-	voiceMode, promptLanguage, genre, arcPlan, imageStyle string,
+	voiceMode, genre, arcPlan, imageStyle string,
 	chapterNo int, novelTitle, worldviewDesc string,
 	segStartPct, segEndPct int, charVisualPrompts map[uint]string,
 	segBeatSheet []map[string]interface{},
@@ -643,7 +1099,7 @@ func (s *VideoService) generateStoryboardSegment(
 	attemptShotCount := segShotCount
 	for attempt := 0; attempt < 3; attempt++ {
 		p := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, totalSegments, attemptShotCount,
-			characters, anchors, plotPoints, items, prevTailShots, voiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
+			characters, anchors, plotPoints, items, prevTailShots, voiceMode, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
 			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct, charVisualPrompts,
 			segBeatSheet, segWorldState)
 		switch attempt {
@@ -1306,7 +1762,6 @@ func (s *VideoService) buildStoryboardPrompt(
 	items []*EffectiveItem,
 	prevShots []*model.StoryboardShot,
 	voiceMode string,
-	promptLanguage string,
 	genre string,
 	pacing string,
 	arcPlan string,
@@ -1319,11 +1774,6 @@ func (s *VideoService) buildStoryboardPrompt(
 	beatSheet []map[string]interface{},  // P1a: 情节节拍表（本段子集）
 	worldState map[string]interface{},   // P1b: 跨段世界状态快照
 ) string {
-	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
-	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
-	isEn := promptLanguage == "en"
-	isImageEn := promptLanguage == "en"
-
 	segLabel := ""
 	if totalSegs > 1 {
 		segLabel = fmt.Sprintf("（第%d段，共%d段）", segNo, totalSegs)
@@ -1433,7 +1883,6 @@ func (s *VideoService) buildStoryboardPrompt(
 			"NarrOrDesc":    narrOrDesc,
 			"Dialogue":      ps.GenMeta.Dialogue,
 			"EmotionalTone": ps.CamDir.EmotionalTone,
-			"ShotSize":      ps.CamDir.ShotSize,
 			"CameraType":    ps.CamDir.CameraType,
 			"Location":      extractLocationFromScene(ps.GenMeta.Scene),
 			"TransitionOut": ps.CamDir.TransitionOut,
@@ -1463,10 +1912,9 @@ func (s *VideoService) buildStoryboardPrompt(
 		}
 		for _, si := range scoredItems[:limit] {
 			m := map[string]interface{}{
-				"Name":        si.ei.Name,
-				"Description": si.ei.Description,
-				"Location":    si.ei.EffectiveLocation,
-				"Owner":       si.ei.EffectiveOwner,
+				"Name":     si.ei.Name,
+				"Location": si.ei.EffectiveLocation,
+				"Owner":    si.ei.EffectiveOwner,
 			}
 			itemsData = append(itemsData, m)
 		}
@@ -1485,12 +1933,11 @@ func (s *VideoService) buildStoryboardPrompt(
 	}
 
 	ctx := map[string]interface{}{
-		"IsEn":                isEn,
-		"IsImageEn":           isImageEn,
 		"SegLabel":            segLabel,
 		"ExpectedShots":       expectedShots,
 		"ExpectedShotsMinus2": expectedShotsMinus2,
 		"VoiceMode":           voiceMode,
+		"VideoMode":           video.Mode, // "slideshow"(图片解说) | "video"(视频动画，含未设置时的默认)
 		"Pacing":              pacing,
 		"AutoDuration":        video.RenderConfig.TargetDuration == 0,
 		"PrevShots":           prevShotsData,
@@ -1540,8 +1987,6 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		Narration      string  `json:"narration"`
 		Dialogue       string  `json:"dialogue"`
 		CameraType     string  `json:"camera_type"`
-		CameraAngle    string  `json:"camera_angle"`
-		ShotSize       string  `json:"shot_size"`
 		Duration       float64 `json:"duration"`
 		Location       string  `json:"location"`
 		TimeOfDay      string  `json:"time_of_day"`
@@ -1648,11 +2093,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		imagePrompt := r.ImagePrompt
 		if imagePrompt == "" {
 			imagePrompt = r.Description
-			if r.CameraAngle != "" || r.ShotSize != "" {
-				imagePrompt = fmt.Sprintf("%s, %s shot, %s angle", r.Description, r.ShotSize, r.CameraAngle)
-			}
 			if r.Lighting != "" {
-				imagePrompt += ", " + r.Lighting + " lighting"
+				imagePrompt += "，" + r.Lighting + "光线"
 			}
 		}
 		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词。
@@ -1663,15 +2105,11 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 
 		// video_prompt: 优先使用 LLM 生成的专业视频提示词，兜底用 buildMotionPrompt 生成
 		cameraType := validCameraType(r.CameraType)
-		cameraAngle := validCameraAngle(r.CameraAngle)
-		shotSize := validShotSize(r.ShotSize)
 		videoPrompt := r.VideoPrompt
 		if videoPrompt == "" {
 			videoPrompt = buildMotionPrompt(&model.StoryboardShot{
 				CamDir: model.ShotCamDir{
-					CameraType:  cameraType,
-					CameraAngle: cameraAngle,
-					ShotSize:    shotSize,
+					CameraType: cameraType,
 				},
 				Description: r.Description,
 			})
@@ -1725,8 +2163,6 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Duration:    duration,
 			CamDir: model.ShotCamDir{
 				CameraType:    cameraType,
-				CameraAngle:   cameraAngle,
-				ShotSize:      shotSize,
 				Transition:    validTransition(r.Transition),
 				TransitionOut: r.TransitionOut,
 				TransitionIn:  r.TransitionIn,
@@ -1805,22 +2241,22 @@ func validTransition(t string) string {
 // buildMotionPrompt 根据分镜信息构建运动提示词（降级方案，LLM 生成的 video_prompt 优先）
 func buildMotionPrompt(shot *model.StoryboardShot) string {
 	motionMap := map[string]string{
-		"static":     "locked-off camera with organic micro-stabilization, imperceptible ±0.3px breathing drift, no intentional camera movement",
-		"push":       "slow cinematic dolly-push at 0.2x speed closing distance to subject by approximately 30% over shot duration, horizon held stable",
-		"pull":       "steady dolly-pull at 0.15x speed, environment expanding outward from center frame as distance increases",
-		"pan":        "smooth horizontal camera pan at 12°/sec, horizon line held level throughout, subject tracking smoothly from left-to-right",
-		"track":      "smooth tracking shot following primary subject at constant distance, camera maintaining framing as subject moves",
-		"crane_up":   "slow vertical crane rise at 0.1m/sec, horizon line gradually descending in frame, environment expanding into view below",
-		"crane_down": "slow vertical crane descent at 0.1m/sec, camera closing toward ground, horizon rising in frame",
-		"follow":     "handheld follow shot with subtle organic stabilization tracking subject, slight natural camera float maintaining close framing",
-		"arc":        "smooth arc shot orbiting around subject at constant radius, background environment rotating behind while subject stays centered",
-		"tilt":       "smooth vertical camera tilt revealing scene from top to bottom at steady pace, maintaining horizontal level throughout",
-		"whip_pan":   "fast whip pan transition sweeping frame left-to-right in 0.3s, motion blur trail visible during sweep, settling to stable frame",
-		"zoom":       "smooth optical zoom closing in on subject, focal length increasing gradually over shot duration, background compression effect visible",
+		"static":     "固定机位，带自然微稳定，几乎不可察觉的±0.3像素呼吸抖动，无主动镜头运动",
+		"push":       "缓慢电影感推轨镜头，0.2倍速推进，整个镜头时长内与主体距离缩短约30%，地平线保持稳定",
+		"pull":       "稳定拉轨镜头，0.15倍速后退，随着距离增加环境从画面中心向外扩展",
+		"pan":        "平滑水平横摇镜头，每秒12度，全程地平线保持水平，主体从左到右平滑追踪",
+		"track":      "平滑跟踪镜头，与主要主体保持恒定距离跟随，主体移动时镜头保持构图",
+		"crane_up":   "缓慢垂直升降臂上升，每秒0.1米，画面中地平线逐渐下降，下方环境逐渐进入画面",
+		"crane_down": "缓慢垂直升降臂下降，每秒0.1米，镜头向地面靠近，画面中地平线上升",
+		"follow":     "手持跟随镜头，带轻微自然稳定追踪主体，镜头有轻微自然浮动，保持近景构图",
+		"arc":        "平滑环绕镜头，以恒定半径绕主体旋转，背景环境在身后旋转而主体保持居中",
+		"tilt":       "平滑垂直俯仰镜头，以稳定节奏由上至下展现场景，全程保持水平",
+		"whip_pan":   "快速甩镜转场，0.3秒内从左到右扫过画面，扫动过程中可见运动模糊拖影，随后稳定至静止画面",
+		"zoom":       "平滑光学变焦推近主体，镜头时长内焦距逐渐增大，可见背景压缩效果",
 	}
 	motion := motionMap[shot.CamDir.CameraType]
 	if motion == "" {
-		motion = "smooth camera movement with organic micro-stabilization, imperceptible breathing drift"
+		motion = "平滑镜头运动，带自然微稳定，几乎不可察觉的呼吸抖动"
 	}
 
 	// 从 shot.GenMeta.Scene 中提取时间/天气用于大气描述
@@ -1834,22 +2270,9 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		}
 	}
 
-	atmos := "ambient dust motes drifting slowly in available light shafts at 0.3cm/sec"
+	atmos := "环境尘埃粒子在可见光柱中缓慢漂浮，速度约每秒0.3厘米"
 	if strings.Contains(timeOfDay, "night") || strings.Contains(timeOfDay, "dusk") || strings.Contains(timeOfDay, "evening") {
-		atmos = "subtle ground-level mist at 5-10cm height drifting slowly, torch or moonlight casting soft moving shadows"
-	}
-
-	shotSizeDesc := map[string]string{
-		"extreme_close_up": "extreme close-up framing, subject fills frame edge-to-edge",
-		"close_up":         "close-up framing, subject fills majority of frame",
-		"medium":           "medium shot framing, subject and immediate environment both visible",
-		"wide":             "wide shot framing, broad environment context dominates",
-		"extreme_wide":     "extreme wide shot, vast environment with subject small in frame",
-		"full":             "full-body shot framing, subject visible head to toe",
-	}
-	framing := shotSizeDesc[shot.CamDir.ShotSize]
-	if framing == "" {
-		framing = "standard shot framing"
+		atmos = "地面轻微雾气，高度5-10厘米，缓慢飘动，火把或月光投下柔和的移动阴影"
 	}
 
 	desc := shot.Description
@@ -1858,10 +2281,10 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		desc = string(runes[:150])
 	}
 
-	return fmt.Sprintf("cinematic sequence, professional cinematography, %s, %s — scene: %s — atmosphere: %s — "+
-		"lighting holds stable throughout with natural subtle variation, shadows maintain direction, "+
-		"no abrupt scene changes, smooth temporal consistency from first to last frame",
-		motion, framing, desc, atmos)
+	return fmt.Sprintf("电影感镜头，专业摄影，%s——场景：%s——氛围：%s——"+
+		"光线全程保持稳定并带有自然的细微变化，阴影方向保持一致，"+
+		"无突兀的场景切换，从首帧到末帧保持平滑的时序一致性",
+		motion, desc, atmos)
 }
 
 // qualityTierImageParams 返回图片生成质量档位对应的参数（宽度、步数、CFG scale）
@@ -1937,26 +2360,6 @@ func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
 	return fmt.Sprintf("%dx%d", w, h)
 }
 
-// colorGradeToPromptKeyword 将色彩调色配置映射为 prompt 关键词，注入图片/视频生成 prompt。
-func colorGradeToPromptKeyword(grade string) string {
-	switch grade {
-	case "cinematic":
-		return "cinematic color grading, teal and orange, high contrast film look"
-	case "warm":
-		return "warm color tones, golden warm lighting"
-	case "cool":
-		return "cool color tones, cool blue atmosphere"
-	case "teal_orange":
-		return "teal and orange color grading"
-	case "vintage":
-		return "vintage film look, faded warm colors, retro tone"
-	case "noir":
-		return "film noir, dramatic high-contrast shadows, moody lighting"
-	default:
-		return ""
-	}
-}
-
 // validCameraType 验证摄像机类型，无效时返回默认值 static
 func validCameraType(t string) string {
 	valid := map[string]bool{
@@ -1968,30 +2371,6 @@ func validCameraType(t string) string {
 		return t
 	}
 	return "static"
-}
-
-// validCameraAngle 验证摄像机角度，无效时返回默认值 eye_level
-func validCameraAngle(a string) string {
-	valid := map[string]bool{
-		"eye_level": true, "high": true, "low": true,
-		"dutch": true, "overhead": true, "POV": true,
-	}
-	if valid[a] {
-		return a
-	}
-	return "eye_level"
-}
-
-// validShotSize 验证景别，无效时返回默认值 medium
-func validShotSize(s string) string {
-	valid := map[string]bool{
-		"extreme_wide": true, "wide": true, "full": true,
-		"medium": true, "close_up": true, "extreme_close_up": true,
-	}
-	if valid[s] {
-		return s
-	}
-	return "medium"
 }
 
 // ─── Storyboard CRUD ──────────────────────────────────────────────────────────
@@ -2018,6 +2397,52 @@ func (s *VideoService) GetShotByID(videoID, shotID uint) (*model.StoryboardShot,
 	return shot, nil
 }
 
+// ListShotAssetHistory 返回某个分镜历史生成过的图片/视频素材（最新在前），供前端"视频生成历史"
+// 面板展示——每次重新生成图片/视频前，旧素材会被 snapshotShotAsset 存一份，见 video_service.go。
+func (s *VideoService) ListShotAssetHistory(videoID, shotID uint) ([]*model.Asset, error) {
+	if _, err := s.GetShotByID(videoID, shotID); err != nil {
+		return nil, err
+	}
+	if s.assetRepo == nil {
+		return nil, nil
+	}
+	return s.assetRepo.ListByShotID(shotID)
+}
+
+// RestoreShotAsset 把分镜恢复到历史记录里的某个版本：先把当前版本存入历史（避免恢复动作本身
+// 让当前版本无声丢失），再把 asset 的 storage_url 写回 shot 对应字段（按 asset.Type 决定
+// 覆盖 ImageURL 还是 VideoURL）。
+func (s *VideoService) RestoreShotAsset(tenantID, videoID, shotID, assetID uint) (*model.StoryboardShot, error) {
+	shot, err := s.GetShotByID(videoID, shotID)
+	if err != nil {
+		return nil, err
+	}
+	if s.assetRepo == nil {
+		return nil, fmt.Errorf("asset history not available")
+	}
+	asset, err := s.assetRepo.GetByID(assetID)
+	if err != nil {
+		return nil, fmt.Errorf("history asset not found: %w", err)
+	}
+	if asset.QualityMeta.ShotID == nil || *asset.QualityMeta.ShotID != shotID {
+		return nil, fmt.Errorf("asset %d does not belong to shot %d", assetID, shotID)
+	}
+	switch asset.Type {
+	case "image":
+		s.snapshotShotAsset(shot, "image", shot.ImageURL, tenantID)
+		shot.ImageURL = asset.MediaMeta.StorageURL
+	case "video":
+		s.snapshotShotAsset(shot, "video", shot.VideoURL, tenantID)
+		shot.VideoURL = asset.MediaMeta.StorageURL
+	default:
+		return nil, fmt.Errorf("unsupported asset type %q", asset.Type)
+	}
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		return nil, fmt.Errorf("恢复历史版本失败: %w", err)
+	}
+	return shot, nil
+}
+
 // UpdateShot 更新分镜
 func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.StoryboardShot, error) {
 	shot, err := s.storyboardRepo.GetByID(id)
@@ -2026,12 +2451,6 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 	}
 	if req.CamDir.CameraType != "" {
 		shot.CamDir.CameraType = req.CamDir.CameraType
-	}
-	if req.CamDir.CameraAngle != "" {
-		shot.CamDir.CameraAngle = req.CamDir.CameraAngle
-	}
-	if req.CamDir.ShotSize != "" {
-		shot.CamDir.ShotSize = req.CamDir.ShotSize
 	}
 	if req.Duration > 0 {
 		shot.Duration = req.Duration
@@ -2046,11 +2465,11 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 }
 
 // UpdateShotPartial 按字段 map 部分更新分镜，仅更新请求中明确提供的字段。
-// 允许的字段：description, narration, dialogue, subtitle, camera_type, camera_angle,
-// shot_size, duration, emotional_tone, transition, status, generation_mode.
+// 允许的字段：description, narration, dialogue, subtitle, camera_type,
+// duration, emotional_tone, transition, status, generation_mode.
 //
 // 注意：dialogue/subtitle/prompt/motion_prompt/generation_mode 存储在 gen_meta JSON 列；
-// camera_type/camera_angle/shot_size/emotional_tone/transition* 存储在 cam_dir JSON 列。
+// camera_type/emotional_tone/transition* 存储在 cam_dir JSON 列。
 // GORM map Updates 不走 serializer，必须手动将这些字段合并到对应 JSON 列后再写入。
 func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{}) (*model.StoryboardShot, error) {
 	// gen_meta JSON 列中的字段
@@ -2059,7 +2478,7 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 	}
 	// cam_dir JSON 列中的字段
 	camDirKeys := map[string]bool{
-		"camera_type": true, "camera_angle": true, "shot_size": true,
+		"camera_type": true,
 		"emotional_tone": true, "transition": true, "transition_out": true, "transition_in": true,
 	}
 	// 直接列
@@ -2106,12 +2525,6 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 				updatedGenMeta = true
 			case "camera_type":
 				shot.CamDir.CameraType = sv
-				updatedCamDir = true
-			case "camera_angle":
-				shot.CamDir.CameraAngle = sv
-				updatedCamDir = true
-			case "shot_size":
-				shot.CamDir.ShotSize = sv
 				updatedCamDir = true
 			case "emotional_tone":
 				shot.CamDir.EmotionalTone = sv
@@ -2214,7 +2627,7 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 		}
 	}
 
-	novelTitle, genre, promptLanguage := novelPromptContext(s.novelRepo, video.NovelID)
+	novelTitle, genre := novelPromptContext(s.novelRepo, video.NovelID)
 
 	characterList := "无绑定角色"
 	if len(charNames) > 0 {
@@ -2232,7 +2645,6 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 	rendered, tplErr := renderPrompt("regenerate_shot_prompt", map[string]interface{}{
 		"NovelTitle":      novelTitle,
 		"Genre":           genre,
-		"PromptLanguage":  promptLanguage,
 		"ShotDescription": shot.Description,
 		"CharacterList":   characterList,
 		"ItemList":        itemList,
@@ -2286,10 +2698,8 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 		Description: description,
 		Duration:    duration,
 		CamDir: model.ShotCamDir{
-			CameraType:  "static",
-			CameraAngle: "eye_level",
-			ShotSize:    "medium",
-			Transition:  "cut",
+			CameraType: "static",
+			Transition: "cut",
 		},
 		Status: "pending",
 	}
@@ -2312,6 +2722,20 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 			}
 			resolvedAfter = maxNo
 		}
+
+		// 继承相邻分镜所属的分场：优先取插入位置前一个分镜的场次；若插入到最前
+		// （resolvedAfter==0，没有"前一个"分镜），退而取原本排第一、插入后紧随其后的分镜的场次。
+		neighborShotNo := resolvedAfter
+		if neighborShotNo == 0 {
+			neighborShotNo = 1
+		}
+		var neighbor model.StoryboardShot
+		if e := tx.Where("video_id = ? AND shot_no = ? AND deleted_at IS NULL", videoID, neighborShotNo).First(&neighbor).Error; e == nil {
+			shot.ScreenplaySceneID = neighbor.ScreenplaySceneID
+		} else if !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+
 		newShotNo := resolvedAfter + 1
 		shot.ShotNo = newShotNo
 		if e := tx.Exec(
@@ -2342,16 +2766,17 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 	}
 	appendToEnd := afterShotNo < 0
 	shot := &model.StoryboardShot{
-		VideoID:       src.VideoID,
-		ChapterID:     src.ChapterID,
-		UUID:          uuid.New().String(),
-		Description:   src.Description,
-		Narration:     src.Narration,
-		Duration:      src.Duration,
-		CamDir:        src.CamDir,
-		GenMeta:       src.GenMeta,
-		SceneAnchorID: src.SceneAnchorID,
-		CharacterIDs:  src.CharacterIDs,
+		VideoID:           src.VideoID,
+		ChapterID:         src.ChapterID,
+		UUID:              uuid.New().String(),
+		Description:       src.Description,
+		Narration:         src.Narration,
+		Duration:          src.Duration,
+		CamDir:            src.CamDir,
+		GenMeta:           src.GenMeta,
+		SceneAnchorID:     src.SceneAnchorID,
+		CharacterIDs:      src.CharacterIDs,
+		ScreenplaySceneID: src.ScreenplaySceneID,
 		// ImageURL / VideoURL intentionally NOT copied — copied shot starts fresh
 		Status: "pending",
 	}
@@ -2573,9 +2998,6 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 		if ins.Dialogue != "" {
 			fields["dialogue"] = ins.Dialogue
 		}
-		if ins.ShotSize != "" {
-			fields["shot_size"] = ins.ShotSize
-		}
 		if ins.CameraType != "" {
 			fields["camera_type"] = ins.CameraType
 		}
@@ -2633,8 +3055,8 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		return s
 	}
 	for _, shot := range shots {
-		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%-12s 时长:%4.1fs 运镜:%-8s 角度:%-10s",
-			shot.ShotNo, shot.CamDir.ShotSize, shot.Duration, shot.CamDir.CameraType, shot.CamDir.CameraAngle))
+		sb.WriteString(fmt.Sprintf("[镜%d] 时长:%4.1fs 运镜:%-8s",
+			shot.ShotNo, shot.Duration, shot.CamDir.CameraType))
 		if shot.CamDir.EmotionalTone != "" {
 			sb.WriteString(fmt.Sprintf(" 情绪:%s", truncate(shot.CamDir.EmotionalTone, 12)))
 		}
@@ -2729,8 +3151,6 @@ type shotOptimizeUpdate struct {
 	Narration      *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
 	Dialogue       *string `json:"dialogue"`  // 同上
 	CameraType     string  `json:"camera_type"`
-	CameraAngle    string  `json:"camera_angle"`
-	ShotSize       string  `json:"shot_size"`
 	Duration       float64 `json:"duration"`
 	EmotionalTone  string  `json:"emotional_tone"`
 	Transition     string  `json:"transition"`
@@ -2755,8 +3175,8 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 	// 预格式化分镜数据，包含提示词内容供 AI 评估和改写
 	var sb strings.Builder
 	for _, sh := range shots {
-		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%s 时长:%.0fs 镜头:%s/%s",
-			sh.ShotNo, sh.CamDir.ShotSize, sh.Duration, sh.CamDir.CameraType, sh.CamDir.CameraAngle))
+		sb.WriteString(fmt.Sprintf("[镜%d] 时长:%.0fs 镜头:%s",
+			sh.ShotNo, sh.Duration, sh.CamDir.CameraType))
 		if sh.CamDir.EmotionalTone != "" {
 			sb.WriteString(fmt.Sprintf(" 情绪:%s", sh.CamDir.EmotionalTone))
 		}
@@ -2913,14 +3333,6 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		// cam_dir JSON 列子字段
 		if upd.CameraType != "" {
 			sh.CamDir.CameraType = upd.CameraType
-			updatedCamDir = true
-		}
-		if upd.CameraAngle != "" {
-			sh.CamDir.CameraAngle = upd.CameraAngle
-			updatedCamDir = true
-		}
-		if upd.ShotSize != "" {
-			sh.CamDir.ShotSize = upd.ShotSize
 			updatedCamDir = true
 		}
 		if upd.EmotionalTone != "" {

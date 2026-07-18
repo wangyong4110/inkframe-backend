@@ -327,6 +327,56 @@ func (h *VideoHandler) RegenerateShotPrompt(c *gin.Context) {
 	respondOK(c, shot)
 }
 
+// ListShotAssetHistory 返回某个分镜历史生成过的图片/视频素材（视频生成历史面板用）
+// GET /api/v1/videos/:id/shots/:shot_id/asset-history
+func (h *VideoHandler) ListShotAssetHistory(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	assets, err := h.videoService.ListShotAssetHistory(uint(videoID), uint(shotID))
+	if err != nil {
+		reqLogger(c).Errorf("[VideoHandler] ListShotAssetHistory: videoID=%d shotID=%d err=%v", videoID, shotID, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, assets)
+}
+
+// RestoreShotAsset 把分镜恢复到历史记录里的某个版本
+// POST /api/v1/videos/:id/shots/:shot_id/asset-history/:asset_id/restore
+func (h *VideoHandler) RestoreShotAsset(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	assetID, ok := parseID(c, "asset_id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	shot, err := h.videoService.RestoreShotAsset(getTenantID(c), uint(videoID), uint(shotID), uint(assetID))
+	if err != nil {
+		reqLogger(c).Errorf("[VideoHandler] RestoreShotAsset: videoID=%d shotID=%d assetID=%d err=%v", videoID, shotID, assetID, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, shot)
+}
+
 // OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜（异步任务）
 // POST /api/v1/videos/:id/storyboard/optimize-from-review
 // Body: StoryboardReview JSON（由 review 任务结果直接透传）+ 可选 provider

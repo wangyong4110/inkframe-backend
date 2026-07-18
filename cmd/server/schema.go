@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-16-v4"
+const schemaVersion = "2026-07-18-v2"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -80,6 +80,16 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 删除已废弃列（voices_json 已迁移至代码内置表 model.BuiltinVoices）
 	db.Exec("ALTER TABLE ink_model_provider DROP COLUMN IF EXISTS voices_json")
+
+	// ink_character_look 精简（2026-07-17-v2）：角色形象不再支持按章节区间自动切换
+	// （chapter_from/chapter_to 连带的选取逻辑已从代码中整体移除，统一改为
+	// Character.DefaultLookID 直接指定当前形象）；面部参考图（portrait）不再单独生成/存储，
+	// 分镜/视频一致性参考图统一改用 three_view_sheet（正/侧/背/面部特写合图）；
+	// face_prompt（面部特写专用提示词）随面部参考图功能一并下线。
+	db.Exec("ALTER TABLE ink_character_look DROP COLUMN IF EXISTS chapter_from")
+	db.Exec("ALTER TABLE ink_character_look DROP COLUMN IF EXISTS chapter_to")
+	db.Exec("ALTER TABLE ink_character_look DROP COLUMN IF EXISTS face_prompt")
+	db.Exec("ALTER TABLE ink_character_look DROP COLUMN IF EXISTS portrait")
 
 	// ink_chapter 表结构重设计（2026-07-03-v1）：
 	// 将 narrative_meta/quality_meta JSON blob 拆平为直接列，移除 uuid/act_no/hook_type
@@ -156,6 +166,137 @@ func autoMigrate(db *gorm.DB) error {
 			if err := db.Exec("ALTER TABLE `" + c.table + "` ADD COLUMN `" + c.column + "` INT NOT NULL DEFAULT 0").Error; err != nil {
 				return fmt.Errorf("autoMigrate: failed to add %s.%s: %w", c.table, c.column, err)
 			}
+		}
+	}
+
+	// ink_screenplay_scene：分场剧本，全新表（不是加列）——这里也不能指望 GORM AutoMigrate
+	// 自动建表（本仓库只对 CharacterLook 做 AutoMigrate，见上方大段说明），必须手写建表 SQL，
+	// 字段需与 model.ScreenplayScene 的 gorm 标签手动对应；CREATE TABLE IF NOT EXISTS 本身
+	// 幂等，仍需检查错误，理由同上（避免"表没建但版本号已写入"导致后续启动永久跳过）。
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS ink_screenplay_scene (
+		id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		chapter_id           BIGINT UNSIGNED NOT NULL,
+		novel_id             BIGINT UNSIGNED NOT NULL,
+		scene_no             INT NOT NULL,
+		heading              VARCHAR(255) NOT NULL DEFAULT '',
+		scene_anchor_id      BIGINT UNSIGNED DEFAULT NULL,
+		synopsis             TEXT,
+		character_ids        JSON,
+		emotional_tone       VARCHAR(100) NOT NULL DEFAULT '',
+		beats                TEXT,
+		estimated_shot_count INT NOT NULL DEFAULT 0,
+		locked               TINYINT(1) NOT NULL DEFAULT 0,
+		edited               TINYINT(1) NOT NULL DEFAULT 0,
+		created_at           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+		updated_at           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+		PRIMARY KEY (id),
+		KEY idx_screenplay_scene_chapter_no (chapter_id, scene_no),
+		KEY idx_screenplay_scene_novel_id (novel_id),
+		KEY idx_screenplay_scene_anchor_id (scene_anchor_id)
+	)`).Error; err != nil {
+		return fmt.Errorf("autoMigrate: failed to create ink_screenplay_scene: %w", err)
+	}
+	// ink_screenplay_scene.edited：表本身在上面的 CREATE TABLE IF NOT EXISTS 里已经带了这一列，
+	// 但如果该表在本次改动前已经被创建过（不含这一列），CREATE TABLE IF NOT EXISTS 不会给已存在
+	// 的表补列，所以仍需要单独一条幂等 ALTER，和本文件其它"新增列"迁移保持同样的写法。
+	var screenplayEditedColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_screenplay_scene' AND COLUMN_NAME = 'edited'`,
+	).Scan(&screenplayEditedColCnt)
+	if screenplayEditedColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_screenplay_scene ADD COLUMN edited TINYINT(1) NOT NULL DEFAULT 0").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_screenplay_scene.edited: %w", err)
+		}
+	}
+
+	// ink_storyboard_shot.screenplay_scene_id：分镜归属的分场剧本，nil 兼容旧的直接生成路径。
+	var screenplaySceneColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_storyboard_shot' AND COLUMN_NAME = 'screenplay_scene_id'`,
+	).Scan(&screenplaySceneColCnt)
+	if screenplaySceneColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_storyboard_shot ADD COLUMN screenplay_scene_id BIGINT UNSIGNED DEFAULT NULL, ADD INDEX idx_shot_screenplay_scene (screenplay_scene_id)").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_storyboard_shot.screenplay_scene_id: %w", err)
+		}
+	}
+
+	// ink_item：精简道具配置——删除"类别"（category，早已不在 Go model 里，是历史遗留列）、
+	// "持有状态"（status）、"道具描述"（description，图片生成 prompt 已改为只用 VisualPrompt
+	// 兜底，不再依赖这个字段）三列。DROP COLUMN 本身幂等，仍统一走 existence-check 模式。
+	for _, col := range []string{"category", "status", "description"} {
+		var cnt int64
+		db.Raw(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_item' AND COLUMN_NAME = ?`,
+			col,
+		).Scan(&cnt)
+		if cnt > 0 {
+			if err := db.Exec("ALTER TABLE ink_item DROP COLUMN `" + col + "`").Error; err != nil {
+				return fmt.Errorf("autoMigrate: failed to drop ink_item.%s: %w", col, err)
+			}
+		}
+	}
+
+	// ink_scene_anchor：精简场景锚点配置——删除"类型"（type，interior/exterior/imaginary）、
+	// "变体"（variant，day/night/winter 等）两列。parent_anchor_id 完全依附于 variant 机制而存在
+	// （唯一赋值路径是 AI 提取时解析 variant 场景的父级名称），variant 删除后它变成永远不会被
+	// 写入、也没有任何代码读取的孤儿列，一并删除。usage_count 同样是孤儿列：全库搜索确认没有任何
+	// 代码路径会递增它（历史上曾有的 UpdateStats 维护逻辑已不存在，只留了一条对不上任何函数的
+	// 孤立注释），永远停留在建表时的默认值 0，随类型/变体一并清理。DROP COLUMN 幂等，走
+	// existence-check 模式。
+	for _, col := range []string{"type", "variant", "parent_anchor_id", "usage_count"} {
+		var cnt int64
+		db.Raw(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_scene_anchor' AND COLUMN_NAME = ?`,
+			col,
+		).Scan(&cnt)
+		if cnt > 0 {
+			if err := db.Exec("ALTER TABLE ink_scene_anchor DROP COLUMN `" + col + "`").Error; err != nil {
+				return fmt.Errorf("autoMigrate: failed to drop ink_scene_anchor.%s: %w", col, err)
+			}
+		}
+	}
+
+	// ink_image_style_preset：画风预设（风格库页面），全新表——同样不能指望 GORM AutoMigrate
+	// 自动建表（本仓库只对 CharacterLook 做 AutoMigrate，见上方大段说明），必须手写建表 SQL，
+	// 字段需与 model.ImageStylePreset 的 gorm 标签手动对应。
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS ink_image_style_preset (
+		id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		style_id            VARCHAR(50) NOT NULL,
+		name                VARCHAR(100) NOT NULL,
+		description         TEXT,
+		tags                TEXT,
+		category            VARCHAR(20) NOT NULL DEFAULT '',
+		prompt_category     VARCHAR(24) NOT NULL DEFAULT '',
+		preview_colors      TEXT,
+		preview_image_url   VARCHAR(1000),
+		prompt              TEXT,
+		sort_order          INT NOT NULL DEFAULT 0,
+		is_builtin          TINYINT(1) NOT NULL DEFAULT 0,
+		enabled             TINYINT(1) NOT NULL DEFAULT 1,
+		created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+		updated_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+		PRIMARY KEY (id),
+		UNIQUE KEY uni_image_style_preset_style_id (style_id),
+		KEY idx_image_style_preset_category (category)
+	)`).Error; err != nil {
+		return fmt.Errorf("autoMigrate: failed to create ink_image_style_preset: %w", err)
+	}
+	// ink_image_style_preset.prompt_category：风格库统一分类字段，供 resolveStyleCategory()
+	// （character_service.go）读取以选择质量提升词/冲突清理词大类，替代此前的硬编码 styleID switch。
+	// 表在上面的 CREATE TABLE IF NOT EXISTS 里已经带了这一列，但已存在的表不会被补列，
+	// 仍需要单独一条幂等 ALTER（模式同 ink_asset.description，见上方说明）。
+	var promptCategoryColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_image_style_preset' AND COLUMN_NAME = 'prompt_category'`,
+	).Scan(&promptCategoryColCnt)
+	if promptCategoryColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_image_style_preset ADD COLUMN prompt_category VARCHAR(24) NOT NULL DEFAULT ''").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_image_style_preset.prompt_category: %w", err)
 		}
 	}
 

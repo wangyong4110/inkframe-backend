@@ -75,8 +75,8 @@ func (h *ItemHandler) CreateItem(c *gin.Context) {
 }
 
 // GenerateItemInfo POST /novels/:id/items/ai-generate
-// body: {name(required), hint(optional，作者已填写的初步描述)}
-// 根据道具名称 AI 生成完整档案，仅返回结果供"添加道具"弹窗一键填充，不落库。
+// body: {name(required), hint(optional，作者已填写的初步提示)}
+// 根据道具名称 AI 生成视觉提示词，仅返回结果供"添加道具"弹窗一键填充，不落库。
 func (h *ItemHandler) GenerateItemInfo(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
@@ -92,12 +92,12 @@ func (h *ItemHandler) GenerateItemInfo(c *gin.Context) {
 	if !bindJSON(c, &body) {
 		return
 	}
-	description, visualPrompt, err := h.itemService.GenerateItemInfo(getTenantID(c), uint(novelID), body.Name, body.Hint)
+	visualPrompt, err := h.itemService.GenerateItemInfo(getTenantID(c), uint(novelID), body.Name, body.Hint)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to generate item info: "+err.Error())
 		return
 	}
-	respondOK(c, gin.H{"description": description, "visual_prompt": visualPrompt})
+	respondOK(c, gin.H{"visual_prompt": visualPrompt})
 }
 
 // checkItemTenant 校验道具归属当前租户（通过关联小说）。
@@ -436,13 +436,21 @@ func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	reqLogger(c).Printf("[ItemHandler] AIExtractChapterItems: novelID=%d chapterNo=%d userPromptLen=%d", novelID, chapterNo, len(body.UserPrompt))
-	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID, body.UserPrompt)
+	tenantID := getTenantID(c)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterItemExtract
+	// 的执行函数在 cmd/server/task_resume.go，调用同一个 h.itemService.AIExtractChapterItems）。
+	// 改成异步任务是为了让章节保存后自动触发提取时不阻塞保存请求；前端已经兼容
+	// "返回 task_id 则异步轮询，否则直接读同步结果" 两种情况，此处切换不需要改前端。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterItemExtract, "道具提取", "chapter", chapter.ID, map[string]interface{}{
+		"novel_id":    novelID,
+		"user_prompt": body.UserPrompt,
+	})
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to extract chapter items: "+err.Error())
+		reqLogger(c).Errorf("[ItemHandler] AIExtractChapterItems create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, gin.H{"items": items, "count": len(items)})
+	respondAccepted(c, task.TaskID, "道具提取任务已提交")
 }
 
 // UploadItemImage 上传道具图片到 OSS，保存 URL 到 item.ImageURL

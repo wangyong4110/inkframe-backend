@@ -18,30 +18,12 @@ Current description (for reference, improve if needed):
 
 # Rules
 
-1. `type` must be one of: `interior` / `exterior` / `imaginary`
-{% if PromptLanguage == "en" %}
-2. `description`: Detailed English visual description for AI image generation, **minimum 150 words**. **CRITICAL: DO NOT mention any people, characters, figures, humans, silhouettes, or body parts — describe only the environment itself. DO NOT include any violent, bloody, death/casualty, or sexually suggestive words.** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
+1. `description`: 用于 AI 图像生成的详细中文视觉描述，**不少于150字**。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** 必须覆盖以下全部维度，缺少任何维度都会降低图像质量：
 {% include "fragments/scene_visual_dimensions.j2" %}
-3. `variant`: ONLY fill this if the scene is a variant of another scene (e.g. the nighttime version of a daytime scene). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
-{% else %}
-2. `description`: 用于 AI 图像生成的详细中文视觉描述，**不少于150字**。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** 必须覆盖以下全部维度，缺少任何维度都会降低图像质量：
-{% include "fragments/scene_visual_dimensions.j2" %}
-3. `variant`: 仅当该场景是已有场景的变体时填写（如某白天场景的夜晚版）。可选值：`day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`。主要场景留空。
-{% endif %}
-4. Output ONLY a valid JSON object — no markdown fences, no explanation text.
+2. Output ONLY a valid JSON object — no markdown fences, no explanation text.
 
 # Output format
 
-{% if PromptLanguage == "en" %}
 {
-  "type": "interior",
-  "description": "An immense imperial throne hall of overwhelming scale...",
-  "variant": ""
+  "description": "气势磅礴的皇家朝堂..."
 }
-{% else %}
-{
-  "type": "interior",
-  "description": "气势磅礴的皇家朝堂...",
-  "variant": ""
-}
-{% endif %}

@@ -138,6 +138,9 @@ func main() {
 	// 7b. 预置内置短剧模板（幂等，按名称 upsert）
 	service.SeedBuiltinTemplates(repos.DramaTemplateRepo)
 
+	// 7c. 预置内置画风预设（幂等，按 style_id upsert）
+	service.SeedBuiltinImageStylePresets(repos.ImageStylePresetRepo)
+
 	// 8. 初始化服务层
 	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
 
@@ -179,6 +182,7 @@ func main() {
 	services.BGMService.WithStorage(storageSvc)
 	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
+	services.VideoService.WithScreenplayService(services.ScreenplayService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
 	services.VideoService.WithReviewRecordRepo(repos.ReviewRecordRepo)
 	services.VideoService.WithIgnoredIssueRepo(repos.IgnoredReviewIssueRepo)
@@ -240,6 +244,7 @@ func main() {
 		TaskHandler:            handlers.TaskHandler,
 		MediaHandler:           handlers.MediaHandler,
 		SceneAnchorHandler:     handlers.SceneAnchorHandler,
+		ScreenplayHandler:      handlers.ScreenplayHandler,
 		SystemHandler:          handlers.SystemHandler,
 		FsHandler:              handlers.FsHandler,
 		RewriteHandler:         handlers.RewriteHandler,
@@ -266,7 +271,8 @@ func main() {
 		SysAdminHandler:        handlers.SysAdminHandler,
 		SensitiveWordHandler:   handlers.SensitiveWordHandler,
 		FeedbackHandler:        handlers.FeedbackHandler,
-		DramaTemplateHandler:   handlers.DramaTemplateHandler,
+		DramaTemplateHandler:    handlers.DramaTemplateHandler,
+		ImageStylePresetHandler: handlers.ImageStylePresetHandler,
 	})
 
 	// 12. 创建服务器
@@ -380,12 +386,15 @@ func main() {
 			service.TaskTypeNovelOutlineGen,
 			service.TaskTypeCoverImageGen,
 			service.TaskTypeItemExtract,
+			service.TaskTypeChapterItemExtract,
+			service.TaskTypeScreenplayGen,
 			service.TaskTypeImageGen,
 			service.TaskTypeImageEdit,
 			service.TaskTypeImageUpscale,
 			service.TaskTypeChapterSceneExtract,
 			service.TaskTypeSceneAnchorExtract,
 			service.TaskTypeStoryboardGen,
+			service.TaskTypeStoryboardSceneRegen,
 			service.TaskTypeStoryboardReview,
 			service.TaskTypeStoryboardOptimize,
 			service.TaskTypeVideoGen,

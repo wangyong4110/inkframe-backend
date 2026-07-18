@@ -234,7 +234,7 @@ func (r *CharacterLookRepository) GetByID(id uint) (*model.CharacterLook, error)
 func (r *CharacterLookRepository) ListByCharacter(characterID uint) ([]*model.CharacterLook, error) {
 	var looks []*model.CharacterLook
 	if err := r.db.Where("character_id = ?", characterID).
-		Order("chapter_from ASC").
+		Order("id ASC").
 		Find(&looks).Error; err != nil {
 		return nil, err
 	}
@@ -267,18 +267,4 @@ func (r *CharacterLookRepository) BatchGetLooksByIDs(lookIDs []uint) (map[uint]*
 		result[l.ID] = l
 	}
 	return result, nil
-}
-
-// GetActiveLook 返回指定章节号下角色的激活形象（仅章节范围匹配，无兜底）。
-// 选取规则：chapter_from <= chapterNo AND (chapter_to=0 OR chapter_to >= chapterNo)，取 chapter_from 最大者。
-func (r *CharacterLookRepository) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
-	var look model.CharacterLook
-	err := r.db.Where("character_id = ? AND chapter_from <= ? AND (chapter_to = 0 OR chapter_to >= ?)",
-		characterID, chapterNo, chapterNo).
-		Order("chapter_from DESC").
-		First(&look).Error
-	if err == nil {
-		return &look, nil
-	}
-	return nil, nil //nolint:nilnil
 }

@@ -204,20 +204,11 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&sfxReq)
 
-	// 获取项目提示词语言设置
-	promptLanguage := "zh"
-	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
-		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.AIConfig.PromptLanguage != "" {
-			promptLanguage = novel.AIConfig.PromptLanguage
-		}
-	}
-
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
 	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支反序列化下面存的字段，
 	// force=false 表示跳过已有标签的镜头，与 AnalyzeSFXTags 共用同一分支但 force=true）。
 	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID), map[string]interface{}{
 		"user_context": sfxReq.UserContext,
-		"lang":         promptLanguage,
 		"provider":     sfxReq.Provider,
 		"force":        false,
 	})
@@ -258,20 +249,11 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&sfxTagsReq)
 
-	// 获取项目提示词语言设置
-	promptLang := "zh"
-	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
-		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.AIConfig.PromptLanguage != "" {
-			promptLang = novel.AIConfig.PromptLanguage
-		}
-	}
-
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
 	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支，force=true 强制重新
 	// 分析所有镜头标签，与 BatchGenerateSFX 共用同一分支但 force=false）。
 	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID), map[string]interface{}{
 		"user_context": sfxTagsReq.UserContext,
-		"lang":         promptLang,
 		"provider":     sfxTagsReq.Provider,
 		"force":        true,
 	})

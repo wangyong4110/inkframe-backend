@@ -78,6 +78,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			return s.storyboardRepo.Update(shot)
 		}
 		logger.Printf("PollShotStatus: shot %d 视频生成完成 url=%s", shot.ShotNo, videoURL)
+		s.snapshotShotAsset(shot, "video", shot.VideoURL, tenantID)
 		// 下载视频到本地临时文件（供 StitchVideo 使用）
 		localPath := fmt.Sprintf("%s/inkframe-shot-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
 		dlCtx, dlCancel := context.WithTimeout(context.Background(), 10*time.Minute)

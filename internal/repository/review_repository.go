@@ -41,6 +41,15 @@ func (r *ReviewRecordRepository) GetLatestApplied(entityType string, entityID ui
 	return &rec, err
 }
 
+// DeletePendingByEntity 硬删除某实体下所有待处理（未应用）的审查记录。
+// 用于单场次分镜重新生成后：后续场次的 shot_no 会整体位移，遗留的待处理审查建议
+// （按旧 shot_no 记录）会指向错误的分镜，必须作废，而不能留着误导用户。
+// 已应用（applied）或已回滚（rolled_back）的记录代表历史事实，不受影响。
+func (r *ReviewRecordRepository) DeletePendingByEntity(entityType string, entityID uint) error {
+	return r.db.Unscoped().Where("entity_type = ? AND entity_id = ? AND status = 'pending'", entityType, entityID).
+		Delete(&model.ReviewRecord{}).Error
+}
+
 // ─── IgnoredReviewIssueRepository ────────────────────────────────────────────
 
 type IgnoredReviewIssueRepository struct{ db *gorm.DB }

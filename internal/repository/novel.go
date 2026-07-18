@@ -52,7 +52,6 @@ var novelJSONOnlyFields = map[string]string{
 	"timeout_seconds":       "ai_config",
 	"style_prompt":          "ai_config",
 	"image_style":           "ai_config",
-	"prompt_language":       "ai_config",
 	"chapter_mode":          "ai_config",
 	"auto_review_rounds":    "ai_config",
 	"auto_review_min_score": "ai_config",
@@ -378,8 +377,6 @@ func applyNovelField(novel *model.Novel, key string, value interface{}) {
 		novel.AIConfig.StylePrompt = str(value)
 	case "image_style":
 		novel.AIConfig.ImageStyle = str(value)
-	case "prompt_language":
-		novel.AIConfig.PromptLanguage = str(value)
 	case "chapter_mode":
 		novel.AIConfig.ChapterMode = str(value)
 	case "auto_review_rounds":

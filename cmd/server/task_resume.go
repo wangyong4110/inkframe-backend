@@ -62,15 +62,11 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			// Parse saved params
 			var params struct {
 				UserContext string `json:"user_context"`
-				Lang        string `json:"lang"`
 				Provider    string `json:"provider"`
 				Force       bool   `json:"force"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			if params.Lang == "" {
-				params.Lang = "zh"
 			}
 
 			shots, err := svcs.VideoService.GetStoryboard(videoID)
@@ -83,7 +79,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
 
-			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, params.Force); err != nil {
+			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Force); err != nil {
 				logger.Errorf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck
@@ -162,27 +158,19 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				if defaultLook != nil && defaultLook.VisualPrompt != "" {
 					appearance = defaultLook.VisualPrompt
 				}
-				gender := service.InferGenderTag(appearance, char.Description)
-				facePrompt := ""
-				if defaultLook != nil {
-					facePrompt = defaultLook.FacePrompt
-				}
-				sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, facePrompt, params.Style, gender, "", params.Provider)
+				sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, params.Style, "", params.Provider)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
 					return
 				}
 				svcs.TaskService.UpdateProgress(t.TaskID, 99) //nolint:errcheck
 				lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &sheet.SheetURL}
-				if sheet.PortraitURL != "" {
-					lookReq.Portrait = &sheet.PortraitURL
-				}
 				var updatedLook *model.CharacterLook
 				if defaultLook != nil {
 					updatedLook, err = svcs.CharacterService.UpdateLook(defaultLook.ID, lookReq)
 				} else {
 					updatedLook, err = svcs.CharacterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
-						Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, ThreeViewSheet: sheet.SheetURL, Portrait: sheet.PortraitURL,
+						Label: "默认形象", SetAsDefault: true, ThreeViewSheet: sheet.SheetURL,
 					})
 				}
 				if err != nil {
@@ -191,7 +179,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 					"look":      updatedLook,
-					"generated": map[string]string{"sheet": sheet.SheetURL, "portrait": sheet.PortraitURL},
+					"generated": map[string]string{"sheet": sheet.SheetURL},
 				})
 				return
 			}
@@ -711,6 +699,60 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
+	// chapter_item_extract: extract items/props from a single chapter
+	if svcs.ItemService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterItemExtract, func(ctx context.Context, t *model.AsyncTask) {
+			chapterID := t.EntityID
+			if chapterID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			var params struct {
+				NovelID    uint   `json:"novel_id"`
+				UserPrompt string `json:"user_prompt"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			items, err := svcs.ItemService.AIExtractChapterItems(t.TenantID, params.NovelID, chapterID, params.UserPrompt)
+			if err != nil {
+				logger.Errorf("TaskService resume chapter_item_extract %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"new_count": len(items)}) //nolint:errcheck
+			}
+		})
+	}
+
+	// screenplay_gen: generate screenplay scenes for a single chapter
+	if svcs.ScreenplayService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeScreenplayGen, func(ctx context.Context, t *model.AsyncTask) {
+			chapterID := t.EntityID
+			if chapterID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			var params struct {
+				Provider string `json:"provider"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			// 这个任务类型只由章节保存后的自动触发使用（见 ChapterService.autoTriggerChapterExtraction），
+			// 手动"重新生成剧本"按钮走 ScreenplayHandler.GenerateScreenplay 同步调用，不经过这里——
+			// 所以这里 preserveEdited 恒为 true：只刷新全新、从未被人工编辑过的场次。
+			scenes, err := svcs.ScreenplayService.GenerateScreenplayScenes(t.TenantID, chapterID, params.Provider, true)
+			if err != nil {
+				logger.Errorf("TaskService resume screenplay_gen %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"scene_count": len(scenes)}) //nolint:errcheck
+			}
+		})
+	}
+
 	// scene_anchor_extract: AI extract all scene anchors from novel
 	if svcs.SceneAnchorService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSceneAnchorExtract, func(ctx context.Context, t *model.AsyncTask) {
@@ -823,6 +865,34 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
+	// storyboard_scene_regen: re-run storyboard generation for a single screenplay scene only
+	// (entity_type/entity_id are still "video"/videoID — same as storyboard_gen — so it reuses
+	// the existing /videos/:id/progress polling path; scene_id travels in params instead).
+	if svcs.VideoService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardSceneRegen, func(ctx context.Context, t *model.AsyncTask) {
+			var params struct {
+				SceneID  uint   `json:"scene_id"`
+				Provider string `json:"provider"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.SceneID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "missing scene_id") //nolint:errcheck
+				return
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+			result, err := svcs.VideoService.RegenerateShotsForScene(ctx, tenantID, params.SceneID, params.Provider, progressFn)
+			if err != nil {
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_count": len(result.Shots)}) //nolint:errcheck
+		})
+	}
+
 	// storyboard_optimize: re-run from saved review JSON
 	if svcs.StoryboardService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardOptimize, func(ctx context.Context, t *model.AsyncTask) {
@@ -886,52 +956,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// char_image_gen: two entity_types share this task type:
-	//   - "character": re-generate a single character's portrait/expression/pose
-	//   - "chapter": batch-generate images for selected characters mentioned in a chapter
-	//     (GenerateChapterCharacterImages) — needs novel_id/character_ids/provider from params
-	//     since chapter_id alone (t.EntityID) isn't enough to know which characters to generate.
+	// char_image_gen: "character" entity_type — re-generate a single character's portrait/expression/pose.
 	if svcs.ImageGenerationService != nil && svcs.CharacterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharImageGen, func(ctx context.Context, t *model.AsyncTask) {
-			if t.EntityType == "chapter" && svcs.ChapterService != nil {
-				chapterID := t.EntityID
-				if chapterID == 0 {
-					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-					return
-				}
-				var params struct {
-					NovelID      uint   `json:"novel_id"`
-					CharacterIDs []uint `json:"character_ids"`
-					Provider     string `json:"provider"`
-				}
-				if t.ParamsJSON != "" {
-					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-				}
-				if len(params.CharacterIDs) == 0 {
-					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-					return
-				}
-				chapter, err := svcs.ChapterService.GetChapter(chapterID, t.TenantID)
-				if err != nil {
-					svcs.TaskService.Fail(t.TaskID, "chapter not found: "+err.Error()) //nolint:errcheck
-					return
-				}
-				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
-				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succeeded, failed, genErr := svcs.CharacterService.GenerateChapterImages(
-					ctx, t.TenantID, params.NovelID, chapter, params.CharacterIDs, params.Provider, progressFn,
-				)
-				if genErr != nil {
-					svcs.TaskService.Fail(t.TaskID, genErr.Error()) //nolint:errcheck
-					return
-				}
-				if failed > 0 && succeeded == 0 {
-					svcs.TaskService.Fail(t.TaskID, fmt.Sprintf("all %d character image generations failed", failed)) //nolint:errcheck
-					return
-				}
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succeeded, "failed": failed}) //nolint:errcheck
-				return
-			}
 			charID := t.EntityID
 			if charID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -1095,13 +1122,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			} else {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 					"visual_prompt": result.VisualPrompt,
-					"face_prompt":   result.FacePrompt,
 				})
 			}
 		})
 	}
 
-	// look_image_gen: re-generate look images (face closeup or three view)
+	// look_image_gen: re-generate look images (character sheet)
 	if svcs.ImageGenerationService != nil && svcs.CharacterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookImageGen, func(ctx context.Context, t *model.AsyncTask) {
 			lookID := t.EntityID
@@ -1110,10 +1136,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			var params struct {
-				Type         string `json:"type"`
 				CharID       uint   `json:"char_id"`
 				Provider     string `json:"provider"`
-				FacePrompt   string `json:"face_prompt"`
 				VisualPrompt string `json:"visual_prompt"`
 			}
 			if t.ParamsJSON != "" {
@@ -1131,10 +1155,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			// 优先使用请求时传入的表单内容（可能尚未保存到数据库），为空才回退到 look 的数据库存值
 			// ——兼容章节批量生成等没有编辑表单、只能走数据库存值的调用场景。
-			facePrompt := params.FacePrompt
-			if facePrompt == "" {
-				facePrompt = look.FacePrompt
-			}
 			visualPrompt := params.VisualPrompt
 			if visualPrompt == "" {
 				visualPrompt = look.VisualPrompt
@@ -1145,17 +1165,13 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			style := svcs.CharacterService.GetNovelImageStyle(char.NovelID)
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
 			tenantID := t.TenantID
-			// 三视图与面部参考图不再分两步生成——一次调用同时产出，第4格(面部特写)自动裁剪为 Portrait。
-			sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, facePrompt, style, "", look.Portrait, params.Provider)
+			sheet, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, look.ThreeViewSheet, params.Provider)
 			if err != nil {
 				logger.Errorf("TaskService resume look_image_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
 			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &sheet.SheetURL}
-			if sheet.PortraitURL != "" {
-				updateReq.Portrait = &sheet.PortraitURL
-			}
 			updatedLook, _ := svcs.CharacterService.UpdateLook(lookID, updateReq)
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"look": updatedLook}) //nolint:errcheck
 		})

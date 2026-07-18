@@ -269,6 +269,23 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 	})
 }
 
+// ListEpisodeSummaries GET /novels/:id/episodes-summary
+// 剧集列表：按章节顺序返回每章对应视频项目的剧本场次数+分镜视频完成度，供"剧本"tab 的
+// EP 卡片列表使用；聚合在服务层完成，前端不需要逐章调用分场剧本/分镜接口。
+func (h *VideoHandler) ListEpisodeSummaries(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	summaries, err := h.videoService.ListEpisodeSummaries(uint(novelID), getTenantID(c))
+	if err != nil {
+		reqLogger(c).Errorf("[VideoHandler] ListEpisodeSummaries: novelID=%d err=%v", novelID, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, summaries)
+}
+
 // UpdateVideo 更新视频
 // PUT /api/v1/videos/:id
 func (h *VideoHandler) UpdateVideo(c *gin.Context) {

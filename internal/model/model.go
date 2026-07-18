@@ -133,7 +133,6 @@ type NovelAIConfig struct {
 	TimeoutSeconds     int     `json:"timeout_seconds"`
 	StylePrompt        string  `json:"style_prompt"`
 	ImageStyle         string  `json:"image_style"`
-	PromptLanguage     string  `json:"prompt_language"`
 	ChapterMode        string  `json:"chapter_mode"`
 	AutoReviewRounds   int     `json:"auto_review_rounds"`
 	AutoReviewMinScore float64 `json:"auto_review_min_score"`
@@ -276,7 +275,6 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 		"timeout_seconds":       n.AIConfig.TimeoutSeconds,
 		"style_prompt":          n.AIConfig.StylePrompt,
 		"image_style":           n.AIConfig.ImageStyle,
-		"prompt_language":       n.AIConfig.PromptLanguage,
 		"chapter_mode":          n.AIConfig.ChapterMode,
 		"auto_review_rounds":    n.AIConfig.AutoReviewRounds,
 		"auto_review_min_score": n.AIConfig.AutoReviewMinScore,
@@ -305,7 +303,6 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 			"subtitle_color":          vc.SubtitleColor,
 			"subtitle_bg_style":       vc.SubtitleBgStyle,
 			"subtitle_font":           vc.SubtitleFont,
-			"color_grade":             vc.ColorGrade,
 			"contrast_level":          vc.ContrastLevel,
 			"saturation":              vc.Saturation,
 			"film_grain":              vc.FilmGrain,
@@ -589,7 +586,6 @@ type UpdateNovelRequest struct {
 	MaxTokens      *int     `json:"max_tokens"`
 	StylePrompt    string   `json:"style_prompt"`
 	ImageStyle     string   `json:"image_style"`
-	PromptLanguage string   `json:"prompt_language"`
 	ChapterMode    string   `json:"chapter_mode"` // sequential / independent
 	CoreTheme      string   `json:"core_theme"`   // 全书核心主题
 	// 自动审查
@@ -617,8 +613,7 @@ type UpdateNovelRequest struct {
 	// 超时
 	TimeoutSeconds *int `json:"timeout_seconds"`
 
-	// 色彩调色
-	ColorGrade    string   `json:"color_grade"`
+	// 对比度/饱和度
 	ContrastLevel *float64 `json:"contrast_level"`
 	Saturation    *float64 `json:"saturation"`
 

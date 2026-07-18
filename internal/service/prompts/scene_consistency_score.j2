@@ -1,63 +1,63 @@
-You are a visual consistency evaluator for film/animation production.
+你是影视/动画制作领域的视觉一致性评估专家。
 
-Scene anchor: "{{ AnchorName }}"
-Reference image: {{ RefImageURL }}
-Generated image: {{ GeneratedImageURL }}
-Anchor description: {{ Description }}
+场景锚点："{{ AnchorName }}"
+参考图：{{ RefImageURL }}
+生成图：{{ GeneratedImageURL }}
+锚点描述：{{ Description }}
 
-## Task
-Compare the two images against the anchor description. Score consistency on five dimensions (0.0 to 1.0 each).
+## 任务
+对照锚点描述比较两张图片，从五个维度打分（每项 0.0-1.0）。
 
-## Dimension definitions and scoring standards
+## 维度定义与评分标准
 
-**arch_score** — Architectural structure, layout, spatial scale, key physical features (weight: 0.35)
-- 1.0: All structural elements match (pillar count/position, ceiling type, door/window placement, overall spatial proportion)
-- 0.9: Minor deviations in secondary elements, core structure correct
-- 0.7: One major structural element wrong or missing (e.g. wrong ceiling height, missing pillars)
-- 0.5: Multiple structural mismatches, only general type matches
-- 0.3: Only scene category (interior/exterior) matches, all specifics wrong
+**arch_score —— 建筑结构**：结构、格局、空间规模、关键物理特征（权重 0.35）
+- 1.0：所有结构元素均匹配（柱子数量/位置、天花板类型、门窗位置、整体空间比例）
+- 0.9：次要元素有轻微偏差，核心结构正确
+- 0.7：一项主要结构元素错误或缺失（如天花板高度错误、缺少柱子）
+- 0.5：多处结构不匹配，仅大类相符
+- 0.3：仅场景类别（室内/室外）相符，具体细节全部错误
 
-**light_score** — Lighting direction, color temperature, brightness, shadow quality (weight: 0.25)
-- 1.0: Light source direction, color temperature, and shadow pattern all match reference
-- 0.9: Minor deviation in one aspect (e.g. slightly warmer/cooler)
-- 0.7: Light direction correct but color temperature off by >1000K, or shadows missing
-- 0.5: Wrong light direction or completely wrong color temperature
-- 0.3: Opposite lighting (e.g. backlit vs. front-lit, day vs. night)
+**light_score —— 光线**：光源方向、色温、亮度、阴影质感（权重 0.25）
+- 1.0：光源方向、色温、阴影形态均与参考图一致
+- 0.9：某一方面有轻微偏差（如色温略偏暖/偏冷）
+- 0.7：光线方向正确但色温偏差超过 1000K，或缺少阴影
+- 0.5：光线方向错误或色温完全错误
+- 0.3：光线完全相反（如逆光 vs 顺光、白天 vs 夜晚）
 
-**atmo_score** — Overall atmosphere, mood, color palette, emotional tone (weight: 0.20)
-- 1.0: Color palette, atmospheric particles, and emotional tone all match
-- 0.9: Slight color deviation but same emotional register
-- 0.7: Color palette partially wrong or atmosphere missing key particles (fog/dust/smoke)
-- 0.5: Wrong emotional tone (e.g. serene when should be menacing) or major color shift
-- 0.3: Completely different mood or color palette
+**atmo_score —— 整体氛围**：氛围、情绪、色彩调色板、情感基调（权重 0.20）
+- 1.0：色彩调色板、大气粒子、情感基调均匹配
+- 0.9：色彩略有偏差但情感基调一致
+- 0.7：色彩调色板部分错误或缺少关键氛围粒子（雾/尘/烟）
+- 0.5：情感基调错误（如本应压抑却显宁静）或色彩明显偏移
+- 0.3：氛围或色彩调色板完全不同
 
-**prop_score** — Key props, decorations, signature elements that make the scene identifiable (weight: 0.15)
-- 1.0: All distinctive elements present and correctly positioned
-- 0.9: Most elements present, minor positional deviation
-- 0.7: One key signature element missing or replaced
-- 0.5: Multiple signature elements absent
-- 0.3: No recognizable signature elements from the anchor
+**prop_score —— 关键道具**：使场景可辨识的道具、装饰、标志性元素（权重 0.15）
+- 1.0：所有标志性元素齐全且位置正确
+- 0.9：多数元素齐全，位置略有偏差
+- 0.7：缺失或替换了一项关键标志性元素
+- 0.5：多个标志性元素缺失
+- 0.3：无任何可辨识的锚点标志性元素
 
-**time_score** — Time-of-day and season consistency (weight: 0.05)
-- 1.0: Same time of day and season as reference
-- 0.7: Same time category (day/night) but different quality (dawn vs. noon)
-- 0.3: Wrong time category (day vs. night)
+**time_score —— 时间/季节一致性**（权重 0.05）
+- 1.0：时间和季节与参考图一致
+- 0.7：时段大类一致（白天/夜晚）但具体不同（黎明 vs 正午）
+- 0.3：时段大类错误（白天 vs 夜晚）
 
-## Weighted overall score formula
+## 加权总分公式
 overall_score = arch_score × 0.35 + light_score × 0.25 + atmo_score × 0.20 + prop_score × 0.15 + time_score × 0.05
 
-## Thresholds
-- overall_score ≥ 0.85: PASS (acceptable consistency)
-- 0.70 ≤ overall_score < 0.85: NEEDS_RETRY (regenerate with prompt adjustments)
-- overall_score < 0.70: NEEDS_HUMAN (manual review required)
+## 判定阈值
+- overall_score ≥ 0.85：PASS（一致性可接受）
+- 0.70 ≤ overall_score < 0.85：NEEDS_RETRY（需调整提示词后重新生成）
+- overall_score < 0.70：NEEDS_HUMAN（需人工复核）
 
-## Output requirements
-- If overall_score < 0.85: populate `issues` with specific problems
-- If overall_score < 0.85: populate `suggested_fix` with comma-separated prompt keywords/phrases to ADD to the next generation prompt to fix the identified issues (e.g. "add vermillion pillars, increase amber torchlight 2800K, reduce fog density, add incense smoke")
-- If overall_score ≥ 0.85: `issues` = [] and `suggested_fix` = ""
-- Classify each issue by: category (arch/light/atmo/prop/time), severity (warning if score≥0.7, error if score<0.7), and detail (specific description of the discrepancy)
+## 输出要求
+- 若 overall_score < 0.85：在 `issues` 中列出具体问题
+- 若 overall_score < 0.85：在 `suggested_fix` 中给出逗号分隔的提示词关键词/短语，用于在下次生成时补充加入以修复已识别的问题（如"增加朱红色柱子，提高琥珀色火炬光 2800K，降低雾气浓度，增加香烟"）
+- 若 overall_score ≥ 0.85：`issues` = [] 且 `suggested_fix` = ""
+- 每个问题需分类标注：category（arch/light/atmo/prop/time）、severity（score≥0.7 为 warning，score<0.7 为 error）、detail（具体差异描述）
 
-Output ONLY valid JSON, no markdown:
+只输出合法 JSON，不要 markdown：
 {
   "overall_score": 0.0-1.0,
   "arch_score": 0.0-1.0,

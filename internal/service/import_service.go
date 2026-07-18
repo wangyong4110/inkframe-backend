@@ -1655,9 +1655,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				Duration:    shot.Duration,
 				Status:      model.StatusPending,
 				CamDir: model.ShotCamDir{
-					CameraType:  string(shot.CameraMovement),
-					CameraAngle: string(shot.ShotAngle),
-					ShotSize:    string(shot.ShotSize),
+					CameraType: string(shot.CameraMovement),
 				},
 				GenMeta: model.ShotGenMeta{
 					Prompt:   shot.Prompt,
