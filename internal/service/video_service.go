@@ -46,6 +46,7 @@ type VideoService struct {
 	itemRepo              *repository.ItemRepository
 	chapterItemRepo       *repository.ChapterItemRepository
 	worldviewRepo         *repository.WorldviewRepository
+	shotVersionRepo       *repository.StoryboardShotVersionRepository // optional：注入后整视频重新生成分镜前会落一条历史快照
 	taskSvc               *TaskService
 	charListCache         sync.Map // novelID → *charListEntry (short-lived cache for batch voice gen)
 	// 广场社交
@@ -181,6 +182,12 @@ func (s *VideoService) WithTaskService(svc *TaskService) *VideoService {
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
 	s.sceneAnchorSvc = svc
+	return s
+}
+
+// WithShotVersionRepo 注入分镜历史版本仓库（可选：未注入时整视频重新生成分镜不会保留历史快照）。
+func (s *VideoService) WithShotVersionRepo(repo *repository.StoryboardShotVersionRepository) *VideoService {
+	s.shotVersionRepo = repo
 	return s
 }
 
@@ -354,7 +361,9 @@ func (s *VideoService) resolveAbsURL(u string) string {
 	return ""
 }
 
-// CreateVideoFromChapter 从章节创建视频
+// CreateVideoFromChapter 从章节创建视频。渲染参数继承自项目（Novel）级别的视频配置
+// （novel.VideoConf() / novel.AIConfig.ImageStyle），未配置的字段回退到硬编码默认值——
+// 与 CreateVideoFromReq 对未显式传入字段的默认值处理逻辑保持一致。
 func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*model.Video, error) {
 	if chapterID != nil && *chapterID == 0 {
 		chapterID = nil
@@ -364,12 +373,33 @@ func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*m
 		NovelID:   novelID,
 		ChapterID: chapterID,
 		Title:     "新视频",
+		Mode:      "video",
 		Status:    "planning",
 		RenderConfig: model.VideoRenderConfig{
 			FrameRate:   24,
 			Resolution:  "1080p",
 			AspectRatio: "16:9",
+			QualityTier: "preview",
 		},
+	}
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		vc := novel.VideoConf()
+		if novel.AIConfig.ImageStyle != "" {
+			video.RenderConfig.ArtStyle = novel.AIConfig.ImageStyle
+		}
+		if vc.VideoResolution != "" {
+			video.RenderConfig.Resolution = vc.VideoResolution
+		}
+		if vc.VideoFPS > 0 {
+			video.RenderConfig.FrameRate = vc.VideoFPS
+		}
+		if vc.VideoAspectRatio != "" {
+			video.RenderConfig.AspectRatio = vc.VideoAspectRatio
+		}
+		// narration（图片解说）→ slideshow；animation（视频动画，默认）→ video，与 CreateVideoFromReq 一致。
+		if vc.VideoType == "narration" {
+			video.Mode = "slideshow"
+		}
 	}
 	if err := s.videoRepo.Create(video); err != nil {
 		return nil, err

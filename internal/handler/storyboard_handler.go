@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -189,6 +190,47 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 		}
 	}
 	respondOK(c, result)
+}
+
+// GetStoryboardVersions 获取分镜历史版本列表
+// GET /api/v1/videos/:id/storyboard/versions
+func (h *VideoHandler) GetStoryboardVersions(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
+	versions, err := h.videoService.GetStoryboardVersions(uint(videoId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, versions)
+}
+
+// RestoreStoryboardVersion 把分镜恢复到指定历史版本
+// POST /api/v1/videos/:id/storyboard/versions/:version_no/restore
+func (h *VideoHandler) RestoreStoryboardVersion(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
+	versionNo, err := strconv.Atoi(c.Param("version_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid version_no")
+		return
+	}
+	shots, err := h.videoService.RestoreStoryboardVersion(uint(videoId), versionNo)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, shots)
 }
 
 // ServeAudio 供前端播放配音文件

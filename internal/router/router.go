@@ -267,7 +267,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
 			novels.POST("/:id/chapters/batch-generate", cfg.NovelHandler.BatchGenerateChapters)
 			novels.POST("/:id/chapters/batch-review", cfg.ChapterHandler.BatchReviewChapters)
-			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 大纲历史版本
 			novels.GET("/:id/outline-versions", cfg.NovelHandler.ListOutlineVersions)
@@ -473,6 +472,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 			// 分场剧本
 			chapters.POST("/:id/screenplay/generate", cfg.ScreenplayHandler.GenerateScreenplay)
+			chapters.POST("/:id/screenplay/generate-full", cfg.ScreenplayHandler.GenerateScreenplayFull)
 			chapters.GET("/:id/screenplay", cfg.ScreenplayHandler.ListScreenplayScenes)
 
 			// 大纲审查
@@ -558,6 +558,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				screenplayScenes.PUT("/:id/lock", cfg.ScreenplayHandler.LockScreenplayScene)
 				screenplayScenes.DELETE("/:id", cfg.ScreenplayHandler.DeleteScreenplayScene)
 				screenplayScenes.POST("/:id/regenerate-storyboard", cfg.ScreenplayHandler.RegenerateSceneStoryboard)
+				screenplayScenes.GET("/:id/versions", cfg.ScreenplayHandler.GetSceneVersions)
+				screenplayScenes.POST("/:id/versions/:version_no/restore", cfg.ScreenplayHandler.RestoreSceneVersion)
 			}
 		}
 
@@ -602,6 +604,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/storyboard", cfg.VideoHandler.GetStoryboard)
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
+			videos.GET("/:id/storyboard/versions", cfg.VideoHandler.GetStoryboardVersions)
+			videos.POST("/:id/storyboard/versions/:version_no/restore", cfg.VideoHandler.RestoreStoryboardVersion)
 			videos.POST("/:id/storyboard/review", cfg.VideoHandler.ReviewStoryboard)
 			videos.GET("/:id/storyboard/reviews", cfg.VideoHandler.ListReviewRecords)
 			videos.POST("/:id/storyboard/reviews/:record_id/rollback", cfg.VideoHandler.RollbackReview)

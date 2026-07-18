@@ -203,9 +203,8 @@ type ScreenplayScene struct {
 	// 人工审校确认后锁定：重新生成分镜时跳过本场剧本内容的重新生成，只重跑分镜
 	Locked bool `json:"locked" gorm:"default:false"`
 
-	// 是否被人工编辑过（即使未锁定）：章节保存后的自动剧本刷新只重新生成从未被人工改过的
-	// 场次，一旦用户编辑过 heading/synopsis/beats 就标记为 true，永久跳过自动刷新
-	// （除非用户显式再次触发"重新生成剧本"）。
+	// 是否被人工编辑过：一旦用户编辑过 heading/synopsis/beats 就标记为 true（供前端展示"已编辑"提示；
+	// 覆盖保护仍以 Locked 为准，"重新生成剧本"会覆盖未锁定场次，即使已被编辑过）。
 	Edited bool `json:"edited" gorm:"default:false"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -213,6 +212,21 @@ type ScreenplayScene struct {
 }
 
 func (ScreenplayScene) TableName() string { return "ink_screenplay_scene" }
+
+// ScreenplaySceneVersion 分场剧本历史快照：每次"生成剧本"覆盖某场次前，把该场次覆盖前的完整
+// 内容存一条版本记录，供用户在"历史版本"里查看/恢复（Content 是该场次覆盖前字段的 JSON 快照）。
+type ScreenplaySceneVersion struct {
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	ScreenplaySceneID uint      `json:"screenplay_scene_id" gorm:"uniqueIndex:idx_scene_version,priority:1;not null"`
+	ChapterID         uint      `json:"chapter_id" gorm:"index;not null"`
+	NovelID           uint      `json:"novel_id" gorm:"index;not null"`
+	VersionNo         int       `json:"version_no" gorm:"uniqueIndex:idx_scene_version,priority:2;not null"`
+	Content           string    `json:"content" gorm:"type:json"`
+	ChangeType        string    `json:"change_type" gorm:"size:50"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (ScreenplaySceneVersion) TableName() string { return "ink_screenplay_scene_version" }
 
 // SceneConsistencyLog 场景一致性评分日志
 type SceneConsistencyLog struct {

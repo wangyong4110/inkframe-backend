@@ -54,8 +54,6 @@ const (
 	TaskTypeChapterCharExtract       = "chapter_char_extract"
 	TaskTypeChapterSceneExtract      = "chapter_scene_extract"
 	TaskTypeChapterItemExtract       = "chapter_item_extract"
-	TaskTypeScreenplayGen            = "screenplay_gen"
-	TaskTypeNovelOutlineGen          = "novel_outline_gen"
 	TaskTypeCharImageGen             = "char_image_gen"
 	TaskTypeVoicePreview             = "voice_preview"
 	TaskTypeLookPromptGen            = "look_prompt_gen"
@@ -434,7 +432,6 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeCharGen:              "角色生成",
 		TaskTypeItemExtract:          "道具提取",
 		TaskTypeChapterItemExtract:   "道具提取",
-		TaskTypeScreenplayGen:        "剧本生成",
 		TaskTypePlotExtract:          "情节提取",
 		TaskTypeAssetGen:             "素材",
 		TaskTypeSceneAnchorExtract:   "场景提取",
@@ -452,7 +449,6 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeSkillGen:             "技能生成",
 		TaskTypeBatchChapterGen:      "批量生成",
 		TaskTypeCharReanalyze:        "角色重分析",
-		TaskTypeNovelOutlineGen:      "生成大纲",
 		TaskTypeCharImageGen:         "角色图像",
 		TaskTypeCoverImageGen:        "封面生成",
 		TaskTypeImageEdit:            "图像编辑",

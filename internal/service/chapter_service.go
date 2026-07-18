@@ -322,63 +322,8 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 	}
 	if req.Content != "" {
 		s.syncNovelStats(chapter.NovelID)
-		s.autoTriggerChapterExtraction(tenantID, chapter)
 	}
 	return chapter, nil
-}
-
-// autoExtractCooldown 同一章节同一类提取任务的最小触发间隔——防止自动保存（30秒防抖）在
-// 编辑过程中反复触发角色/道具/场景 AI 提取，导致成本失控。
-const autoExtractCooldown = 5 * time.Minute
-
-// autoTriggerChapterExtraction 章节内容保存后自动触发角色/道具/场景提取（各自独立冷却期）。
-// 纯 best-effort：不影响保存本身的成功/失败，也不阻塞（提取本身是异步任务，这里只做
-// 冷却期判断+建任务，两者都是快速的本地 DB 操作，不涉及 AI 调用）。
-func (s *ChapterService) autoTriggerChapterExtraction(tenantID uint, chapter *model.Chapter) {
-	if s.taskSvc == nil {
-		return
-	}
-	shouldTrigger := func(taskType string) bool {
-		last, err := s.taskSvc.GetLatestByTypeAndEntity(taskType, "chapter", chapter.ID)
-		if err != nil {
-			return true // 未找到历史任务（或查询失败，按"未触发过"处理，不阻塞新任务）
-		}
-		return time.Since(last.CreatedAt) >= autoExtractCooldown
-	}
-
-	if shouldTrigger(TaskTypeChapterCharExtract) {
-		if _, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeChapterCharExtract, "角色分析（自动）", "chapter", chapter.ID, map[string]interface{}{
-			"novel_id": chapter.NovelID,
-		}); err != nil {
-			logger.Errorf("[ChapterService] autoTrigger chapter_char_extract chapterID=%d: %v", chapter.ID, err)
-		}
-	}
-	if shouldTrigger(TaskTypeChapterItemExtract) {
-		if _, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeChapterItemExtract, "道具提取（自动）", "chapter", chapter.ID, map[string]interface{}{
-			"novel_id": chapter.NovelID,
-		}); err != nil {
-			logger.Errorf("[ChapterService] autoTrigger chapter_item_extract chapterID=%d: %v", chapter.ID, err)
-		}
-	}
-	if shouldTrigger(TaskTypeChapterSceneExtract) {
-		if _, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeChapterSceneExtract, "场景分析（自动）", "chapter", chapter.ID, map[string]interface{}{
-			"novel_id": chapter.NovelID,
-			"content":  chapter.Content,
-		}); err != nil {
-			logger.Errorf("[ChapterService] autoTrigger chapter_scene_extract chapterID=%d: %v", chapter.ID, err)
-		}
-	}
-	// 剧本生成放在角色/道具/场景之后触发，但三者是各自独立的异步任务、无显式先后依赖——
-	// 剧本生成内部会读取当时最新的角色/场景锚点列表，若与上面三个提取任务并发执行，
-	// 本次生成的剧本可能暂时匹配不到"刚提取出的"实体（自愈：等这些提取任务完成后，
-	// 下一次保存触发的剧本生成会用上完整的角色/锚点名单）。
-	if shouldTrigger(TaskTypeScreenplayGen) {
-		if _, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeScreenplayGen, "剧本生成（自动）", "chapter", chapter.ID, map[string]interface{}{
-			"provider": "",
-		}); err != nil {
-			logger.Errorf("[ChapterService] autoTrigger screenplay_gen chapterID=%d: %v", chapter.ID, err)
-		}
-	}
 }
 
 func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
@@ -470,7 +415,6 @@ func (s *ChapterService) UpdateChapterByNo(novelID uint, chapterNo int, req *mod
 	}
 	if req.Content != "" {
 		s.syncNovelStats(novelID)
-		s.autoTriggerChapterExtraction(chapter.TenantID, chapter)
 	}
 	return chapter, nil
 }

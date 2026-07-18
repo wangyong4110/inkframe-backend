@@ -235,6 +235,21 @@ func (StoryboardShot) TableName() string {
 	return "ink_storyboard_shot"
 }
 
+// StoryboardShotVersion 分镜历史快照：整视频重新生成分镜是删除全部旧分镜再批量插入新分镜
+// （旧分镜 ID 不会保留），所以按整视频存一份快照，而不是按单条 shot 存——Content 是重新生成前
+// 该视频全部分镜行的 JSON 数组快照。
+type StoryboardShotVersion struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	VideoID    uint      `json:"video_id" gorm:"uniqueIndex:idx_shot_version,priority:1;not null"`
+	VersionNo  int       `json:"version_no" gorm:"uniqueIndex:idx_shot_version,priority:2;not null"`
+	Content    string    `json:"content" gorm:"type:json"`
+	ShotCount  int       `json:"shot_count"`
+	ChangeType string    `json:"change_type" gorm:"size:50"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (StoryboardShotVersion) TableName() string { return "ink_storyboard_shot_version" }
+
 // MarshalJSON flattens CamDir and GenMeta fields to the top level so the frontend
 // can access shot.camera_type / shot.sfx_tags / shot.dialogue etc. directly.
 // The nested cam_dir / gen_meta objects are still included for tooling that needs them.

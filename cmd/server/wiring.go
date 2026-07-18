@@ -52,6 +52,8 @@ type Repositories struct {
 	ChapterSceneAnchorRepo     *repository.ChapterSceneAnchorRepository
 	SceneConsistencyLogRepo    *repository.SceneConsistencyLogRepository
 	ScreenplaySceneRepo        *repository.ScreenplaySceneRepository
+	ScreenplaySceneVersionRepo *repository.ScreenplaySceneVersionRepository
+	StoryboardShotVersionRepo  *repository.StoryboardShotVersionRepository
 	SystemSettingRepo          *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
 	ReviewRecordRepo           *repository.ReviewRecordRepository
@@ -135,6 +137,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterSceneAnchorRepo:     repository.NewChapterSceneAnchorRepository(db),
 		SceneConsistencyLogRepo:    repository.NewSceneConsistencyLogRepository(db),
 		ScreenplaySceneRepo:        repository.NewScreenplaySceneRepository(db),
+		ScreenplaySceneVersionRepo: repository.NewScreenplaySceneVersionRepository(db),
+		StoryboardShotVersionRepo:  repository.NewStoryboardShotVersionRepository(db),
 		SystemSettingRepo:          repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
 		ReviewRecordRepo:           repository.NewReviewRecordRepository(db),
@@ -441,7 +445,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo).
 		WithChapterSceneAnchorRepo(repos.ChapterSceneAnchorRepo)
-	screenplaySvc := service.NewScreenplayService(repos.ScreenplaySceneRepo, repos.ChapterRepo, repos.NovelRepo, repos.CharacterRepo, repos.SceneAnchorRepo, aiSvc)
+	screenplaySvc := service.NewScreenplayService(repos.ScreenplaySceneRepo, repos.ChapterRepo, repos.NovelRepo, repos.CharacterRepo, repos.SceneAnchorRepo, aiSvc).
+		WithVersionRepo(repos.ScreenplaySceneVersionRepo)
 
 	// 伏笔 CRUD 服务（带 AI 提取能力）
 	foreshadowCRUDSvc := service.NewForeshadowCRUDService(repos.ForeshadowRepo).
@@ -483,7 +488,8 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 
 	// 视频服务（视频提供商从 DB 按租户加载，无需静态注册）
 	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, nil).
-		WithRedis(redisClient)
+		WithRedis(redisClient).
+		WithShotVersionRepo(repos.StoryboardShotVersionRepo)
 	if cfg.Server.PublicURL != "" {
 		videoSvc.WithBackendBaseURL(cfg.Server.PublicURL)
 	}
@@ -894,7 +900,12 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db).WithProxyAllowedHosts(mediaProxyAllowedHosts(cfg)...),
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
-		ScreenplayHandler:  handler.NewScreenplayHandler(services.ScreenplayService, services.ChapterService, services.NovelService).WithVideoService(services.VideoService).WithTaskService(services.TaskService),
+		ScreenplayHandler: handler.NewScreenplayHandler(services.ScreenplayService, services.ChapterService, services.NovelService).
+			WithVideoService(services.VideoService).
+			WithTaskService(services.TaskService).
+			WithCharacterService(services.CharacterService).
+			WithItemService(services.ItemService).
+			WithSceneAnchorService(services.SceneAnchorService),
 		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler:     handler.NewRewriteHandler(services.RewriteService),

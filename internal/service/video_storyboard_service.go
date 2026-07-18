@@ -647,6 +647,9 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		progressFn(95)
 	}
 
+	// 删除旧分镜前，把当前全部分镜整体序列化成一条历史快照。
+	s.snapshotShotsBeforeOverwrite(videoID, "regenerate")
+
 	// 删除旧分镜并批量插入新分镜（包裹在同一事务中，防止删除后插入失败导致数据丢失）
 	if err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
 		// 先收集旧 shot IDs，用于级联清理配音段
@@ -847,16 +850,27 @@ func (s *VideoService) findSceneInsertionPoint(allShots []*model.StoryboardShot,
 	return maxNo
 }
 
-// getVideoByChapterID 按章节 id 查找其关联的（唯一的）视频项目。
-func (s *VideoService) getVideoByChapterID(tenantID, chapterID uint) (*model.Video, error) {
+// GetVideoByChapterID 按章节 id 查找其关联的（唯一的）视频项目；不存在时自动创建一个
+// （渲染参数继承自项目级别的视频配置，见 CreateVideoFromChapter），避免用户在生成分镜前
+// 必须先手动"创建视频项目"这一步。
+func (s *VideoService) GetVideoByChapterID(tenantID, chapterID uint) (*model.Video, error) {
 	videos, _, err := s.videoRepo.List(nil, &chapterID, "", tenantID, 1, 1)
 	if err != nil {
 		return nil, err
 	}
-	if len(videos) == 0 {
-		return nil, fmt.Errorf("本章节尚未创建视频项目，无法重新生成分镜")
+	if len(videos) > 0 {
+		return videos[0], nil
 	}
-	return videos[0], nil
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter %d not found: %w", chapterID, err)
+	}
+	video, err := s.CreateVideoFromChapter(chapter.NovelID, &chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("auto-create video project for chapter %d: %w", chapterID, err)
+	}
+	logger.Printf("[VideoService] GetVideoByChapterID: auto-created video project id=%d for chapterID=%d (no video project existed yet)", video.ID, chapterID)
+	return video, nil
 }
 
 // GetVideoIDForScreenplayScene 供 handler 在创建异步任务前解析场次归属的视频 id
@@ -869,7 +883,7 @@ func (s *VideoService) GetVideoIDForScreenplayScene(tenantID, sceneID uint) (uin
 	if err != nil {
 		return 0, fmt.Errorf("screenplay scene not found: %w", err)
 	}
-	video, err := s.getVideoByChapterID(tenantID, scene.ChapterID)
+	video, err := s.GetVideoByChapterID(tenantID, scene.ChapterID)
 	if err != nil {
 		return 0, err
 	}
@@ -895,7 +909,7 @@ func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sc
 	}
 	chapterID := scene.ChapterID
 
-	video, err := s.getVideoByChapterID(tenantID, chapterID)
+	video, err := s.GetVideoByChapterID(tenantID, chapterID)
 	if err != nil {
 		return nil, err
 	}
@@ -2326,6 +2340,83 @@ func validCameraType(t string) string {
 
 // GetStoryboard 获取分镜列表
 func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, error) {
+	return s.storyboardRepo.ListByVideo(videoID)
+}
+
+// snapshotShotsBeforeOverwrite 在删除某视频当前全部分镜前，把它们整体序列化成一条历史快照
+// （best-effort：失败只记日志，不阻断调用方本身的操作）——整视频重新生成/恢复历史版本都是
+// 删除重建，旧分镜 ID 不会保留，所以按视频存一份快照，而不是按单条 shot 存。changeType 标注
+// 这次覆盖的原因（"regenerate"=重新生成分镜覆盖，"restore"=恢复到历史版本前保留当前内容）。
+func (s *VideoService) snapshotShotsBeforeOverwrite(videoID uint, changeType string) {
+	if s.shotVersionRepo == nil {
+		return
+	}
+	oldShots, err := s.storyboardRepo.ListByVideo(videoID)
+	if err != nil || len(oldShots) == 0 {
+		return
+	}
+	content, err := json.Marshal(oldShots)
+	if err != nil {
+		logger.Errorf("[VideoService] marshal storyboard snapshot videoID=%d: %v", videoID, err)
+		return
+	}
+	if err := s.shotVersionRepo.CreateAtomic(&model.StoryboardShotVersion{
+		VideoID:    videoID,
+		Content:    string(content),
+		ShotCount:  len(oldShots),
+		ChangeType: changeType,
+	}); err != nil {
+		logger.Errorf("[VideoService] create storyboard version videoID=%d: %v", videoID, err)
+	}
+}
+
+// GetStoryboardVersions 返回某视频的全部分镜历史版本（按版本号倒序）。
+func (s *VideoService) GetStoryboardVersions(videoID uint) ([]*model.StoryboardShotVersion, error) {
+	if s.shotVersionRepo == nil {
+		return nil, fmt.Errorf("version history not available")
+	}
+	return s.shotVersionRepo.List(videoID)
+}
+
+// RestoreStoryboardVersion 把某视频的分镜恢复到指定历史版本：删除当前全部分镜，按快照重新插入
+// （沿用整视频重新生成"删除重建"的语义——恢复出的分镜是全新的行，ID/UUID 不会与快照前一致）。
+// 恢复前会把当前分镜也落一条历史快照，所以恢复本身可逆。
+func (s *VideoService) RestoreStoryboardVersion(videoID uint, versionNo int) ([]*model.StoryboardShot, error) {
+	if s.shotVersionRepo == nil {
+		return nil, fmt.Errorf("version history not available")
+	}
+	version, err := s.shotVersionRepo.GetVersion(videoID, versionNo)
+	if err != nil {
+		return nil, fmt.Errorf("version not found: %w", err)
+	}
+	var snapshotShots []*model.StoryboardShot
+	if err := json.Unmarshal([]byte(version.Content), &snapshotShots); err != nil {
+		return nil, fmt.Errorf("invalid version snapshot: %w", err)
+	}
+	for _, shot := range snapshotShots {
+		shot.ID = 0
+		shot.UUID = uuid.New().String()
+		shot.VideoID = videoID
+	}
+	s.snapshotShotsBeforeOverwrite(videoID, "restore")
+	if err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		var oldShotIDs []uint
+		tx.Model(&model.StoryboardShot{}).Where("video_id = ?", videoID).Pluck("id", &oldShotIDs)
+		if len(oldShotIDs) > 0 {
+			if err := tx.Unscoped().Where("shot_id IN ?", oldShotIDs).Delete(&model.ShotVoiceSegment{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Unscoped().Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error; err != nil {
+			return err
+		}
+		if len(snapshotShots) == 0 {
+			return nil
+		}
+		return tx.Create(snapshotShots).Error
+	}); err != nil {
+		return nil, fmt.Errorf("恢复分镜失败: %w", err)
+	}
 	return s.storyboardRepo.ListByVideo(videoID)
 }
 

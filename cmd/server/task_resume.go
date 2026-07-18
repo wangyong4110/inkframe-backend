@@ -725,34 +725,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// screenplay_gen: generate screenplay scenes for a single chapter
-	if svcs.ScreenplayService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeScreenplayGen, func(ctx context.Context, t *model.AsyncTask) {
-			chapterID := t.EntityID
-			if chapterID == 0 {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			var params struct {
-				Provider string `json:"provider"`
-			}
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			// 这个任务类型只由章节保存后的自动触发使用（见 ChapterService.autoTriggerChapterExtraction），
-			// 手动"重新生成剧本"按钮走 ScreenplayHandler.GenerateScreenplay 同步调用，不经过这里——
-			// 所以这里 preserveEdited 恒为 true：只刷新全新、从未被人工编辑过的场次。
-			scenes, err := svcs.ScreenplayService.GenerateScreenplayScenes(t.TenantID, chapterID, params.Provider, true)
-			if err != nil {
-				logger.Errorf("TaskService resume screenplay_gen %s failed: %v", t.TaskID, err)
-				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"scene_count": len(scenes)}) //nolint:errcheck
-			}
-		})
-	}
-
 	// scene_anchor_extract: AI extract all scene anchors from novel
 	if svcs.SceneAnchorService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSceneAnchorExtract, func(ctx context.Context, t *model.AsyncTask) {
@@ -925,33 +897,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			} else {
 				svcs.TaskService.UpdateProgress(t.TaskID, 90)                                       //nolint:errcheck
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"updated_shots": count}) //nolint:errcheck
-			}
-		})
-	}
-
-	// novel_outline_gen: regenerate novel outline with original params
-	if svcs.NovelService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelOutlineGen, func(ctx context.Context, t *model.AsyncTask) {
-			novelID := t.EntityID
-			if novelID == 0 {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			var req service.GenerateOutlineRequest
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &req)
-			}
-			req.NovelID = novelID
-			if req.ChapterNum == 0 {
-				req.ChapterNum = 10 // fallback for tasks created before params were saved
-			}
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.NovelService.GenerateOutline(ctx, t.TenantID, &req)
-			if err != nil {
-				logger.Errorf("TaskService resume novel_outline_gen %s failed: %v", t.TaskID, err)
-				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"outline": result}) //nolint:errcheck
 			}
 		})
 	}

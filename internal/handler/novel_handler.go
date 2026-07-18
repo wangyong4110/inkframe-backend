@@ -419,49 +419,6 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 	})
 }
 
-// GenerateOutline 生成大纲
-// POST /api/v1/novels/:id/outline
-func (h *NovelHandler) GenerateOutline(c *gin.Context) {
-	novelId, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var req struct {
-		ChapterNum     int      `json:"chapter_num"`
-		Prompt         string   `json:"prompt"`
-		Keywords       []string `json:"keywords"`
-		MaxTokens      int      `json:"max_tokens,omitempty"`
-		Temperature    float64  `json:"temperature,omitempty"`
-		TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, "invalid request body: "+err.Error())
-		return
-	}
-
-	tenantID := getTenantID(c)
-
-	outlineReq := &service.GenerateOutlineRequest{
-		NovelID:        uint(novelId),
-		ChapterNum:     req.ChapterNum,
-		Prompt:         req.Prompt,
-		Keywords:       req.Keywords,
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		TimeoutSeconds: req.TimeoutSeconds,
-	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeNovelOutlineGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 outlineReq 调用同一个
-	// h.novelService.GenerateOutline）。
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeNovelOutlineGen, "生成大纲", "novel", uint(novelId), outlineReq)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	respondAccepted(c, task.TaskID, "大纲生成任务已提交")
-}
-
 // ListOutlineVersions 获取小说大纲历史版本列表
 // GET /api/v1/novels/:id/outline-versions
 func (h *NovelHandler) ListOutlineVersions(c *gin.Context) {

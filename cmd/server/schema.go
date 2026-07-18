@@ -210,6 +210,41 @@ func autoMigrate(db *gorm.DB) error {
 		}
 	}
 
+	// ink_screenplay_scene_version：分场剧本历史快照，全新表——"生成剧本"覆盖某场次前先在这里
+	// 存一条覆盖前内容的快照，供用户查看/恢复历史版本。
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS ink_screenplay_scene_version (
+		id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		screenplay_scene_id  BIGINT UNSIGNED NOT NULL,
+		chapter_id           BIGINT UNSIGNED NOT NULL,
+		novel_id             BIGINT UNSIGNED NOT NULL,
+		version_no           INT NOT NULL,
+		content              JSON,
+		change_type          VARCHAR(50) NOT NULL DEFAULT '',
+		created_at           DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+		PRIMARY KEY (id),
+		UNIQUE KEY uk_scene_version (screenplay_scene_id, version_no),
+		KEY idx_scene_version_chapter_id (chapter_id)
+	)`).Error; err != nil {
+		return fmt.Errorf("autoMigrate: failed to create ink_screenplay_scene_version: %w", err)
+	}
+
+	// ink_storyboard_shot_version：分镜历史快照，全新表——整视频重新生成分镜前，把该视频当时
+	// 全部分镜行序列化成一条 JSON 快照存这里（分镜是整视频删除重建，不是按行覆盖，所以按视频
+	// 存一份快照，而不是按单条 shot）。
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS ink_storyboard_shot_version (
+		id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		video_id     BIGINT UNSIGNED NOT NULL,
+		version_no   INT NOT NULL,
+		content      JSON,
+		shot_count   INT NOT NULL DEFAULT 0,
+		change_type  VARCHAR(50) NOT NULL DEFAULT '',
+		created_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+		PRIMARY KEY (id),
+		UNIQUE KEY uk_shot_version (video_id, version_no)
+	)`).Error; err != nil {
+		return fmt.Errorf("autoMigrate: failed to create ink_storyboard_shot_version: %w", err)
+	}
+
 	// ink_storyboard_shot.screenplay_scene_id：分镜归属的分场剧本，nil 兼容旧的直接生成路径。
 	var screenplaySceneColCnt int64
 	db.Raw(
