@@ -161,9 +161,7 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if novelTitle != "" {
 		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
 	}
-	// 道具设定图固定横版4:3，不跟随小说的视频画幅比例。
-	sizeOverride := imageAspectRatioToSize("4:3", "master")
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+itemRefFormatRules, aiRefURL, imageStyle, "", sizeOverride)
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+itemRefFormatRules, aiRefURL, imageStyle, "", "")
 }
 
 // itemRefFormatRules 是道具参考图的版式+规则文案，拼在 item.VisualPrompt（外观描述）之后。

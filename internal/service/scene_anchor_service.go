@@ -644,9 +644,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 	prompt, sceneNegative := splitImagePrompt(rendered)
 
-	// 场景概念设计稿固定横版16:9多角度布局，不跟随小说的视频画幅比例。
-	sizeOverride := imageAspectRatioToSize("16:9", "master")
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
+	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, "")
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("generate ref image: %w", err)

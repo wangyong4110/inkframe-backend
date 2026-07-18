@@ -779,10 +779,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
-
-	// 根据宽高比+质量档位计算实际图片尺寸（WxH），直接传给 API
-	imageSize := imageAspectRatioToSize(imageAspectRatio, qualityTier)
-	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s", shot.ShotNo, qualityTier, imageAspectRatio, imageSize)
+	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s", shot.ShotNo, qualityTier, imageAspectRatio)
 
 	// 构建负向提示词：基础解剖/物理规律排除词 + 分镜 LLM 生成的镜头专项排除词
 	// 图像生成必须有负向提示词，否则极易出现变形肢体、违反物理规律、比例失调等问题
@@ -925,7 +922,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if shot.SceneAnchorID != nil {
 		sceneSeed = int64(*shot.SceneAnchorID) * 31337
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, sceneSeed)
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, "", sceneSeed)
 	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
 		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
 		// 此类错误是确定性失败，重试相同参考图无意义。
@@ -944,7 +941,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				textOnlyPrompt = strings.Join(fallbackVPs, ", ") + ", " + textOnlyPrompt
 			}
 		}
-		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, negPrompt, imageSize, sceneSeed)
+		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, negPrompt, "", sceneSeed)
 	}
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)

@@ -2292,7 +2292,6 @@ func qualityTierImageParams(tier string) (width, steps int) {
 	switch tier {
 	case "draft":
 		// 1280px 长边 → 16:9 = 1280×720，9:16 = 720×1280。
-		// 避免 seedreamMinPixels 强制上采样导致实际分辨率不可预测。
 		return 1280, 20
 	case "preview":
 		return 1280, 25
