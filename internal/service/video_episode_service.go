@@ -72,11 +72,19 @@ func (s *VideoService) ListEpisodeSummaries(novelID, tenantID uint) ([]*EpisodeS
 
 	summaries := make([]*EpisodeSummary, 0, len(chapters))
 	for _, ch := range chapters {
+		// scenesByChapter[ch.ID] 在该章还没有分场剧本时是 nil（Go map 未命中的零值），
+		// 序列化成 JSON 会是 null 而不是 []——前端模板直接访问 ep.scenes.length，
+		// 遇到 null 会抛异常导致整个列表渲染失败（表现为一直停在"加载中"）。
+		// 显式初始化成空切片，保证这个字段的 JSON 契约永远是数组。
+		scenes := scenesByChapter[ch.ID]
+		if scenes == nil {
+			scenes = []EpisodeSceneBrief{}
+		}
 		summary := &EpisodeSummary{
 			ChapterID: ch.ID,
 			ChapterNo: ch.ChapterNo,
 			Title:     ch.Title,
-			Scenes:    scenesByChapter[ch.ID],
+			Scenes:    scenes,
 		}
 		if v, ok := videoByChapter[ch.ID]; ok {
 			vid := v.ID
