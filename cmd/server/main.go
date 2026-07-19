@@ -389,6 +389,7 @@ func main() {
 			service.TaskTypeImageUpscale,
 			service.TaskTypeChapterSceneExtract,
 			service.TaskTypeSceneAnchorExtract,
+			service.TaskTypeScreenplayGen,
 			service.TaskTypeStoryboardGen,
 			service.TaskTypeStoryboardSceneRegen,
 			service.TaskTypeStoryboardReview,
