@@ -10,11 +10,8 @@
 # 要求
 1. 只提取在故事中**多次出现**、对情节有重要推动作用的命名道具（如主角的武器、关键宝物、反复使用的道具、重要文书、核心法宝等）；最多 12 个
 2. **明确排除**：普通家居用品（门、锁、碗、桌椅等）、环境摆设、一次性出场的场景道具、只在一句话中一次提及的道具
-3. visual_prompt：详细的英文图像生成提示词，用于 AI 绘图。只覆盖以下 4 项核心内容，不要涉及其他内容，词数 60-120 词，且严格不超过400个字符（部分图像模型会直接拒绝过长的提示词，如需精简优先省略最不影响识别的细节）：
-   - 类型与材质：道具类型/名称 + 精确材质描述（如 "ancient cultivation longsword, forged from black cold iron with traces of starlight silver"）
-   - 颜色：主色调 + 次色调（如 "midnight black blade, pale blue rune glow along the edge"）
-   - 形态与细节：尺寸感、形状、表面纹路/符文/雕花/关键配件（如 "three-foot double-edged blade, ancient dragon scale pattern etched along the flat, bronze crossguard shaped like spread wings, black lacquer scabbard"）
-   - 特殊效果（仅当道具设定含魔法/能量属性时才写）：发光/流光/气场（如 "faint frost mist drifting from the blade"）
+3. visual_prompt：详细的中文图像生成提示词，用于 AI 绘图。只覆盖以下 4 项核心内容，不要涉及其他内容，严格控制在 80-150 个字符以内（部分图像模型会直接拒绝过长的提示词，如需精简优先省略最不影响识别的细节）：
+{% include "fragments/item_visual_dimensions.j2" %}
 4. 不要包含陈设背景、风格/画风、质量/渲染标签——这些由生成流程另行注入
 5. 若信息不足，结合小说类型合理推断，不要留空
 6. 严格输出 JSON 数组，不含任何说明文字
@@ -23,6 +20,6 @@
 [
   {
     "name": "道具名称",
-    "visual_prompt": "ancient Chinese cultivation longsword, forged from black cold iron infused with starlight silver ore, matte deep-black surface. Midnight black blade with glowing pale-blue ancient rune inscriptions along both flats. Straight double-edged blade, three feet long, slight taper toward tip, dense dragon-seal rune engravings, bronze crossguard shaped as spread dragon wings with a crimson ruby in each eye, dark-charcoal silk-wrapped grip, black lacquered scabbard. Thin wisps of pale frost mist drifting along the blade edge."
+    "visual_prompt": "上古修真长剑，玄铁锻造并融入星辉银矿，剑身哑光深黑。墨黑剑刃两面浮现淡蓝古老符文微光。直身双刃，长约三尺，剑尖略收，密布龙纹阴刻，青铜护手作展翼龙形，双目各嵌一颗赤色宝石，深炭色丝缠剑柄，黑漆剑鞘。剑刃周身缭绕淡淡寒霜雾气。"
   }
 ]

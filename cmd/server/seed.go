@@ -377,13 +377,3 @@ func seedCharacterLookupMcpTool(db *gorm.DB, cfg *config.Config) {
 		"按名称查询角色的档案信息和最近章节状态快照，为角色一致性生成提供准确的角色状态数据",
 		fmt.Sprintf("http://localhost:%d/api/v1/tools/character-lookup", port))
 }
-
-func seedPromptEnhanceMcpTool(db *gorm.DB, cfg *config.Config) {
-	port := cfg.Server.Port
-	if port == 0 {
-		port = 8080
-	}
-	seedMcpTool(db, "prompt_enhance", "Prompt 增强",
-		"将中文场景描述翻译并增强为适合图像/视频生成的英文提示词，自动添加构图、光照、风格关键词",
-		fmt.Sprintf("http://localhost:%d/api/v1/tools/prompt-enhance", port))
-}

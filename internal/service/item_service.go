@@ -774,8 +774,21 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 			VisualPrompt: s.aiService.FilterPrompt(it.VisualPrompt),
 		}
 		if e := s.itemRepo.Create(item); e != nil {
-			logger.Errorf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
-			continue
+			// existingNameSet 是函数开头一次性查出来的快照，如果另一次并发的章节提取
+			// （不同章节同时提到同一个道具）在这之间抢先建了同名道具，这里会撞
+			// uniq_item_novel_name 唯一索引报 1062——不是真正的失败，去把并发那边
+			// 刚建好的道具找出来，继续关联到本章节，而不是直接丢弃这次提取结果。
+			if isDuplicateKeyError(e) {
+				if winner, findErr := s.itemRepo.GetByTitleAndNovel(it.Name, novelID); findErr == nil && winner != nil {
+					item = winner
+				} else {
+					logger.Errorf("ItemService.AIExtractChapterItems: create %q raced but lookup failed: %v", it.Name, findErr)
+					continue
+				}
+			} else {
+				logger.Errorf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
+				continue
+			}
 		}
 		existingNameSet[strings.ToLower(it.Name)] = true
 		// 关联章节

@@ -255,11 +255,6 @@ var (
 		Name: "inkframe_storyboard_segment_timeout_total",
 		Help: "分镜脚本单段生成因 provider 超时失败的总次数",
 	})
-
-	StoryboardVoiceModeViolationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "inkframe_storyboard_voice_mode_violation_total",
-		Help: "AI 违反严格配音模式（仅对白/仅旁白）约束、被代码层强制清理的镜头数",
-	}, []string{"mode"}) // mode: dialogue / narration
 )
 
 // ─── 业务指标：视频合成 ──────────────────────────────────────────────────────

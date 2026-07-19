@@ -17,7 +17,6 @@ type StoryboardOverrides struct {
 	MaxTokens      int     // 输出 token 上限，0=系统默认（≥4096）
 	Temperature    float64 // 生成温度，0=系统默认（0.1）
 	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（300s）
-	VoiceMode      string  // 配音模式：""/"auto"/"both"=自动（默认），"narration"=仅旁白，"dialogue"=仅对白，"narration_primary"=旁白为主，"dialogue_primary"=对白为主
 }
 
 // buildChapterOverrides 从请求参数和小说项目配置构建 AI 参数覆盖。
@@ -49,12 +48,12 @@ func NewStoryboardService(videoService *VideoService, aiService *AIService) *Sto
 	return &StoryboardService{videoService: videoService, aiService: aiService}
 }
 
-func (s *StoryboardService) GenerateStoryboardCtx(ctx context.Context, videoID, chapterID uint, characters []string, style, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides) (*StoryboardGenResult, error) {
+func (s *StoryboardService) GenerateStoryboardCtx(ctx context.Context, videoID, chapterID uint, characters []string, style, provider string, progressFn func(int), overrides StoryboardOverrides) (*StoryboardGenResult, error) {
 	var chapterIDPtr *uint
 	if chapterID != 0 {
 		chapterIDPtr = &chapterID
 	}
-	return s.videoService.GenerateStoryboardCtx(ctx, videoID, provider, userPrompt, progressFn, overrides, chapterIDPtr)
+	return s.videoService.GenerateStoryboardCtx(ctx, videoID, provider, progressFn, overrides, chapterIDPtr)
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查

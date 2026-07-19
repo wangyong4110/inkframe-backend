@@ -515,6 +515,9 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if req.Mode != "" {
 		video.Mode = req.Mode
 	}
+	if req.StoryboardMode != "" {
+		video.StoryboardMode = req.StoryboardMode
+	}
 	if req.VisualMode != "" {
 		video.RenderConfig.VisualMode = req.VisualMode
 	}
@@ -540,19 +543,6 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 		video.PublishMeta.Tags = req.Tags
 	}
 	return video, s.videoRepo.Update(video)
-}
-
-// UpdatePacingConfig 更新视频的节奏和目标时长配置（供分镜生成前调用）
-func (s *VideoService) UpdatePacingConfig(id uint, pacing string, targetDuration int) error {
-	video, err := s.videoRepo.GetByID(id)
-	if err != nil {
-		return err
-	}
-	video.RenderConfig.TargetDuration = targetDuration
-	if pacing != "" {
-		video.RenderConfig.Pacing = pacing
-	}
-	return s.videoRepo.Update(video)
 }
 
 // UpdateVideoFields 更新视频任意字段（用于发布状态更新）

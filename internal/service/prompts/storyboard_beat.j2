@@ -8,9 +8,18 @@
 5. 情绪突变/心理描写段落单独成一个 beat
 6. content_summary：原文对应段落的核心内容（15-30字，尽量引用原文措辞）
 7. beat_type：action / dialogue / scene_change / emotional / internal（内心独白）
+7a. importance：major / minor——判断该节拍是否为主线剧情的关键节点：
+    - major：推进主线情节、揭示关键信息、塑造核心冲突/转折、影响后续剧情走向的节拍
+    - minor：氛围铺垫、次要寒暄、重复性动作、非关键的过渡性描写（删去不影响对主线剧情的理解）
+    此标注供"简洁模式"下游筛选使用，判断时以能否删除而不影响主线理解为准，不确定时倾向标 major（避免误删关键情节）
 8. location：发生地点（与已命名场景对应，或简短描述，无则留空）
 9. characters：该节拍的主要在场角色名（从给定角色列表中选择，无则留空数组）
 10. suggested_shots：建议拍摄该节拍需要的镜头数（1-3）
+{% if VideoMode == "slideshow" %}
+11. 【图片解说模式】本片每个分镜只呈现一张静态画面，不能像连续视频那样用一镜覆盖多个连续动作。若某个 action/emotional 节拍包含多个连续的子动作或表情变化（如"抬手→触碰→收回"），suggested_shots 须按子动作数量估高（通常 2-3，而非按连续动作压缩为 1），避免下游分镜因一镜一画面的限制而丢失关键瞬间。
+{% else %}
+11. 【视频动画模式】单个分镜可覆盖同一场景内多个连续动作，suggested_shots 可按镜头能自然容纳的动作密度估算，不必为每个子动作都单独计数。
+{% endif %}
 
 【覆盖率要求】
 - 禁止跳过任何明确的原文情节
@@ -36,6 +45,7 @@
     {
       "no": 1,
       "beat_type": "scene_change",
+      "importance": "major",
       "content_summary": "黄昏时分，主角步入破败石庭废墟，四周一片死寂",
       "location": "石庭废墟",
       "characters": ["凌云"],
@@ -44,6 +54,7 @@
     {
       "no": 2,
       "beat_type": "emotional",
+      "importance": "major",
       "content_summary": "凌云看见地上的玉坠，认出三年前白雪所戴，心中一震",
       "location": "石庭废墟",
       "characters": ["凌云"],

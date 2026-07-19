@@ -66,6 +66,42 @@ func (r *StoryboardRepository) ListByVideoAndStatus(videoID uint, status string)
 	return shots, nil
 }
 
+// ListByVideoAndScene 按视频ID+剧本场次ID获取分镜（供前端按场次查看分镜脚本时使用，
+// 避免一次性拉取整个视频的全部分镜——description 字段现在是完整的 AI 生图提示词，
+// 单条体积明显变大，按场次过滤能显著减少首次加载的数据量）。
+func (r *StoryboardRepository) ListByVideoAndScene(videoID, sceneID uint) ([]*model.StoryboardShot, error) {
+	var shots []*model.StoryboardShot
+	if err := r.db.Where("video_id = ? AND screenplay_scene_id = ?", videoID, sceneID).Order("shot_no ASC").Find(&shots).Error; err != nil {
+		return nil, err
+	}
+	return shots, nil
+}
+
+// ShotSummary 分镜轻量汇总，供场次侧边栏/时间轴等只需聚合信息（时长、缩略图、场次归属）
+// 的场景使用，不含 description/gen_meta/cam_dir 等大字段。
+type ShotSummary struct {
+	ID                uint    `json:"id"`
+	ShotNo            int     `json:"shot_no"`
+	Duration          float64 `json:"duration"`
+	ImageURL          string  `json:"image_url"`
+	ScreenplaySceneID *uint   `json:"screenplay_scene_id,omitempty"`
+}
+
+// ListSummaryByVideo 获取视频分镜的轻量汇总。description 现在是完整的 AI 生图提示词，
+// 聚合展示（场次时长/缩略图分组）不需要这部分大字段，用 Select 在 SQL 层直接裁剪列，
+// 避免大字段随全量分镜一起传输。
+func (r *StoryboardRepository) ListSummaryByVideo(videoID uint) ([]ShotSummary, error) {
+	var out []ShotSummary
+	if err := r.db.Model(&model.StoryboardShot{}).
+		Select("id, shot_no, duration, image_url, screenplay_scene_id").
+		Where("video_id = ?", videoID).
+		Order("shot_no ASC").
+		Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Update 更新分镜
 func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 	return r.db.Save(shot).Error

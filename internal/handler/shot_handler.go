@@ -192,7 +192,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	shots, err := h.videoService.GetStoryboard(uint(videoID), 0)
 	if err != nil || len(shots) == 0 {
 		respondErr(c, http.StatusNotFound, "storyboard not found or empty")
 		return
@@ -237,7 +237,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	shots, err := h.videoService.GetStoryboard(uint(videoID), 0)
 	if err != nil || len(shots) == 0 {
 		respondErr(c, http.StatusNotFound, "storyboard not found or empty")
 		return
@@ -481,7 +481,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.GetStoryboard(uint(id))
+	shots, err := h.videoService.GetStoryboard(uint(id), 0)
 	if err != nil {
 		reqLogger(c).Errorf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

@@ -190,9 +190,8 @@ type ScreenplayScene struct {
 
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"` // 关联现有场景锚点，保证地点视觉一致性
 
-	Synopsis      string        `json:"synopsis" gorm:"type:text"`
-	CharacterIDs  JSONUintSlice `json:"character_ids" gorm:"type:json"`
-	EmotionalTone string        `json:"emotional_tone" gorm:"size:100"`
+	Synopsis      string `json:"synopsis" gorm:"type:text"`
+	EmotionalTone string `json:"emotional_tone" gorm:"size:100"`
 
 	// 本场内的叙事节拍：纯文本，每行一条；对话行格式为"角色名：台词"，其余行为动作/描写
 	// （原为结构化 []ScreenplayBeat 数组，改为纯文本以匹配前端合并单文本框编辑的方式）

@@ -1651,14 +1651,13 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				UUID:        uuid.New().String(),
 				ShotNo:      idx + 1,
 				ChapterID:   &chapter.ID,
-				Description: shot.Description,
+				Description: shot.Prompt, // shot.Prompt (buildPrompt) is a superset of shot.Description with shot type/camera/character/lighting detail
 				Duration:    shot.Duration,
 				Status:      model.StatusPending,
 				CamDir: model.ShotCamDir{
 					CameraType: string(shot.CameraMovement),
 				},
 				GenMeta: model.ShotGenMeta{
-					Prompt:   shot.Prompt,
 					Dialogue: shot.Dialogue,
 				},
 			}

@@ -102,7 +102,7 @@ func (h *VideoHandler) ExportSubtitles(c *gin.Context) {
 	if !ok {
 		return
 	}
-	shots, err := h.videoService.GetStoryboard(video.ID)
+	shots, err := h.videoService.GetStoryboard(video.ID, 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to load storyboard")
 		return
@@ -451,7 +451,7 @@ func (h *VideoHandler) GetVideoProgress(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.GetStoryboard(video.ID)
+	shots, err := h.videoService.GetStoryboard(video.ID, 0)
 	if err != nil || len(shots) == 0 {
 		respondOK(c, gin.H{"progress": 0, "status": video.Status})
 		return

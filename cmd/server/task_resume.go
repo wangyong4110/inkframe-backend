@@ -69,7 +69,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 
-			shots, err := svcs.VideoService.GetStoryboard(videoID)
+			shots, err := svcs.VideoService.GetStoryboard(videoID, 0)
 			if err != nil || len(shots) == 0 {
 				svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
 				return
@@ -503,7 +503,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
-			shots, err := svcs.VideoService.GetStoryboard(videoID)
+			shots, err := svcs.VideoService.GetStoryboard(videoID, 0)
 			if err != nil || len(shots) == 0 {
 				svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
 				return
@@ -758,7 +758,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				if t.ParamsJSON != "" {
 					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 				}
-				shots, err := svcs.VideoService.GetStoryboard(videoID)
+				shots, err := svcs.VideoService.GetStoryboard(videoID, 0)
 				if err != nil || len(shots) == 0 {
 					svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
 					return
@@ -793,6 +793,82 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		svcs.TaskService.RegisterResumeHandler("bgm_generate", bgmResume(true))
 	}
 
+	// screenplay_gen: 分场剧本生成/重新生成。full_pipeline=true 时是"生成剧本"一键管线——先
+	// best-effort 提取绑定角色/道具/场景锚点，再生成分场剧本，最后串联提交 storyboard_gen 任务
+	// （结果里带上 video_id/storyboard_task_id，供前端在本任务完成后接着追踪分镜生成任务）。
+	if svcs.ScreenplayService != nil && svcs.ChapterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeScreenplayGen, func(ctx context.Context, t *model.AsyncTask) {
+			chapterID := t.EntityID
+			if chapterID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			var params struct {
+				Provider       string `json:"provider"`
+				PreserveEdited bool   `json:"preserve_edited"`
+				FullPipeline   bool   `json:"full_pipeline"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+
+			chapter, err := svcs.ChapterService.GetChapter(chapterID, tenantID)
+			if err != nil {
+				svcs.TaskService.Fail(t.TaskID, "chapter not found") //nolint:errcheck
+				return
+			}
+
+			if params.FullPipeline {
+				if svcs.CharacterService != nil {
+					if _, err := svcs.CharacterService.AIExtractMinorChars(ctx, tenantID, chapter.NovelID, chapterID, ""); err != nil {
+						logger.Errorf("[TaskResume] screenplay_gen extract characters chapterID=%d: %v", chapterID, err)
+					}
+				}
+				if svcs.ItemService != nil {
+					if _, err := svcs.ItemService.AIExtractChapterItems(tenantID, chapter.NovelID, chapterID, ""); err != nil {
+						logger.Errorf("[TaskResume] screenplay_gen extract items chapterID=%d: %v", chapterID, err)
+					}
+				}
+				if svcs.SceneAnchorService != nil {
+					if _, err := svcs.SceneAnchorService.ExtractFromChapter(ctx, tenantID, chapter.NovelID, "", chapter.Content, chapterID, ""); err != nil {
+						logger.Errorf("[TaskResume] screenplay_gen extract scene anchors chapterID=%d: %v", chapterID, err)
+					}
+				}
+				svcs.TaskService.UpdateProgress(t.TaskID, 30) //nolint:errcheck
+			}
+
+			scenes, err := svcs.ScreenplayService.GenerateScreenplayScenesCtx(ctx, tenantID, chapterID, params.Provider, params.PreserveEdited)
+			if err != nil {
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+
+			result := map[string]interface{}{"scenes_count": len(scenes)}
+
+			if params.FullPipeline && svcs.VideoService != nil {
+				if video, vErr := svcs.VideoService.GetVideoByChapterID(tenantID, chapterID); vErr == nil {
+					svcs.TaskService.CancelActiveByEntityAndInvoke("video", video.ID, service.TaskTypeStoryboardGen)
+					sbTask, sbErr := svcs.TaskService.CreateWithParams(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", video.ID, map[string]interface{}{
+						"chapter_id": chapterID,
+						"provider":   params.Provider,
+					})
+					if sbErr != nil {
+						logger.Errorf("[TaskResume] screenplay_gen chain storyboard_gen chapterID=%d: %v", chapterID, sbErr)
+					} else {
+						result["video_id"] = video.ID
+						result["storyboard_task_id"] = sbTask.TaskID
+					}
+				} else {
+					logger.Errorf("[TaskResume] screenplay_gen resolve video chapterID=%d: %v", chapterID, vErr)
+				}
+			}
+
+			svcs.TaskService.Complete(t.TaskID, result) //nolint:errcheck
+		})
+	}
+
 	// storyboard_gen: re-run full storyboard generation
 	if svcs.StoryboardService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardGen, func(ctx context.Context, t *model.AsyncTask) {
@@ -805,11 +881,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				Characters     []string `json:"characters"`
 				Style          string   `json:"style"`
 				Provider       string   `json:"provider"`
-				UserPrompt     string   `json:"user_prompt"`
 				MaxTokens      int      `json:"max_tokens"`
 				Temperature    float64  `json:"temperature"`
 				TimeoutSeconds int      `json:"timeout_seconds"`
-				VoiceMode      string   `json:"voice_mode"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -820,9 +894,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				MaxTokens:      params.MaxTokens,
 				Temperature:    params.Temperature,
 				TimeoutSeconds: params.TimeoutSeconds,
-				VoiceMode:      params.VoiceMode,
 			}
-			result, err := svcs.StoryboardService.GenerateStoryboardCtx(ctx, videoID, params.ChapterID, params.Characters, params.Style, params.Provider, params.UserPrompt, progressFn, overrides)
+			result, err := svcs.StoryboardService.GenerateStoryboardCtx(ctx, videoID, params.ChapterID, params.Characters, params.Style, params.Provider, progressFn, overrides)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return

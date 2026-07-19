@@ -26,21 +26,26 @@
 ② 角色名精确：角色名必须使用原始分镜中的完整角色名，禁止用"主角""角色A""男主""女主"等占位符
 ③ sfx_tags 格式：若修改音效字段，格式必须为 JSON 数组 [{"tag": "英文搜索词", "type": "ambient|action|emotion", "prompt": "中文音效描述15-40字"}]，禁止纯文本字符串
 ④ 转场字段对称：若修改 transition_out，对应下一镜头的 transition_in 也必须同步修改（取值：cut/fade/dissolve/wipe/j-cut/l-cut/push）
-⑤ 不创造新信息：禁止在 description/image_prompt/video_prompt 中引入原始分镜未提及的人物、道具或场景元素
-⑥ 敏感词过滤：description / image_prompt / video_prompt 严禁出现暴力、血腥、伤亡、色情相关敏感词
-⑦ image_prompt/video_prompt 改写规则（仅在改进建议涉及视觉质量问题时才改写）：
-   - image_prompt 改写时必须保留原有结构（[画风]→[构图]→[地面层]→[前景]→[中景]→[背景]→[光线]→[大气]→[角色]→[镜头参数]→[画质词]），只修改问题区块
-   - video_prompt 改写时必须保留原有运动层次（A镜头→A2角色→B粒子→C植被→D液体→E结构→F光线→G情绪→G2质量锁定→H SOUND），只修改问题层次
-   - 角色外貌描述（皮肤/发色/眼睛/服装细节）不得写入 video_prompt（仅写动作）
+⑤ 不创造新信息：禁止在 description 中引入原始分镜未提及的人物、道具或场景元素
+⑥ 敏感词过滤：description 严禁出现暴力、血腥、伤亡、色情相关敏感词
+⑦ description 改写规则（仅在改进建议涉及视觉质量问题时才改写；description 是 AI 出图/出视频的唯一依据，改写时须谨慎）：
+   - 必须保留原有结构（[画风]→[构图]→[地面层]→[前景]→[中景]→[背景]→[光线]→[大气]→[角色区块]→[镜头参数]→[画质词]），只修改问题区块
+   - 只描述可见画面内容：气味/声音/温度/触感等非视觉感官描写严禁写入，AI 出图/出视频无法渲染这些信息
    - 改写后字数不得少于原有字数的 80%
 
 【输出要求】
 - 只输出需要修改的镜头，无需修改的镜头不要输出
 - 每个字段只有在有实质性改动时才输出，不改的字段不要输出
-- description、image_prompt、video_prompt 语言与原始分镜保持一致（原始为英文则用英文，原始为中文则用中文）；narration、dialogue 等叙事字段始终用中文
-- image_prompt/video_prompt 若输出，必须是完整的改写后全文，不得是 diff 或注释说明
+- description 须使用简体中文撰写（仅画质/风格提升词，如 masterpiece、best quality 等标准 Stable Diffusion 惯用词，允许英文）；narration 始终用中文；dialogue 须与该角色标注的"台词语言"保持一致（未标注则默认简体中文）
+- description 若输出，必须是完整的改写后全文，不得是 diff 或注释说明
+{% if VideoMode == "slideshow" %}
+- 【图片解说模式——本片为静态图片 + 轻微 Ken Burns 缩放/平移，不生成连续运镜视频】
+  camera_type 以 static 为主即可，仅在画面确有明显纵深/横向张力时才填 push/pull/pan；禁止建议 track/crane_up/crane_down/follow/arc/tilt/whip_pan/zoom 等运镜
+  transition 只能取 fade/dissolve（图片间的淡入淡出/溶解关系），不得建议 cut/wipe/j-cut/l-cut/push 等视频剪辑手法
+{% else %}
 - camera_type 取值: static/push/pull/pan/track/crane_up/crane_down/follow/arc/tilt/whip_pan/zoom
 - transition 取值: cut/fade/dissolve/wipe/j-cut/l-cut/push
+{% endif %}
 - duration 单位为秒（数字）
 
 返回 JSON，不包含 markdown 代码块：
@@ -53,11 +58,9 @@
       "camera_type": "pan",
       "transition_out": "改进后的结尾状态描述（仅在改进衔接时填写）",
       "transition_in": "改进后的开场状态描述（仅在改进衔接时填写）",
-      "image_prompt": "完整改写后的 image_prompt（仅在视觉质量问题需要改写时填写，否则省略此字段）",
-      "video_prompt": "完整改写后的 video_prompt（仅在运动描述问题需要改写时填写，否则省略此字段）",
-      "negative_prompt": "改写后的负向提示词（仅在需要调整排除词时填写，否则省略）",
+      "description": "完整改写后的 description（仅在视觉质量问题需要改写时填写，否则省略此字段）",
       "sfx_tags": [{"tag": "forest_ambient", "type": "ambient", "prompt": "改写后的音效描述"}]
     }
   ]
 }
-注：每个字段只有在有实质性改动时才输出；image_prompt/video_prompt 若输出则必须是完整全文。
+注：每个字段只有在有实质性改动时才输出；description 若输出则必须是完整全文。

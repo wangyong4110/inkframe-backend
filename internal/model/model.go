@@ -218,9 +218,17 @@ func (n *Novel) BeforeSave(tx *gorm.DB) error {
 }
 
 // VideoConf returns video/subtitle config with safe nil handling.
+// VideoType 不允许为空——历史数据或从未打开过"项目设置"的小说，VideoConfig 记录可能已存在
+// 但 VideoType 字段仍是空字符串，此处统一兜底为 "animation"（视频动画），与新建小说时的
+// 默认值保持一致，避免下游（如 CreateVideoFromChapter 的 narration→slideshow 判断）
+// 因为空字符串被当作"未设置"而非"明确选择了动画"来处理。
 func (n *Novel) VideoConf() NovelVideoConfigData {
 	if n.VideoConfig != nil {
-		return n.VideoConfig.Config
+		vc := n.VideoConfig.Config
+		if vc.VideoType == "" {
+			vc.VideoType = "animation"
+		}
+		return vc
 	}
 	return NovelVideoConfigData{
 		VideoType:             "animation",
@@ -288,7 +296,7 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 		m[k] = b
 	}
 	if n.VideoConfig != nil {
-		vc := n.VideoConfig.Config
+		vc := n.VideoConf() // 经过空值兜底（VideoType 为空时归一化为 "animation"），而非直接读原始 Config
 		vcFields := map[string]any{
 			"video_type":              vc.VideoType,
 			"video_resolution":        vc.VideoResolution,

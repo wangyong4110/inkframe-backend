@@ -98,6 +98,11 @@ type Video struct {
 	Mode string `json:"mode" gorm:"size:20;default:'video'"`
 	// video=AI视频生成（Kling/Seedance）, slideshow=图片解说（图片+Ken Burns效果）
 
+	StoryboardMode string `json:"storyboard_mode" gorm:"size:20;default:'professional'"`
+	// professional=专业分镜（结构化镜头/时长/运镜，AI 精细创作）
+	// faithful=忠于原文（旁白/台词/时长直接取自剧本原文，AI 仅补充画面视觉细节）
+	// concise=简洁模式（仅提取重要剧情节拍生成分镜，视频更短）
+
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:planning"`
 
@@ -151,9 +156,6 @@ type ShotCamDir struct {
 
 // ShotGenMeta AI生成元数据（合并存储为 JSON）
 type ShotGenMeta struct {
-	Prompt            string  `json:"prompt"`
-	NegativePrompt    string  `json:"negative_prompt"`
-	MotionPrompt      string  `json:"motion_prompt"`
 	Characters        string  `json:"characters"`
 	Items             string  `json:"items"` // AI-generated item list JSON: [{"name":"...","holder":"...","location":"..."}]
 	Scene             string  `json:"scene"`
@@ -191,7 +193,7 @@ type StoryboardShot struct {
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
-	Description string `json:"description" gorm:"type:text"` // 英文画面描述，供AI图片/视频生成使用
+	Description string `json:"description" gorm:"type:text"` // 中文画面描述，AI出图/出视频与人工叙事参考共用的唯一生成提示词
 	Narration   string `json:"narration" gorm:"type:text"`   // 中文旁白文案，供TTS朗读和字幕显示使用
 
 	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
@@ -264,25 +266,19 @@ func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 		TransitionOut string `json:"transition_out,omitempty"`
 		TransitionIn  string `json:"transition_in,omitempty"`
 		// flatten GenMeta
-		Prompt         string `json:"prompt,omitempty"`
-		NegativePrompt string `json:"negative_prompt,omitempty"`
-		MotionPrompt   string `json:"motion_prompt,omitempty"`
-		SFXTags        string `json:"sfx_tags,omitempty"`
-		Dialogue       string `json:"dialogue,omitempty"`
-		Subtitle       string `json:"subtitle,omitempty"`
+		SFXTags  string `json:"sfx_tags,omitempty"`
+		Dialogue string `json:"dialogue,omitempty"`
+		Subtitle string `json:"subtitle,omitempty"`
 	}{
-		Alias:          (Alias)(s),
-		CameraType:     s.CamDir.CameraType,
-		EmotionalTone:  s.CamDir.EmotionalTone,
-		Transition:     s.CamDir.Transition,
-		TransitionOut:  s.CamDir.TransitionOut,
-		TransitionIn:   s.CamDir.TransitionIn,
-		Prompt:         s.GenMeta.Prompt,
-		NegativePrompt: s.GenMeta.NegativePrompt,
-		MotionPrompt:   s.GenMeta.MotionPrompt,
-		SFXTags:        s.GenMeta.SFXTags,
-		Dialogue:       s.GenMeta.Dialogue,
-		Subtitle:       s.GenMeta.Subtitle,
+		Alias:         (Alias)(s),
+		CameraType:    s.CamDir.CameraType,
+		EmotionalTone: s.CamDir.EmotionalTone,
+		Transition:    s.CamDir.Transition,
+		TransitionOut: s.CamDir.TransitionOut,
+		TransitionIn:  s.CamDir.TransitionIn,
+		SFXTags:       s.GenMeta.SFXTags,
+		Dialogue:      s.GenMeta.Dialogue,
+		Subtitle:      s.GenMeta.Subtitle,
 	})
 }
 
@@ -575,6 +571,7 @@ type UpdateVideoRequest struct {
 	AspectRatio   string `json:"aspect_ratio"`
 	ArtStyle      string `json:"art_style"`
 	Mode          string `json:"mode"`           // video/slideshow
+	StoryboardMode string `json:"storyboard_mode"` // professional/faithful/concise
 	VisualMode    string `json:"visual_mode"`    // standard/hd/3d/hd_3d
 	ThreeDStyle   string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
 	QualityTier   string `json:"quality_tier"`   // draft/preview/final/production

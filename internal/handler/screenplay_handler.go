@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -10,14 +11,11 @@ import (
 
 // ScreenplayHandler 分场剧本处理器
 type ScreenplayHandler struct {
-	svc            *service.ScreenplayService
-	chapterSvc     *service.ChapterService
-	novelSvc       *service.NovelService
-	videoSvc       *service.VideoService
-	taskSvc        *service.TaskService
-	characterSvc   *service.CharacterService
-	itemSvc        *service.ItemService
-	sceneAnchorSvc *service.SceneAnchorService
+	svc        *service.ScreenplayService
+	chapterSvc *service.ChapterService
+	novelSvc   *service.NovelService
+	videoSvc   *service.VideoService
+	taskSvc    *service.TaskService
 }
 
 func NewScreenplayHandler(svc *service.ScreenplayService, chapterSvc *service.ChapterService, novelSvc *service.NovelService) *ScreenplayHandler {
@@ -31,21 +29,6 @@ func (h *ScreenplayHandler) WithVideoService(svc *service.VideoService) *Screenp
 
 func (h *ScreenplayHandler) WithTaskService(svc *service.TaskService) *ScreenplayHandler {
 	h.taskSvc = svc
-	return h
-}
-
-func (h *ScreenplayHandler) WithCharacterService(svc *service.CharacterService) *ScreenplayHandler {
-	h.characterSvc = svc
-	return h
-}
-
-func (h *ScreenplayHandler) WithItemService(svc *service.ItemService) *ScreenplayHandler {
-	h.itemSvc = svc
-	return h
-}
-
-func (h *ScreenplayHandler) WithSceneAnchorService(svc *service.SceneAnchorService) *ScreenplayHandler {
-	h.sceneAnchorSvc = svc
 	return h
 }
 
@@ -67,7 +50,13 @@ func (h *ScreenplayHandler) checkChapterTenant(c *gin.Context, chapterID uint) b
 }
 
 // GenerateScreenplay POST /chapters/:id/screenplay/generate
+// 分场剧本生成/重新生成统一由异步任务管理（TaskTypeScreenplayGen），执行体见
+// cmd/server/task_resume.go；耗时的 AI 调用不再阻塞 HTTP 请求，前端轮询 task_id 获取结果。
 func (h *ScreenplayHandler) GenerateScreenplay(c *gin.Context) {
+	if h.taskSvc == nil {
+		respondErr(c, http.StatusInternalServerError, "screenplay generation not available")
+		return
+	}
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
@@ -75,25 +64,33 @@ func (h *ScreenplayHandler) GenerateScreenplay(c *gin.Context) {
 	if !h.checkChapterTenant(c, uint(id)) {
 		return
 	}
+	chapterID := uint(id)
+	tenantID := getTenantID(c)
+
 	var body struct {
 		Provider string `json:"provider"`
 	}
 	_ = c.ShouldBindJSON(&body)
+
+	h.taskSvc.CancelActiveByEntityAndInvoke("chapter", chapterID, service.TaskTypeScreenplayGen)
 	// 用户在界面上显式点击"重新生成剧本"：preserveEdited=false，只保留锁定场次，
 	// 未锁定场次（即使已手动编辑过）会被覆盖——这是用户主动要求的操作，语义上就该覆盖。
-	scenes, err := h.svc.GenerateScreenplayScenes(getTenantID(c), uint(id), body.Provider, false)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeScreenplayGen, "分场剧本生成", "chapter", chapterID, map[string]interface{}{
+		"provider":        body.Provider,
+		"preserve_edited": false,
+	})
 	if err != nil {
-		reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplay error: %v", err)
-		respondErr(c, http.StatusInternalServerError, "failed to generate screenplay")
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, scenes)
+	respondAccepted(c, task.TaskID, "剧本生成任务已提交")
 }
 
 // GenerateScreenplayFull POST /chapters/:id/screenplay/generate-full
-// "生成剧本"按钮的一键管线：提取并绑定角色/道具/场景 → 重新生成分场剧本 → 异步生成分镜脚本。
-// 提取步骤是 best-effort（失败只记日志不中断，它们只是丰富绑定数据，核心是后面两步）；
-// 分镜生成本身耗时较长，沿用现有异步任务 + 轮询机制，不做成同步等待。
+// "生成剧本"按钮的一键管线：提取并绑定角色/道具/场景 → 重新生成分场剧本 → 生成分镜脚本，
+// 全部由同一个 TaskTypeScreenplayGen 异步任务驱动（full_pipeline=true），执行体见
+// cmd/server/task_resume.go：提取步骤是 best-effort（失败只记日志不中断），任务完成后的结果里
+// 带 video_id/storyboard_task_id，供前端接着追踪分镜生成任务。
 func (h *ScreenplayHandler) GenerateScreenplayFull(c *gin.Context) {
 	if h.videoSvc == nil || h.taskSvc == nil {
 		respondErr(c, http.StatusInternalServerError, "storyboard generation not available")
@@ -106,65 +103,25 @@ func (h *ScreenplayHandler) GenerateScreenplayFull(c *gin.Context) {
 	if !h.checkChapterTenant(c, uint(id)) {
 		return
 	}
-	tenantID := getTenantID(c)
 	chapterID := uint(id)
-	chapter, err := h.chapterSvc.GetChapter(chapterID, tenantID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "chapter not found")
-		return
-	}
+	tenantID := getTenantID(c)
 
 	var body struct {
 		Provider string `json:"provider"`
 	}
 	_ = c.ShouldBindJSON(&body)
 
-	ctx := c.Request.Context()
-	if h.characterSvc != nil {
-		if _, err := h.characterSvc.AIExtractMinorChars(ctx, tenantID, chapter.NovelID, chapterID, ""); err != nil {
-			reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplayFull: extract characters failed: %v", err)
-		}
-	}
-	if h.itemSvc != nil {
-		if _, err := h.itemSvc.AIExtractChapterItems(tenantID, chapter.NovelID, chapterID, ""); err != nil {
-			reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplayFull: extract items failed: %v", err)
-		}
-	}
-	if h.sceneAnchorSvc != nil {
-		if _, err := h.sceneAnchorSvc.ExtractFromChapter(ctx, tenantID, chapter.NovelID, "", chapter.Content, chapterID, ""); err != nil {
-			reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplayFull: extract scene anchors failed: %v", err)
-		}
-	}
-
-	scenes, err := h.svc.GenerateScreenplayScenes(tenantID, chapterID, body.Provider, false)
-	if err != nil {
-		reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplayFull: generate screenplay failed: %v", err)
-		respondErr(c, http.StatusInternalServerError, "failed to generate screenplay")
-		return
-	}
-
-	video, err := h.videoSvc.GetVideoByChapterID(tenantID, chapterID)
-	if err != nil {
-		reqLogger(c).Errorf("[ScreenplayHandler] GenerateScreenplayFull: resolve video failed: %v", err)
-		respondErr(c, http.StatusInternalServerError, "failed to resolve video project")
-		return
-	}
-
-	h.taskSvc.CancelActiveByEntityAndInvoke("video", video.ID, service.TaskTypeStoryboardGen)
-	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", video.ID, map[string]interface{}{
-		"chapter_id": chapterID,
-		"provider":   body.Provider,
+	h.taskSvc.CancelActiveByEntityAndInvoke("chapter", chapterID, service.TaskTypeScreenplayGen)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeScreenplayGen, "生成剧本", "chapter", chapterID, map[string]interface{}{
+		"provider":        body.Provider,
+		"preserve_edited": false,
+		"full_pipeline":   true,
 	})
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create storyboard task")
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-
-	respondOK(c, gin.H{
-		"scenes":             scenes,
-		"video_id":           video.ID,
-		"storyboard_task_id": task.TaskID,
-	})
+	respondAccepted(c, task.TaskID, "剧本生成任务已提交")
 }
 
 // ListScreenplayScenes GET /chapters/:id/screenplay
@@ -182,6 +139,68 @@ func (h *ScreenplayHandler) ListScreenplayScenes(c *gin.Context) {
 		return
 	}
 	respondOK(c, scenes)
+}
+
+// ExportScreenplay 导出分场剧本文件
+// GET /chapters/:id/screenplay/export?format=txt|markdown|docx（默认 txt）
+func (h *ScreenplayHandler) ExportScreenplay(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkChapterTenant(c, uint(id)) {
+		return
+	}
+	format := c.DefaultQuery("format", "txt")
+	if format != "txt" && format != "markdown" && format != "docx" {
+		respondBadRequest(c, "format must be txt, markdown or docx")
+		return
+	}
+
+	chapter, err := h.chapterSvc.GetChapter(uint(id), getTenantID(c))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	title := chapter.Title
+	if title == "" {
+		title = fmt.Sprintf("第%d章", chapter.ChapterNo)
+	}
+	scenes, err := h.svc.ListScenes(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var (
+		data        []byte
+		contentType string
+		ext         string
+	)
+	switch format {
+	case "markdown":
+		data = h.svc.ExportScenesMarkdown(title, scenes)
+		contentType = "text/markdown; charset=utf-8"
+		ext = "md"
+	case "docx":
+		docxData, dErr := h.svc.ExportScenesDocx(title, scenes)
+		if dErr != nil {
+			reqLogger(c).Errorf("[ScreenplayHandler] ExportScreenplay docx: %v", dErr)
+			respondErr(c, http.StatusInternalServerError, "failed to export docx")
+			return
+		}
+		data = docxData
+		contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		ext = "docx"
+	default:
+		data = h.svc.ExportScenesTXT(title, scenes)
+		contentType = "text/plain; charset=utf-8"
+		ext = "txt"
+	}
+
+	filename := fmt.Sprintf("%s_分场剧本.%s", title, ext)
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, contentType, data)
 }
 
 // UpdateScreenplayScene PUT /screenplay-scenes/:id

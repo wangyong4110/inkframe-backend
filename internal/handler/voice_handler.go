@@ -607,7 +607,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	skipExisting := req.SkipExisting == nil || *req.SkipExisting // default true
 
-	allShots, err := h.videoService.GetStoryboard(uint(videoID))
+	allShots, err := h.videoService.GetStoryboard(uint(videoID), 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -910,7 +910,7 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	shots, err := h.videoService.GetStoryboard(uint(videoID), 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -952,7 +952,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	shots, err := h.videoService.GetStoryboard(uint(videoID), 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

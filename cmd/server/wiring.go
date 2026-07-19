@@ -446,7 +446,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithChapterRepo(repos.ChapterRepo).
 		WithChapterSceneAnchorRepo(repos.ChapterSceneAnchorRepo)
 	screenplaySvc := service.NewScreenplayService(repos.ScreenplaySceneRepo, repos.ChapterRepo, repos.NovelRepo, repos.CharacterRepo, repos.SceneAnchorRepo, aiSvc).
-		WithVersionRepo(repos.ScreenplaySceneVersionRepo)
+		WithVersionRepo(repos.ScreenplaySceneVersionRepo).
+		WithVideoRepo(repos.VideoRepo)
 
 	// 伏笔 CRUD 服务（带 AI 提取能力）
 	foreshadowCRUDSvc := service.NewForeshadowCRUDService(repos.ForeshadowRepo).
@@ -807,7 +808,6 @@ type Handlers struct {
 	KnowledgeHandler       *handler.KnowledgeHandler
 	KnowledgeToolHandler   *handler.KnowledgeToolHandler
 	CharacterLookupHandler *handler.CharacterLookupHandler
-	PromptEnhanceHandler   *handler.PromptEnhanceHandler
 	DramaticHandler        *handler.DramaticHandler
 	DashboardHandler       *handler.DashboardHandler
 	ForeshadowHandler      *handler.ForeshadowHandler
@@ -902,10 +902,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
 		ScreenplayHandler: handler.NewScreenplayHandler(services.ScreenplayService, services.ChapterService, services.NovelService).
 			WithVideoService(services.VideoService).
-			WithTaskService(services.TaskService).
-			WithCharacterService(services.CharacterService).
-			WithItemService(services.ItemService).
-			WithSceneAnchorService(services.SceneAnchorService),
+			WithTaskService(services.TaskService),
 		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler:     handler.NewRewriteHandler(services.RewriteService),
@@ -936,9 +933,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),
 		CharacterLookupHandler: handler.NewCharacterLookupHandler(
 			service.NewCharacterLookupService(repos.CharacterRepo, repos.SnapshotRepo),
-		),
-		PromptEnhanceHandler: handler.NewPromptEnhanceHandler(
-			service.NewPromptEnhanceService(services.AIService),
 		),
 		DramaticHandler: handler.NewDramaticHandler(
 			services.HookChainService,

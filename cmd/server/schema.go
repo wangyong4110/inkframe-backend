@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-18-v2"
+const schemaVersion = "2026-07-18-v4"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -207,6 +207,20 @@ func autoMigrate(db *gorm.DB) error {
 	if screenplayEditedColCnt == 0 {
 		if err := db.Exec("ALTER TABLE ink_screenplay_scene ADD COLUMN edited TINYINT(1) NOT NULL DEFAULT 0").Error; err != nil {
 			return fmt.Errorf("autoMigrate: failed to add ink_screenplay_scene.edited: %w", err)
+		}
+	}
+
+	// ink_screenplay_scene.character_ids：分场剧本"出场角色"字段——生成/展示这场戏用了哪些角色
+	// 的下游消费方从来没有实现过（分镜生成是逐行重新解析 beats 文本识别角色，前端也只展示
+	// 分镜级别的角色绑定），一直是写了但没人读的孤立字段，删除。
+	var screenplayCharacterIDsColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_screenplay_scene' AND COLUMN_NAME = 'character_ids'`,
+	).Scan(&screenplayCharacterIDsColCnt)
+	if screenplayCharacterIDsColCnt > 0 {
+		if err := db.Exec("ALTER TABLE ink_screenplay_scene DROP COLUMN character_ids").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to drop ink_screenplay_scene.character_ids: %w", err)
 		}
 	}
 

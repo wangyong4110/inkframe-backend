@@ -26,25 +26,14 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		Characters     []string `json:"characters"`
 		Style          string   `json:"style,omitempty"`
 		Provider       string   `json:"provider,omitempty"`        // 指定 LLM 提供者，可为空
-		UserPrompt     string   `json:"user_prompt,omitempty"`     // 用户自定义提示词
-		Pacing         string   `json:"pacing,omitempty"`          // slow/normal/fast
-		TargetDuration int      `json:"target_duration,omitempty"` // 0=自动估算
 		MaxTokens      int      `json:"max_tokens,omitempty"`      // 0=使用系统默认
 		Temperature    float64  `json:"temperature,omitempty"`     // 0=使用系统默认
 		TimeoutSeconds int      `json:"timeout_seconds,omitempty"` // 0=使用系统默认(180s)
-		VoiceMode      string   `json:"voice_mode,omitempty"`      // ""/"auto"/"both"=自动, "narration"=仅旁白, "dialogue"=仅对白, "narration_primary"=旁白为主, "dialogue_primary"=对白为主
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
 		respondBadRequest(c, err.Error())
 		return
-	}
-
-	// 若请求携带节奏/时长配置，持久化到 Video 记录，后续 GenerateStoryboard 读取
-	if req.Pacing != "" || req.TargetDuration != 0 {
-		if err := h.videoService.UpdatePacingConfig(uint(videoId), req.Pacing, req.TargetDuration); err != nil {
-			reqLogger(c).Errorf("[VideoHandler] UpdatePacingConfig failed (non-fatal): %v", err)
-		}
 	}
 
 	tenantID := getTenantID(c)
@@ -60,11 +49,9 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		"characters":      req.Characters,
 		"style":           req.Style,
 		"provider":        req.Provider,
-		"user_prompt":     req.UserPrompt,
 		"max_tokens":      req.MaxTokens,
 		"temperature":     req.Temperature,
 		"timeout_seconds": req.TimeoutSeconds,
-		"voice_mode":      req.VoiceMode,
 	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -154,8 +141,9 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "分镜审查任务已提交")
 }
 
-// GetStoryboard 获取分镜列表
-// GET /api/v1/videos/:id/storyboard
+// GetStoryboard 获取分镜列表；可选 scene_id 查询参数按剧本场次过滤，
+// 避免按场次查看分镜脚本时拉取整个视频的全部分镜。
+// GET /api/v1/videos/:id/storyboard?scene_id=123
 func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	videoId, ok := parseID(c, "id")
 	if !ok {
@@ -164,8 +152,9 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
 		return
 	}
+	sceneID, _ := strconv.ParseUint(c.Query("scene_id"), 10, 64)
 
-	shots, err := h.videoService.GetStoryboard(uint(videoId))
+	shots, err := h.videoService.GetStoryboard(uint(videoId), uint(sceneID))
 	if err != nil {
 		reqLogger(c).Errorf("[VideoHandler] GetStoryboard: videoID=%d err=%v", videoId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -190,6 +179,27 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 		}
 	}
 	respondOK(c, result)
+}
+
+// GetStoryboardSummary 获取分镜轻量汇总（不含 description 等大字段），供场次侧边栏/
+// 时间轴等只需时长/缩略图/场次归属聚合展示的场景使用。
+// GET /api/v1/videos/:id/storyboard/summary
+func (h *VideoHandler) GetStoryboardSummary(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
+
+	summary, err := h.videoService.GetStoryboardSummary(uint(videoId))
+	if err != nil {
+		reqLogger(c).Errorf("[VideoHandler] GetStoryboardSummary: videoID=%d err=%v", videoId, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, summary)
 }
 
 // GetStoryboardVersions 获取分镜历史版本列表
@@ -840,7 +850,7 @@ func (h *VideoHandler) ListShots(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.GetStoryboard(uint(id))
+	shots, err := h.videoService.GetStoryboard(uint(id), 0)
 	if err != nil {
 		reqLogger(c).Errorf("[VideoHandler] ListShots: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

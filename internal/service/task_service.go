@@ -20,6 +20,7 @@ import (
 // Task type constants — used by handlers to tag tasks.
 const (
 	TaskTypeStoryboardGen = "storyboard_gen"
+	TaskTypeScreenplayGen = "screenplay_gen" // 分场剧本生成/重新生成，entity_type="chapter"；full_pipeline=true 时是"生成剧本"一键管线
 	TaskTypeChapterGen    = "chapter_gen"
 	TaskTypeVoiceGen      = "voice_gen"
 	TaskTypeImageGen      = "image_gen"

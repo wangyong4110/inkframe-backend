@@ -55,7 +55,6 @@ type Config struct {
 	KnowledgeHandler       *handler.KnowledgeHandler
 	KnowledgeToolHandler   *handler.KnowledgeToolHandler
 	CharacterLookupHandler *handler.CharacterLookupHandler
-	PromptEnhanceHandler   *handler.PromptEnhanceHandler
 	DramaticHandler        *handler.DramaticHandler
 	DashboardHandler       *handler.DashboardHandler
 	ForeshadowHandler      *handler.ForeshadowHandler
@@ -474,6 +473,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/screenplay/generate", cfg.ScreenplayHandler.GenerateScreenplay)
 			chapters.POST("/:id/screenplay/generate-full", cfg.ScreenplayHandler.GenerateScreenplayFull)
 			chapters.GET("/:id/screenplay", cfg.ScreenplayHandler.ListScreenplayScenes)
+			chapters.GET("/:id/screenplay/export", cfg.ScreenplayHandler.ExportScreenplay)
 
 			// 大纲审查
 			if cfg.OutlineReviewHandler != nil {
@@ -602,6 +602,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id", cfg.VideoHandler.UpdateVideo)
 			videos.DELETE("/:id", cfg.VideoHandler.DeleteVideo)
 			videos.GET("/:id/storyboard", cfg.VideoHandler.GetStoryboard)
+			videos.GET("/:id/storyboard/summary", cfg.VideoHandler.GetStoryboardSummary)
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
 			videos.GET("/:id/storyboard/versions", cfg.VideoHandler.GetStoryboardVersions)
@@ -824,9 +825,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		}
 		if cfg.CharacterLookupHandler != nil {
 			toolsGroup.POST("/character-lookup", cfg.CharacterLookupHandler.Lookup)
-		}
-		if cfg.PromptEnhanceHandler != nil {
-			toolsGroup.POST("/prompt-enhance", cfg.PromptEnhanceHandler.Enhance)
 		}
 
 		experiments := v1.Group("/experiments")

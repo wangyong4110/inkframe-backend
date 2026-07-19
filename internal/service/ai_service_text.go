@@ -97,6 +97,12 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			config.MaxTokens = 2048
 		case "storyboard_arc":
 			config.MaxTokens = 6000
+		case "screenplay_generate":
+			// 分场剧本是整章一次性生成（不像 storyboard 按内容分段调用），需要覆盖全章
+			// 所有场次+每场详细节拍，输出规模与 storyboard 同量级，之前没有兜底值导致
+			// config.MaxTokens 停留在 0（未配置 provider/model 时），生成中途被截断，
+			// 只产出章节前半部分的场次。
+			config.MaxTokens = 16384
 		}
 	}
 

@@ -65,14 +65,18 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		shotMap[sh.ID] = sh
 	}
 
-	// 确定是否有视频提供商（对整批分镜一致）
+	// 图片解说模式：无论是否配置了视频 provider，都应该走"图片+Ken Burns"而非 AI 视频生成——
+	// mode 才是唯一的开关，不能像视频动画模式那样由 provider 是否配置来决定分支。
+	isSlideshow := mode == "slideshow"
+
+	// 确定是否有视频提供商（对整批分镜一致；slideshow 模式下无意义，不参与分支判断）
 	hasProvider := s.hasVideoProvider(s.videoTenantID(video))
 	logger.Printf("BatchGenerateShots: hasVideoProvider=%v effectiveProvider=%q", hasProvider, effectiveProvider)
 
 	// 并发数和队列键均从 DB 模型配置中统一获取
 	tenantID := s.videoTenantID(video)
 	providerType := "image"
-	if hasProvider {
+	if hasProvider && !isSlideshow {
 		providerType = "video"
 	}
 	concurrency := 1
@@ -126,7 +130,36 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		ep := effectiveProvider
 
 		var future *TaskFuture
-		if !hasProvider {
+		if isSlideshow {
+			// 图片解说模式：GenerateSlideshowShotVideo（出图 + Ken Burns 编码，一步到位，
+			// 写入 shot.VideoURL），不受 hasProvider 影响。
+			future = taskQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
+				var genErr error
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					genErr = s.GenerateSlideshowShotVideo(sh, ar)
+					if genErr == nil {
+						break
+					}
+					if isContentSafetyError(genErr) {
+						logger.Warnf("BatchGenerateShots: shot %d safety rejection, skipping retries", sh.ShotNo)
+						break
+					}
+					logger.Errorf("BatchGenerateShots: shot %d slideshow attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+					if attempt < maxRetries {
+						time.Sleep(time.Duration(attempt*2) * time.Second)
+					}
+				}
+				if genErr != nil {
+					logger.Errorf("BatchGenerateShots: shot %d slideshow failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
+						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
+					}
+				} else {
+					logger.Printf("BatchGenerateShots: shot %d slideshow ready", sh.ShotNo)
+				}
+				return "", genErr
+			})
+		} else if !hasProvider {
 			// 图片模式：generateShotImageOnly → DB 更新（全在 Worker goroutine 中完成）
 			future = taskQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
 				var genErr error
@@ -550,10 +583,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		logger.Errorf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
 	}
 
-	promptText := shot.GenMeta.Prompt
-	if promptText == "" {
-		promptText = shot.Description
-	}
+	promptText := shot.Description
 
 	// 场景锚点：注入锁定词，并收集场景参考图。
 	// !! 必须在角色注入之前 prepend，这样角色信息最终排在场景描述前面。
@@ -797,7 +827,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0 ||
 		(shot.GenMeta.Characters != "" && shot.GenMeta.Characters != "[]" && shot.GenMeta.Characters != "null")
 	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
-	if !shotHasAnyCharacter && (shot.GenMeta.NegativePrompt == "" || !strings.Contains(shot.GenMeta.NegativePrompt, "person")) {
+	if !shotHasAnyCharacter {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
 	}
 	// 有角色时追加面部模糊专项负向词 + 重复角色专项负向词
@@ -811,54 +841,29 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		imgNegBase = imgNegBase + ", " + faceNeg + ", " + dupCharNeg
 	}
 	negPrompt := imgNegBase
-	if shot.GenMeta.NegativePrompt != "" {
-		negPrompt = imgNegBase + ", " + shot.GenMeta.NegativePrompt
-	}
 
 	// Prompt 前缀策略：
-	// - shot.GenMeta.Prompt（LLM 生成的 image_prompt）已包含画风/画质词/镜头参数，只补充项目级调色和风格词，
-	//   避免重复注入镜头参数（如 35mm vs 85mm）产生冲突，导致画面比例/构图异常。
-	// - shot.GenMeta.Prompt 为空时（降级用 description），注入完整电影级前缀补足画质词和镜头描述。
-	lensType := "standard lens 50mm"
+	// shot.Description 已包含画风/画质词/镜头参数（见 storyboard_generate.j2 的结构化要求），
+	// 只补充项目级调色和风格词，避免重复注入镜头参数（如 35mm vs 85mm）产生冲突，导致画面比例/构图异常。
 
 	// 将风格 ID 解析为英文风格描述词（与 GenerateThreeViewSheet 保持一致）。
 	// 使用 resolveStyleIllustrationDesc（英文）而非 resolveStyleDesc（中文），
-	// 因为 image_prompt 本身是英文，中文 token 在扩散模型中信号弱且可能被忽略。
-	// 无条件注入：LLM 生成的分镜 prompt 可能残留旧风格词，以项目当前设置覆盖为准。
+	// 因为扩散模型对中文 token 信号弱且可能被忽略。
+	// 无条件注入：LLM 生成的分镜描述可能残留旧风格词，以项目当前设置覆盖为准。
 	styleDesc := ""
 	if artStyle != "" {
 		styleDesc = resolveStyleIllustrationDesc(artStyle)
 	}
 
-	if shot.GenMeta.Prompt != "" {
-		// LLM 生成的 image_prompt 已完整，只在最前端注入项目级画面风格和色调。
-		// 若 image_prompt 自身已经带了这段风格词（LLM 有时会把 ImageStyleHint 原样写进
-		// 开头），此处再无条件 prepend 一次就会导致同一段风格词在 prompt 里出现两次，
-		// 白白占用 800 字符上限的空间——见 promptText 已包含 styleDesc 时跳过注入。
-		var prefix string
-		if styleDesc != "" && !strings.Contains(promptText, styleDesc) {
-			prefix += styleDesc + ", "
-		}
-		if prefix != "" {
-			promptText = prefix + promptText
-		}
-	} else {
-		// 降级：description 无画质词，注入风格匹配的前缀。
-		// 写实/3D/游戏原画：使用电影摄影级前缀（焦段+光线设置）
-		// 动漫/插画/水墨等非写实风格：仅注入风格词，禁止使用 cinematic film photography 等摄影词，
-		// 否则扩散模型会被引导向写实摄影输出，与风格冲突且加剧光照过曝。
-		var fallbackPrefix string
-		styleCategory := resolveStyleCategory(artStyle)
-		if styleCategory == "realistic" || styleCategory == "render_3d" {
-			fallbackPrefix = "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType
-		} else {
-			// 插画/动漫/水墨：用镜头描述词替代摄影词，不引入写实信号
-			fallbackPrefix = "detailed digital illustration, " + lensType
-		}
-		if styleDesc != "" {
-			fallbackPrefix = styleDesc + ", " + fallbackPrefix
-		}
-		promptText = fallbackPrefix + ", " + promptText
+	// description 若已带了这段风格词（LLM 有时会把 ImageStyleHint 原样写进开头），
+	// 此处再无条件 prepend 一次就会导致同一段风格词在 prompt 里出现两次，
+	// 白白占用 800 字符上限的空间——见 promptText 已包含 styleDesc 时跳过注入。
+	var prefix string
+	if styleDesc != "" && !strings.Contains(promptText, styleDesc) {
+		prefix += styleDesc + ", "
+	}
+	if prefix != "" {
+		promptText = prefix + promptText
 	}
 
 	// 画质词强制注入：先移除与当前风格冲突的 realistic 质量词（防止旧分镜或 LLM 示例遗留的
@@ -908,7 +913,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		if sceneRefImage != "" && sceneAnchorName != "" {
 			nameToRefIdx[sceneAnchorName] = offset + len(itemRefImages) + 1
 		}
-		if refAnnotation := buildRefAnnotation(nameToRefIdx, isEnglishPrompt(shot.GenMeta.Prompt)); refAnnotation != "" {
+		if refAnnotation := buildRefAnnotation(nameToRefIdx); refAnnotation != "" {
 			promptText = refAnnotation + " " + promptText
 			logger.Printf("[RefIdx] shot#%d refMap=%v annotation=%q", shot.ShotNo, nameToRefIdx, refAnnotation)
 		}
@@ -975,7 +980,7 @@ var chineseNumerals = []string{
 // buildRefAnnotation 根据"参考图序号→角色/道具/场景名"的映射，生成前置于 prompt 正文的
 // 参考图说明文本；中文提示词用 [图N]（如"参考图说明：[图一]李白，..."），英文提示词用 [Image-N]。
 // 不改写 prompt 正文中的原始名称，只生成前缀；图片生成和视频生成共用此方法。
-func buildRefAnnotation(nameToRefIdx map[string]int, isEn bool) string {
+func buildRefAnnotation(nameToRefIdx map[string]int) string {
 	if len(nameToRefIdx) == 0 {
 		return ""
 	}
@@ -991,47 +996,15 @@ func buildRefAnnotation(nameToRefIdx map[string]int, isEn bool) string {
 
 	var mappings []string
 	for _, e := range entries {
-		var tag string
-		if isEn {
-			tag = fmt.Sprintf("[Image-%d]", e.idx)
-		} else {
-			cn := fmt.Sprintf("%d", e.idx)
-			if e.idx >= 1 && e.idx <= len(chineseNumerals) {
-				cn = chineseNumerals[e.idx-1]
-			}
-			tag = fmt.Sprintf("[图%s]", cn)
+		cn := fmt.Sprintf("%d", e.idx)
+		if e.idx >= 1 && e.idx <= len(chineseNumerals) {
+			cn = chineseNumerals[e.idx-1]
 		}
-		if isEn {
-			mappings = append(mappings, tag+"="+e.name)
-		} else {
-			mappings = append(mappings, tag+"为"+e.name)
-		}
-	}
-	if isEn {
-		return "Reference images: " + strings.Join(mappings, ", ") +
-			". Each reference image is a DIFFERENT unique individual/object/scene. Do NOT duplicate any character — each appears exactly once."
+		tag := fmt.Sprintf("[图%s]", cn)
+		mappings = append(mappings, tag+"为"+e.name)
 	}
 	return "参考图说明：" + strings.Join(mappings, "，") +
 		"。每张参考图各对应不同的独立角色/道具/场景，每个角色只出现一次，不得重复。"
-}
-
-// isEnglishPrompt 判断字符串是否以英文为主（英文字母占比 > 40%）。
-// 用于选择参考图说明的语言标签：中文提示词用 [图N]，英文提示词用 [Image-N]。
-func isEnglishPrompt(s string) bool {
-	if s == "" {
-		return false
-	}
-	var englishChars, totalChars int
-	for _, r := range s {
-		totalChars++
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			englishChars++
-		}
-	}
-	if totalChars == 0 {
-		return false
-	}
-	return float64(englishChars)/float64(totalChars) > 0.40
 }
 
 // buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。
@@ -1060,14 +1033,8 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 
 	// 构建含修改建议的提示词（操作副本，不改 DB 原始字段）
 	shotCopy := *shot
-	basePrompt := shot.GenMeta.Prompt
-	if basePrompt == "" {
-		basePrompt = shot.Description
-	}
 	if suggestion != "" {
-		shotCopy.GenMeta.Prompt = basePrompt + ". Modification: " + suggestion
-	} else {
-		shotCopy.GenMeta.Prompt = basePrompt
+		shotCopy.Description = shot.Description + ". Modification: " + suggestion
 	}
 
 	newURL, err := s.generateShotReferenceImage(&shotCopy)
@@ -1480,11 +1447,8 @@ func (s *VideoService) buildContinuityPrefix(shot *model.StoryboardShot) string 
 		// ② 使用上一镜头的 transition_out（次精确）
 		return "continuing from: " + prev.CamDir.TransitionOut
 	}
-	// ③ 降级：截取上一镜头 MotionPrompt/Description 作粗粒度引导
-	desc := prev.GenMeta.MotionPrompt
-	if desc == "" {
-		desc = prev.Description
-	}
+	// ③ 降级：截取上一镜头 Description 作粗粒度引导
+	desc := prev.Description
 	if len([]rune(desc)) > 80 {
 		desc = string([]rune(desc)[:80]) + "..."
 	}
@@ -1496,11 +1460,9 @@ func (s *VideoService) buildContinuityPrefix(shot *model.StoryboardShot) string 
 
 // buildShotVideoPrompt 组装视频生成 prompt：衔接语义 → 场景锚点锁定词 → 画面风格前缀 → 角色动作 → 台词/音效。
 func (s *VideoService) buildShotVideoPrompt(shot *model.StoryboardShot, videoArtStyle string) string {
-	// 优先使用运镜提示词（MotionPrompt），若为空则降级到静态画面描述（Prompt）
-	videoPrompt := shot.GenMeta.MotionPrompt
-	if videoPrompt == "" {
-		videoPrompt = shot.GenMeta.Prompt
-	}
+	// buildMotionPrompt 把 camera_type 映射为具体的运镜速度/方式词汇，并结合 description
+	// 与昼夜氛围合成基础运动描述——description 本身是静态构图/光线描述，不含运镜信息。
+	videoPrompt := buildMotionPrompt(shot)
 	if continuityPrefix := s.buildContinuityPrefix(shot); continuityPrefix != "" {
 		videoPrompt = continuityPrefix + ", " + videoPrompt
 	}
@@ -1688,11 +1650,7 @@ func buildShotCinematicPrompt(shot *model.StoryboardShot, videoPrompt, videoArtS
 		"flickering, temporal inconsistency, abrupt scene change, jump cut"
 
 	videoPromptFinal := cinematicPrefix + videoPrompt
-	negativePrompt := negativeBase
-	if shot.GenMeta.NegativePrompt != "" {
-		negativePrompt = negativeBase + ", " + shot.GenMeta.NegativePrompt
-	}
-	return videoPromptFinal, negativePrompt
+	return videoPromptFinal, negativeBase
 }
 
 // collectExtraReferenceImages 收集主参考图之外的额外参考图（I2V 场景图、角色三视图、场景锚点图），
@@ -1760,8 +1718,7 @@ func applyRefIndexAnnotation(shot *model.StoryboardShot, videoPromptFinal, absRe
 			nameToRefIdx[label] = baseIdx + i
 		}
 	}
-	isEn := isEnglishPrompt(shot.GenMeta.MotionPrompt + shot.GenMeta.Prompt)
-	refAnnotation := buildRefAnnotation(nameToRefIdx, isEn)
+	refAnnotation := buildRefAnnotation(nameToRefIdx)
 	if refAnnotation == "" {
 		return videoPromptFinal
 	}

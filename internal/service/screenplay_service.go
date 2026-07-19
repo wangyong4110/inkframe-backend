@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -22,6 +23,7 @@ type ScreenplayService struct {
 	anchorRepo    *repository.SceneAnchorRepository
 	aiSvc         *AIService
 	versionRepo   *repository.ScreenplaySceneVersionRepository // optional：注入后覆盖场次前会落一条历史快照
+	videoRepo     *repository.VideoRepository                  // optional：注入后可按章节对应的 video.Mode 区分分场剧本生成规则（slideshow/video）
 }
 
 func NewScreenplayService(
@@ -44,15 +46,34 @@ func (s *ScreenplayService) WithVersionRepo(repo *repository.ScreenplaySceneVers
 	return s
 }
 
+// WithVideoRepo 注入 video 仓库（可选：未注入时无法判断章节对应的 VideoMode，分场剧本按 video 动画模式的默认规则生成）。
+func (s *ScreenplayService) WithVideoRepo(repo *repository.VideoRepository) *ScreenplayService {
+	s.videoRepo = repo
+	return s
+}
+
+// videoModeForChapter 查找章节当前对应的 video.Mode（slideshow/video），用于分场剧本按输出类型调整生成规则。
+// 一章可能存在多个 video 记录，但实际约定为"一章一个活跃视频"（同 GetVideoByChapterID 的假设）；
+// 查不到时返回空字符串，模板按默认（video 动画模式）规则处理。
+func (s *ScreenplayService) videoModeForChapter(tenantID, chapterID uint) string {
+	if s.videoRepo == nil {
+		return ""
+	}
+	videos, _, err := s.videoRepo.List(nil, &chapterID, "", tenantID, 1, 1)
+	if err != nil || len(videos) == 0 {
+		return ""
+	}
+	return videos[0].Mode
+}
+
 // screenplaySceneSnapshot 是覆盖某场次前存入 ScreenplaySceneVersion.Content 的 JSON 快照结构，
-// 字段对应 GenerateScreenplayScenes 里 UpdateFields 会覆盖的那些字段。
+// 字段对应 GenerateScreenplayScenesCtx 里 UpdateFields 会覆盖的那些字段。
 type screenplaySceneSnapshot struct {
-	Heading            string              `json:"heading"`
-	Synopsis           string              `json:"synopsis"`
-	SceneAnchorID      *uint               `json:"scene_anchor_id"`
-	CharacterIDs       model.JSONUintSlice `json:"character_ids"`
-	Beats              string              `json:"beats"`
-	EstimatedShotCount int                 `json:"estimated_shot_count"`
+	Heading            string `json:"heading"`
+	Synopsis           string `json:"synopsis"`
+	SceneAnchorID      *uint  `json:"scene_anchor_id"`
+	Beats              string `json:"beats"`
+	EstimatedShotCount int    `json:"estimated_shot_count"`
 }
 
 // snapshotSceneBeforeOverwrite 在原地覆盖某场次前落一条历史版本记录（best-effort：失败只记日志，
@@ -66,7 +87,6 @@ func (s *ScreenplayService) snapshotSceneBeforeOverwrite(old *model.ScreenplaySc
 		Heading:            old.Heading,
 		Synopsis:           old.Synopsis,
 		SceneAnchorID:      old.SceneAnchorID,
-		CharacterIDs:       old.CharacterIDs,
 		Beats:              old.Beats,
 		EstimatedShotCount: old.EstimatedShotCount,
 	})
@@ -85,23 +105,20 @@ func (s *ScreenplayService) snapshotSceneBeforeOverwrite(old *model.ScreenplaySc
 	}
 }
 
-// screenplaySceneJSON / screenplayBeatJSON 对应 AI 输出的 JSON 结构（字段名与 prompt 输出一致）。
-type screenplayBeatJSON struct {
-	BeatType        string `json:"beat_type"`
-	ActionLine      string `json:"action_line"`
-	DialogueSpeaker string `json:"dialogue_speaker"`
-	DialogueLine    string `json:"dialogue_line"`
-}
-
+// screenplaySceneJSON 对应 AI 输出的 JSON 结构（字段名与 prompt 输出一致）。Beats 是一个多行
+// 纯文本字符串（每行一条节拍，对话行格式为"角色名：台词"），与 model.ScreenplayScene.Beats 的
+// 最终存储格式完全一致，不需要额外的结构化转换。
 type screenplaySceneJSON struct {
-	SceneNo        int                  `json:"scene_no"`
-	Heading        string               `json:"heading"`
-	Synopsis       string               `json:"synopsis"`
-	EstimatedShots int                  `json:"estimated_shots"`
-	Beats          []screenplayBeatJSON `json:"beats"`
+	SceneNo        int    `json:"scene_no"`
+	Heading        string `json:"heading"`
+	Synopsis       string `json:"synopsis"`
+	EstimatedShots int    `json:"estimated_shots"`
+	Beats          string `json:"beats"`
 }
 
-// GenerateScreenplayScenes 从章节内容生成分场剧本并落库。
+// GenerateScreenplayScenesCtx 从章节内容生成分场剧本并落库；ctx 用于响应异步任务取消（调用方
+// 由 cmd/server/task_resume.go 里 TaskTypeScreenplayGen 的 resume handler 统一驱动，不再由
+// HTTP handler 同步调用）。
 // 已锁定（Locked）的场次不受影响：锁定场次的 scene_no 会被跳过复用（生成结果里遇到已被锁定
 // 场次占用的编号会顺延）。
 //
@@ -113,7 +130,7 @@ type screenplaySceneJSON struct {
 // StoryboardShot.ScreenplaySceneID 等下游数据通过场次 ID 引用场次，删除重建会让这些引用
 // 静默失效（分镜表面上"消失"，实际是指向了一个已不存在的旧 ID）。只有当新生成结果的场次数
 // 少于旧场次数时，才删除多出来、不再被使用的旧 scene_no 行。
-func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, providerName string, preserveEdited bool) ([]*model.ScreenplayScene, error) {
+func (s *ScreenplayService) GenerateScreenplayScenesCtx(ctx context.Context, tenantID, chapterID uint, providerName string, preserveEdited bool) ([]*model.ScreenplayScene, error) {
 	chapter, err := s.chapterRepo.GetByID(chapterID)
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
@@ -160,12 +177,13 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 		"Content":    chapter.Content,
 		"Characters": promptChars,
 		"Anchors":    promptAnchors,
+		"VideoMode":  s.videoModeForChapter(tenantID, chapterID),
 	})
 	if tplErr != nil {
 		return nil, fmt.Errorf("render screenplay_generate: %w", tplErr)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "screenplay_generate", rendered, providerName)
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "screenplay_generate", rendered, providerName)
 	if err != nil {
 		return nil, fmt.Errorf("AI generate screenplay: %w", err)
 	}
@@ -190,10 +208,6 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 		}
 		return nil
 	}
-	charIDByName := make(map[string]uint, len(characters))
-	for _, c := range characters {
-		charIDByName[c.Name] = c.ID
-	}
 
 	// 受保护的场次（已锁定，或 preserveEdited=true 时的已编辑场次）原样保留，不做任何改动。
 	sceneNo := maxProtectedNo
@@ -207,21 +221,8 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 		}
 		sceneNo++
 		usedNos[sceneNo] = true
-		var charIDs model.JSONUintSlice
-		beatLines := make([]string, 0, len(sj.Beats))
-		for _, bj := range sj.Beats {
-			if bj.BeatType == "dialogue" {
-				beatLines = append(beatLines, fmt.Sprintf("%s：%s", bj.DialogueSpeaker, bj.DialogueLine))
-			} else {
-				beatLines = append(beatLines, bj.ActionLine)
-			}
-			if bj.DialogueSpeaker != "" {
-				if id, ok := charIDByName[bj.DialogueSpeaker]; ok {
-					charIDs = appendUniqueUint(charIDs, id)
-				}
-			}
-		}
-		beats := strings.Join(beatLines, "\n")
+		// AI 直接输出多行纯文本，格式已与最终存储格式一致，无需额外转换。
+		beats := strings.TrimSpace(sj.Beats)
 
 		if old, ok := existingByNo[sceneNo]; ok {
 			// 同一 scene_no 已有旧场次：原地更新内容，保留其 ID，避免下游按 ID 的引用失效。
@@ -231,7 +232,6 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 				"heading":              sj.Heading,
 				"synopsis":             sj.Synopsis,
 				"scene_anchor_id":      matchAnchor(sj.Heading),
-				"character_ids":        charIDs,
 				"beats":                beats,
 				"estimated_shot_count": sj.EstimatedShots,
 				"edited":               false, // AI 已重新生成覆盖内容，不再算作"人工编辑过"
@@ -246,7 +246,6 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 			ChapterID: chapterID, NovelID: chapter.NovelID,
 			SceneNo: sceneNo, Heading: sj.Heading, Synopsis: sj.Synopsis,
 			SceneAnchorID:      matchAnchor(sj.Heading),
-			CharacterIDs:       charIDs,
 			Beats:              beats,
 			EstimatedShotCount: sj.EstimatedShots,
 		}
@@ -265,15 +264,6 @@ func (s *ScreenplayService) GenerateScreenplayScenes(tenantID, chapterID uint, p
 	}
 
 	return s.repo.ListByChapter(chapterID)
-}
-
-func appendUniqueUint(s model.JSONUintSlice, v uint) model.JSONUintSlice {
-	for _, existing := range s {
-		if existing == v {
-			return s
-		}
-	}
-	return append(s, v)
 }
 
 func parseScreenplayResult(raw string) (*struct {
@@ -362,7 +352,6 @@ func (s *ScreenplayService) RestoreSceneVersion(sceneID uint, versionNo int) (*m
 		"heading":              snap.Heading,
 		"synopsis":             snap.Synopsis,
 		"scene_anchor_id":      snap.SceneAnchorID,
-		"character_ids":        snap.CharacterIDs,
 		"beats":                snap.Beats,
 		"estimated_shot_count": snap.EstimatedShotCount,
 		"edited":               true,

@@ -113,7 +113,7 @@ func main() {
 	removeRetiredMcpTool(db, "color_palette")
 	seedKnowledgeSearchMcpTool(db, cfg)
 	seedCharacterLookupMcpTool(db, cfg)
-	seedPromptEnhanceMcpTool(db, cfg)
+	removeRetiredMcpTool(db, "prompt_enhance")
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
@@ -259,7 +259,6 @@ func main() {
 		KnowledgeHandler:       handlers.KnowledgeHandler,
 		KnowledgeToolHandler:   handlers.KnowledgeToolHandler,
 		CharacterLookupHandler: handlers.CharacterLookupHandler,
-		PromptEnhanceHandler:   handlers.PromptEnhanceHandler,
 		DramaticHandler:        handlers.DramaticHandler,
 		DashboardHandler:       handlers.DashboardHandler,
 		ForeshadowHandler:      handlers.ForeshadowHandler,

@@ -76,6 +76,7 @@ var validEmotionalTones = map[string]bool{
 type beatSheetItem struct {
 	No             int      `json:"no"`
 	BeatType       string   `json:"beat_type"`
+	Importance     string   `json:"importance"` // major/minor：供简洁模式（StoryboardMode=concise）筛选，只转化 major 节拍为分镜
 	ContentSummary string   `json:"content_summary"`
 	Location       string   `json:"location"`
 	Characters     []string `json:"characters"`
@@ -97,9 +98,8 @@ type StoryboardGenResult struct {
 // GenerateStoryboardCtx 生成分镜
 // ctx: 取消信号来源——调用方（handler）通过 TaskService.RegisterCancel 注册的 cancel 函数最终
 // 会 Done() 这个 ctx，用来真正打断正在进行的 AI 调用，而不仅仅是跳过下一个分段。
-// userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
 // progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
-func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) (*StoryboardGenResult, error) {
+func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, provider string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) (*StoryboardGenResult, error) {
 	metrics.StoryboardGenerationInFlight.Inc()
 	defer metrics.StoryboardGenerationInFlight.Dec()
 	sbStart := time.Now()
@@ -142,11 +142,6 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		if err := s.videoRepo.Update(video); err != nil {
 			logger.Errorf("[VideoService] failed to update video chapterID: %v", err)
 		}
-	}
-
-	// 持久化 VoiceMode，供后续 ReviewStoryboard 读取正确的评分权重
-	if overrides.VoiceMode != "" {
-		video.RenderConfig.VoiceMode = overrides.VoiceMode
 	}
 
 	var content string
@@ -350,7 +345,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 
 	// 串行生成情感弧线骨架，确保所有段落（包括关键的首段开场）均有弧线指导。
 	// Arc 仅截断至 6000 字运行，通常耗时 5-10s；相比首段缺失弧线导致的叙事质量损失，此等待代价可接受。
-	arcPlan := s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider)
+	arcPlan := s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider, video.Mode)
 	logger.Printf("[Storyboard] arc ready (%d chars)", len(arcPlan))
 
 	totalRunes := len([]rune(content))
@@ -378,7 +373,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		}
 		if len(scenes) == 0 {
 			logger.Printf("[Storyboard] no screenplay scenes for chapterID=%d, auto-generating", *chapterID)
-			scenes, scErr = s.screenplaySvc.GenerateScreenplayScenes(tenantID, *chapterID, provider, true)
+			scenes, scErr = s.screenplaySvc.GenerateScreenplayScenesCtx(ctx, tenantID, *chapterID, provider, true)
 			if scErr != nil {
 				logger.Errorf("[Storyboard] auto-generate screenplay chapterID=%d: %v (falling back to text segmentation)", *chapterID, scErr)
 			}
@@ -402,6 +397,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 					segBeatSheet = append(segBeatSheet, map[string]interface{}{
 						"No":             j + 1,
 						"BeatType":       beatType,
+						"Importance":     "major", // 分场剧本的节拍暂无 AI 重要度标注，简洁模式下按 major 处理（不裁剪）
 						"ContentSummary": text,
 						"Location":       sc.Heading,
 						"Characters":     speaker,
@@ -427,11 +423,11 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	}
 
 	if !usedScreenplay {
-		totalShots = calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
+		totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
 
 		// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
 		// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
-		beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots)
+		beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots, video.Mode)
 		logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
 
 		// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限，
@@ -488,6 +484,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 					segBeatSheet = append(segBeatSheet, map[string]interface{}{
 						"No":             item.No,
 						"BeatType":       item.BeatType,
+						"Importance":     item.Importance,
 						"ContentSummary": item.ContentSummary,
 						"Location":       item.Location,
 						"Characters":     strings.Join(item.Characters, "、"),
@@ -503,8 +500,8 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	if chapterID != nil {
 		chIDStr = fmt.Sprintf("%d", *chapterID)
 	}
-	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d segments=%d screenplayMode=%v chars=%d anchors=%d plotPoints=%d",
-		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, len(segments), usedScreenplay, len(characters), len(anchors), len(plotPoints))
+	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q totalRunes=%d totalShots=%d segments=%d screenplayMode=%v chars=%d anchors=%d plotPoints=%d",
+		videoID, chIDStr, provider, totalRunes, totalShots, len(segments), usedScreenplay, len(characters), len(anchors), len(plotPoints))
 
 	// P1 优化：按窗口并发生成段落，而不是严格逐段串行等待。
 	// 窗口内的段落共享同一份"上一窗口末尾镜头"快照作为上文（并发执行，无法互相等待对方产出），
@@ -554,9 +551,9 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 			go func(segIdx int) {
 				defer wg.Done()
 				p := plans[segIdx]
-				shots, err := s.generateStoryboardSegment(genCtx, video, segments[segIdx], userPrompt, segIdx, len(segments),
+				shots, err := s.generateStoryboardSegment(genCtx, video, segments[segIdx], segIdx, len(segments),
 					p.segShotCount, characters, anchors, plotPoints, effectiveItems, winPrevTail,
-					overrides.VoiceMode, genre, arcPlan, imageStyle,
+					genre, arcPlan, imageStyle,
 					chapterNo, novelTitle, worldviewDesc, p.segStartPct, p.segEndPct, charVisualPrompts,
 					p.segBeatSheet, tenantID, provider, segOverrides, videoID, chapterID)
 				results[segIdx] = segResult{shots: shots, err: err}
@@ -932,7 +929,7 @@ func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sc
 	characters, anchors, plotPoints, effectiveItems, charVisualPrompts,
 		genre, imageStyle, novelTitle, worldviewDesc, chapterNo, content :=
 		s.fetchSceneRegenContext(video, chapterID)
-	arcPlan := s.generateStoryboardArc(content, characters, resolvedTenantID, video.NovelID, provider)
+	arcPlan := s.generateStoryboardArc(content, characters, resolvedTenantID, video.NovelID, provider, video.Mode)
 	if progressFn != nil {
 		progressFn(20)
 	}
@@ -979,7 +976,7 @@ func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sc
 			fmt.Fprintf(&segBuilder, "%d. （%s）%s\n", j+1, beatType, text)
 		}
 		segBeatSheet = append(segBeatSheet, map[string]interface{}{
-			"No": j + 1, "BeatType": beatType, "ContentSummary": text,
+			"No": j + 1, "BeatType": beatType, "Importance": "major", "ContentSummary": text,
 			"Location": scene.Heading, "Characters": speaker, "SuggestedShots": 0,
 		})
 	}
@@ -990,9 +987,9 @@ func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sc
 
 	segOverrides := StoryboardOverrides{MaxTokens: 16384}
 
-	newShots, err := s.generateStoryboardSegment(ctx, video, segBuilder.String(), "", 0, 1, segShotCount,
+	newShots, err := s.generateStoryboardSegment(ctx, video, segBuilder.String(), 0, 1, segShotCount,
 		characters, anchors, plotPoints, effectiveItems, prevTailShots,
-		"", genre, arcPlan, imageStyle,
+		genre, arcPlan, imageStyle,
 		chapterNo, novelTitle, worldviewDesc, 0, 100, charVisualPrompts,
 		segBeatSheet, resolvedTenantID, provider, segOverrides, video.ID, &chapterID)
 	if err != nil {
@@ -1085,11 +1082,11 @@ func (s *VideoService) RegenerateShotsForScene(ctx context.Context, tenantID, sc
 // 换取在 provider 超时窗口内完成的概率；因空响应/解析失败/镜头数不足触发的重试维持原目标，
 // 只追加提示词。可在多个 goroutine 中并发调用——只读取入参，不修改任何共享状态。
 func (s *VideoService) generateStoryboardSegment(
-	ctx context.Context, video *model.Video, seg, userPrompt string,
+	ctx context.Context, video *model.Video, seg string,
 	segIdx, totalSegments, segShotCount int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
 	items []*EffectiveItem, prevTailShots []*model.StoryboardShot,
-	voiceMode, genre, arcPlan, imageStyle string,
+	genre, arcPlan, imageStyle string,
 	chapterNo int, novelTitle, worldviewDesc string,
 	segStartPct, segEndPct int, charVisualPrompts map[uint]string,
 	segBeatSheet []map[string]interface{},
@@ -1112,8 +1109,8 @@ func (s *VideoService) generateStoryboardSegment(
 	var bestShots []*model.StoryboardShot // 历次尝试中镜头数最多的结果
 	attemptShotCount := segShotCount
 	for attempt := 0; attempt < 3; attempt++ {
-		p := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, totalSegments, attemptShotCount,
-			characters, anchors, plotPoints, items, prevTailShots, voiceMode, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
+		p := s.buildStoryboardPrompt(video, seg, segIdx+1, totalSegments, attemptShotCount,
+			characters, anchors, plotPoints, items, prevTailShots, genre, arcPlan, imageStyle,
 			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct, charVisualPrompts,
 			segBeatSheet, segWorldState)
 		switch attempt {
@@ -1157,9 +1154,6 @@ func (s *VideoService) generateStoryboardSegment(
 			logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, totalSegments, attempt, parseErr)
 			continue
 		}
-		// 代码层兜底：严格模式（仅对白/仅旁白）下 prompt 指令是概率性的，AI 偶尔会在无法转化的
-		// 动作/过渡镜头上违反指令，这里强制清理，保证下游（配音、审查）不会看到相悖内容。
-		enforceVoiceMode(parsed, voiceMode, segIdx+1)
 		// 始终保留历次中镜头数最多的结果
 		if len(parsed) > len(bestShots) {
 			bestShots = parsed
@@ -1460,29 +1454,19 @@ func charRuneOverlap(a, b string) float64 {
 	return float64(overlap) / float64(len(shorter))
 }
 
-// calcTotalShots 按目标时长+节奏计算全章期望分镜总数。
-// targetDuration=0 时按字数密度+节奏估算（自动模式）。
-func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
-	// 各节奏对应平均单镜时长（秒）
-	avgSec := map[string]int{"slow": 8, "normal": 5, "fast": 3}
-	s, ok := avgSec[pacing]
-	if !ok {
-		s = 4 // 自动节奏：比 normal(5s) 略快，镜头更丰富
-	}
+// calcTotalShots 按字数密度估算全章期望分镜总数（自动模式，唯一支持的模式）。
+func calcTotalShots(totalRunes int, storyboardMode string) int {
+	s := 4 // 自动节奏：比原 normal(5s) 略快，镜头更丰富
 
-	if targetDuration > 0 {
-		n := targetDuration / s
-		if n < 3 {
-			n = 3
-		}
-		return n
-	}
-
-	// 自动模式：先估算视频时长，再折算分镜数。
+	// 先估算视频时长，再折算分镜数。
 	// 汉字阅读速度约 300 字/分钟，视频精炼比约 0.5（10 分钟文章 → 5 分钟视频）。
 	// 视频时长（秒）= totalRunes / 300 * 60 * 0.5 = totalRunes / 10
 	estimatedSecs := totalRunes / 10
 	n := estimatedSecs / s
+	if storyboardMode == "concise" {
+		// 简洁模式：只保留 major 节拍生成分镜，目标镜头数相应下调，避免下游为凑数而拆细次要情节
+		n = n * 6 / 10
+	}
 	if n < 5 {
 		n = 5
 	}
@@ -1695,6 +1679,7 @@ func (s *VideoService) generateBeatSheet(
 	tenantID, novelID uint,
 	provider string,
 	expectedShots int,
+	videoMode string,
 ) []beatSheetItem {
 	if s.aiService == nil {
 		return nil
@@ -1733,6 +1718,7 @@ func (s *VideoService) generateBeatSheet(
 		"Anchors":    beatAnchors,
 		"MinBeats":   minBeats,
 		"MaxBeats":   maxBeats,
+		"VideoMode":  videoMode,
 	}
 	prompt, err := renderPrompt("storyboard_beat", ctx)
 	if err != nil {
@@ -1770,14 +1756,12 @@ func (s *VideoService) generateBeatSheet(
 // characters/anchors/plotPoints 为调用方预取的数据（避免每段重复查 DB）。
 // prevShots: 上一段落末尾的 N 个分镜，用于跨段落情节连贯（顺序处理时传入，并发时为 nil）。
 func (s *VideoService) buildStoryboardPrompt(
-	video *model.Video, content, userPrompt string,
+	video *model.Video, content string,
 	segNo, totalSegs, expectedShots int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
 	items []*EffectiveItem,
 	prevShots []*model.StoryboardShot,
-	voiceMode string,
 	genre string,
-	pacing string,
 	arcPlan string,
 	imageStyle string,
 	chapterNo int,
@@ -1950,17 +1934,14 @@ func (s *VideoService) buildStoryboardPrompt(
 		"SegLabel":            segLabel,
 		"ExpectedShots":       expectedShots,
 		"ExpectedShotsMinus2": expectedShotsMinus2,
-		"VoiceMode":           voiceMode,
 		"VideoMode":           video.Mode, // "slideshow"(图片解说) | "video"(视频动画，含未设置时的默认)
-		"Pacing":              pacing,
-		"AutoDuration":        video.RenderConfig.TargetDuration == 0,
+		"StoryboardMode":      video.StoryboardMode, // "professional"(专业分镜) | "faithful"(忠于原文) | "concise"(简洁模式)，含未设置时的默认
 		"PrevShots":           prevShotsData,
 		"Characters":          matchedChars,
 		"Anchors":             matchedAnchors,
 		"PlotPoints":          ppData,
 		"Items":               itemsData,
 		"Content":             content,
-		"UserPrompt":          userPrompt,
 		"ArcPlan":             arcPlan,
 		"GenreVisualHints":    genreVisualHints(genre),
 		// ImageStyleHint: 画面风格的英文提示词，告知 LLM 生成 image_prompt 时必须使用的风格基调。
@@ -1993,12 +1974,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	cleaned := extractJSON(result)
 
 	type rawShotType struct {
-		ShotNo         int     `json:"shot_no"`
-		Description    string  `json:"description"`
-		ImagePrompt    string  `json:"image_prompt"`
-		VideoPrompt    string  `json:"video_prompt"`
-		NegativePrompt string  `json:"negative_prompt"`
-		Narration      string  `json:"narration"`
+		ShotNo      int     `json:"shot_no"`
+		Description string  `json:"description"`
+		Narration   string  `json:"narration"`
 		Dialogue       string  `json:"dialogue"`
 		CameraType     string  `json:"camera_type"`
 		Duration       float64 `json:"duration"`
@@ -2103,31 +2081,15 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			sceneJSON = string(b)
 		}
 
-		// image_prompt: 优先使用 LLM 生成的专业图片提示词，兜底用 description 拼接
-		imagePrompt := r.ImagePrompt
-		if imagePrompt == "" {
-			imagePrompt = r.Description
-			if r.Lighting != "" {
-				imagePrompt += "，" + r.Lighting + "光线"
-			}
-		}
+		// description 是 AI 出图/出视频的唯一依据（见 storyboard_generate.j2）。
 		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词。
 		// 使用风格匹配的质量词（不硬编码 photorealistic，避免与动漫/水彩/国画等风格冲突）。
-		if !strings.Contains(strings.ToLower(imagePrompt), "masterpiece") {
-			imagePrompt += ", " + resolveStyleQualityTokens(imageStyle)
+		description := r.Description
+		if !strings.Contains(strings.ToLower(description), "masterpiece") {
+			description += ", " + resolveStyleQualityTokens(imageStyle)
 		}
 
-		// video_prompt: 优先使用 LLM 生成的专业视频提示词，兜底用 buildMotionPrompt 生成
 		cameraType := validCameraType(r.CameraType)
-		videoPrompt := r.VideoPrompt
-		if videoPrompt == "" {
-			videoPrompt = buildMotionPrompt(&model.StoryboardShot{
-				CamDir: model.ShotCamDir{
-					CameraType: cameraType,
-				},
-				Description: r.Description,
-			})
-		}
 
 		// 将音效标签序列化存储
 		var sfxTagsJSON string
@@ -2137,12 +2099,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			}
 		}
 
-		// B1: 字段质量校验 ── image_prompt / video_prompt 长度 + emotional_tone 合法性
-		if len([]rune(imagePrompt)) < 100 {
-			logger.Printf("[Storyboard][B1] shot_no=%d: image_prompt too short (%d runes), generation quality may degrade", shotNo, len([]rune(imagePrompt)))
-		}
-		if len([]rune(videoPrompt)) < 100 {
-			logger.Printf("[Storyboard][B1] shot_no=%d: video_prompt too short (%d runes), motion quality may degrade", shotNo, len([]rune(videoPrompt)))
+		// B1: 字段质量校验 ── description 长度 + emotional_tone 合法性
+		if len([]rune(description)) < 100 {
+			logger.Printf("[Storyboard][B1] shot_no=%d: description too short (%d runes), generation quality may degrade", shotNo, len([]rune(description)))
 		}
 		emotionalTone := r.EmotionalTone
 		if !validEmotionalTones[emotionalTone] {
@@ -2154,25 +2113,12 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			emotionalTone = "平静"
 		}
 
-		// 若 video_prompt 中不含 SOUND 段落，将 sfx_tags.prompt 追加为兜底（确保 UI 展示音效描述）
-		if len(r.SFXTags) > 0 && !strings.Contains(videoPrompt, "SOUND:") && !strings.Contains(videoPrompt, "SOUND：") {
-			soundParts := make([]string, 0, len(r.SFXTags))
-			for _, tag := range r.SFXTags {
-				if tag.Prompt != "" {
-					soundParts = append(soundParts, tag.Prompt)
-				}
-			}
-			if len(soundParts) > 0 {
-				videoPrompt += "。SOUND：" + strings.Join(soundParts, "；")
-			}
-		}
-
 		shot := &model.StoryboardShot{
 			UUID:        uuid.New().String(),
 			VideoID:     videoID,
 			ChapterID:   chapterID,
 			ShotNo:      shotNo,
-			Description: r.Description,
+			Description: description,
 			Narration:   r.Narration,
 			Duration:    duration,
 			CamDir: model.ShotCamDir{
@@ -2183,48 +2129,18 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 				EmotionalTone: emotionalTone,
 			},
 			GenMeta: model.ShotGenMeta{
-				Prompt:         imagePrompt,
-				MotionPrompt:   videoPrompt,
-				NegativePrompt: r.NegativePrompt,
-				Characters:     charsJSON,
-				Items:          itemsJSON,
-				Scene:          sceneJSON,
-				SFXTags:        sfxTagsJSON,
-				Subtitle:       r.Subtitle,
-				Dialogue:       r.Dialogue,
+				Characters: charsJSON,
+				Items:      itemsJSON,
+				Scene:      sceneJSON,
+				SFXTags:    sfxTagsJSON,
+				Subtitle:   r.Subtitle,
+				Dialogue:   r.Dialogue,
 			},
 			Status: "pending",
 		}
 		shots = append(shots, shot)
 	}
 	return shots, nil
-}
-
-// enforceVoiceMode 是 storyboard_generate.j2 里"仅对白"/"仅旁白"强制规则的代码层校验。
-// prompt 指令是概率性的——AI 在动作/过渡等难以转化的镜头上偶尔会违反指令。
-// 旁白是内容资产，不做自动删除：违反 VoiceMode=dialogue 时仅记录日志和指标供观测，
-// 不清空 shot.Narration，避免把 AI 已经写好的内容丢弃。
-// segNo 仅用于日志定位，传 0 表示不区分段落（如单镜头重生成场景）。
-func enforceVoiceMode(shots []*model.StoryboardShot, voiceMode string, segNo int) {
-	switch voiceMode {
-	case "dialogue":
-		for _, shot := range shots {
-			if shot.Narration != "" {
-				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=dialogue violation: narration=%q non-empty, keeping (no auto-delete)",
-					segNo, shot.ShotNo, truncate(shot.Narration, 30))
-				metrics.StoryboardVoiceModeViolationTotal.WithLabelValues("dialogue").Inc()
-			}
-		}
-	case "narration":
-		for _, shot := range shots {
-			if shot.GenMeta.Dialogue != "" {
-				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=narration violation: dialogue=%q non-empty, clearing",
-					segNo, shot.ShotNo, truncate(shot.GenMeta.Dialogue, 30))
-				shot.GenMeta.Dialogue = ""
-				metrics.StoryboardVoiceModeViolationTotal.WithLabelValues("narration").Inc()
-			}
-		}
-	}
 }
 
 // validateShotSequence 验证分镜列表序号是否从 1 开始连续递增（无跳空）。
@@ -2252,7 +2168,7 @@ func validTransition(t string) string {
 	return "cut"
 }
 
-// buildMotionPrompt 根据分镜信息构建运动提示词（降级方案，LLM 生成的 video_prompt 优先）
+// buildMotionPrompt 根据分镜信息（camera_type + description + 昼夜氛围）合成视频生成的运动提示词。
 func buildMotionPrompt(shot *model.StoryboardShot) string {
 	motionMap := map[string]string{
 		"static":     "固定机位，带自然微稳定，几乎不可察觉的±0.3像素呼吸抖动，无主动镜头运动",
@@ -2338,9 +2254,19 @@ func validCameraType(t string) string {
 
 // ─── Storyboard CRUD ──────────────────────────────────────────────────────────
 
-// GetStoryboard 获取分镜列表
-func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, error) {
+// GetStoryboard 获取分镜列表。sceneID 非零时按剧本场次过滤，避免按场次查看时
+// 拉取整个视频的全部分镜（见 ListByVideoAndScene 注释）。
+func (s *VideoService) GetStoryboard(videoID, sceneID uint) ([]*model.StoryboardShot, error) {
+	if sceneID > 0 {
+		return s.storyboardRepo.ListByVideoAndScene(videoID, sceneID)
+	}
 	return s.storyboardRepo.ListByVideo(videoID)
+}
+
+// GetStoryboardSummary 获取分镜轻量汇总（不含 description 等大字段），供场次侧边栏/
+// 时间轴等聚合展示场景使用（见 ListSummaryByVideo 注释）。
+func (s *VideoService) GetStoryboardSummary(videoID uint) ([]repository.ShotSummary, error) {
+	return s.storyboardRepo.ListSummaryByVideo(videoID)
 }
 
 // snapshotShotsBeforeOverwrite 在删除某视频当前全部分镜前，把它们整体序列化成一条历史快照
@@ -2508,13 +2434,13 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 // 允许的字段：description, narration, dialogue, subtitle, camera_type,
 // duration, emotional_tone, transition, status, generation_mode.
 //
-// 注意：dialogue/subtitle/prompt/motion_prompt/generation_mode 存储在 gen_meta JSON 列；
+// 注意：dialogue/subtitle/generation_mode 存储在 gen_meta JSON 列；
 // camera_type/emotional_tone/transition* 存储在 cam_dir JSON 列。
 // GORM map Updates 不走 serializer，必须手动将这些字段合并到对应 JSON 列后再写入。
 func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{}) (*model.StoryboardShot, error) {
 	// gen_meta JSON 列中的字段
 	genMetaKeys := map[string]bool{
-		"dialogue": true, "subtitle": true, "prompt": true, "motion_prompt": true, "generation_mode": true,
+		"dialogue": true, "subtitle": true, "generation_mode": true,
 	}
 	// cam_dir JSON 列中的字段
 	camDirKeys := map[string]bool{
@@ -2553,12 +2479,6 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 				updatedGenMeta = true
 			case "subtitle":
 				shot.GenMeta.Subtitle = sv
-				updatedGenMeta = true
-			case "prompt":
-				shot.GenMeta.Prompt = sv
-				updatedGenMeta = true
-			case "motion_prompt":
-				shot.GenMeta.MotionPrompt = sv
 				updatedGenMeta = true
 			case "generation_mode":
 				shot.GenMeta.GenerationMode = sv
@@ -2625,12 +2545,12 @@ func (s *VideoService) SetShotItems(shotID uint, ids []uint) error {
 	return s.storyboardRepo.Update(shot)
 }
 
-// RegenerateShotPrompt 根据分镜当前绑定的角色/道具/场景，重新生成 image_prompt 和 video_prompt。
+// RegenerateShotPrompt 根据分镜当前绑定的角色/道具/场景，重新生成 description（AI 出图/出视频的唯一依据）。
 // 背景：绑定/解绑角色、道具、场景锚点只更新结构化字段（CharacterIDs/ItemIDs/SceneAnchorID），
-// GenMeta.Prompt/MotionPrompt 是分镜脚本生成时 LLM 一次性写死的叙事文本，不会随绑定变化自动
-// 重写——导致"改了绑定但生成结果没变"。这个方法把旧提示词连同当前绑定一起喂给 LLM 重新改写，
-// 而不是简单的关键词替换（中文语法下增删人名很容易改出病句），由调用方（前端在用户手动点击
-// "重新生成提示词"时）显式触发，不在绑定变化时自动执行。
+// Description 是分镜脚本生成时 LLM 一次性写死的叙事文本，不会随绑定变化自动重写——导致"改了
+// 绑定但生成结果没变"。这个方法把旧描述连同当前绑定一起喂给 LLM 重新改写，而不是简单的关键词
+// 替换（中文语法下增删人名很容易改出病句），由调用方（前端在用户手动点击"重新生成提示词"时）
+// 显式触发，不在绑定变化时自动执行。
 func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, videoID, shotID uint) (*model.StoryboardShot, error) {
 	shot, err := s.GetShotByID(videoID, shotID)
 	if err != nil {
@@ -2683,14 +2603,12 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 	}
 
 	rendered, tplErr := renderPrompt("regenerate_shot_prompt", map[string]interface{}{
-		"NovelTitle":      novelTitle,
-		"Genre":           genre,
-		"ShotDescription": shot.Description,
-		"CharacterList":   characterList,
-		"ItemList":        itemList,
-		"SceneText":       sceneText,
-		"OldImagePrompt":  shot.GenMeta.Prompt,
-		"OldMotionPrompt": shot.GenMeta.MotionPrompt,
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"CharacterList": characterList,
+		"ItemList":      itemList,
+		"SceneText":     sceneText,
+		"OldDescription": shot.Description,
 	})
 	if tplErr != nil {
 		return nil, fmt.Errorf("render regenerate_shot_prompt: %w", tplErr)
@@ -2702,8 +2620,7 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 	}
 
 	type regenResult struct {
-		ImagePrompt string `json:"image_prompt"`
-		VideoPrompt string `json:"video_prompt"`
+		Description string `json:"description"`
 	}
 	var parsed regenResult
 	cleaned := extractJSON(strings.TrimSpace(result))
@@ -2711,14 +2628,11 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 		logger.Errorf("[VideoService] RegenerateShotPrompt: parse error: %v, raw: %.300s", parseErr, result)
 		return nil, fmt.Errorf("parse regenerated prompt JSON: %w", parseErr)
 	}
-	if parsed.ImagePrompt == "" {
-		return nil, fmt.Errorf("AI 返回的图像提示词为空")
+	if parsed.Description == "" {
+		return nil, fmt.Errorf("AI 返回的画面描述为空")
 	}
 
-	shot.GenMeta.Prompt = parsed.ImagePrompt
-	if parsed.VideoPrompt != "" {
-		shot.GenMeta.MotionPrompt = parsed.VideoPrompt
-	}
+	shot.Description = parsed.Description
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		return nil, fmt.Errorf("save regenerated prompt: %w", err)
 	}
@@ -2912,13 +2826,13 @@ func (s *VideoService) ReviewStoryboard(ctx context.Context, tenantID, videoID u
 		return nil, 0, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
 	}
 
-	// 取 Video.NovelID / ChapterID 以便选择 provider 并注入章节原文
+	// 取 Video.NovelID / ChapterID / Mode 以便选择 provider、注入章节原文、区分审查标准
 	var novelID uint
 	var chapterContent string
-	var voiceMode string
+	var videoMode string
 	if video, err := s.videoRepo.GetByID(videoID); err == nil {
 		novelID = video.NovelID
-		voiceMode = video.RenderConfig.VoiceMode
+		videoMode = video.Mode
 		if video.ChapterID != nil && s.chapterRepo != nil {
 			if ch, err := s.chapterRepo.GetByID(*video.ChapterID); err == nil && ch != nil {
 				chapterContent = ch.Content
@@ -2943,7 +2857,7 @@ func (s *VideoService) ReviewStoryboard(ctx context.Context, tenantID, videoID u
 		ignoredItems, _ = s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 	}
 
-	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems, voiceMode)
+	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems, videoMode)
 
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
@@ -3084,7 +2998,7 @@ func (s *VideoService) ApplyReviewDeletes(videoID uint, shotNos []int) (int, err
 // buildStoryboardReviewPrompt 构建分镜审查提示词
 // chapterContent 非空时注入小说章节原文（用于对比覆盖率、建议插入/删除）。
 // previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题；ignoredItems 非空时注入永久忽略列表。
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredReviewIssue, voiceMode string) string {
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredReviewIssue, videoMode string) string {
 	// 预格式化分镜数据（带截断保护）
 	var sb strings.Builder
 	truncate := func(s string, max int) string {
@@ -3100,7 +3014,8 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		if shot.CamDir.EmotionalTone != "" {
 			sb.WriteString(fmt.Sprintf(" 情绪:%s", truncate(shot.CamDir.EmotionalTone, 12)))
 		}
-		if desc := truncate(shot.Description, 50); desc != "" {
+		// description 现在是 AI 出图/出视频的唯一依据，截断长度放宽以便审查员评估视觉质量
+		if desc := truncate(shot.Description, 200); desc != "" {
 			sb.WriteString(fmt.Sprintf("\n      描述: %s", desc))
 		}
 		if narr := truncate(shot.Narration, 80); narr != "" {
@@ -3108,13 +3023,6 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		}
 		if shot.GenMeta.Dialogue != "" {
 			sb.WriteString(fmt.Sprintf("\n      台词: %s", truncate(shot.GenMeta.Dialogue, 50)))
-		}
-		// 提示词摘要：供 AI 审查员评估提示词完整度（是否符合规范、是否过短）
-		if imgP := truncate(shot.GenMeta.Prompt, 100); imgP != "" {
-			sb.WriteString(fmt.Sprintf("\n      image_prompt: %s", imgP))
-		}
-		if vidP := truncate(shot.GenMeta.MotionPrompt, 100); vidP != "" {
-			sb.WriteString(fmt.Sprintf("\n      video_prompt: %s", vidP))
 		}
 		sb.WriteString("\n")
 	}
@@ -3158,7 +3066,7 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
 		"HasIgnored":         len(ignoredLines) > 0,
 		"IgnoredText":        strings.Join(ignoredLines, "\n"),
-		"VoiceMode":          voiceMode,
+		"VideoMode":          videoMode,
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {
@@ -3196,14 +3104,11 @@ type shotOptimizeUpdate struct {
 	Transition     string  `json:"transition"`
 	TransitionOut  string  `json:"transition_out"`
 	TransitionIn   string  `json:"transition_in"`
-	ImagePrompt    string  `json:"image_prompt"`     // gen_meta.prompt
-	VideoPrompt    string  `json:"video_prompt"`     // gen_meta.motion_prompt
-	NegativePrompt string  `json:"negative_prompt"`  // gen_meta.negative_prompt
-	SFXTags        string  `json:"sfx_tags"`         // gen_meta.sfx_tags
+	SFXTags        string  `json:"sfx_tags"` // gen_meta.sfx_tags
 }
 
 // buildStoryboardOptimizePrompt 构建分镜优化提示词
-func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.StoryboardReview) string {
+func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.StoryboardReview, videoMode string) string {
 	trunc := func(s string, max int) string {
 		r := []rune(s)
 		if len(r) > max {
@@ -3220,7 +3125,8 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 		if sh.CamDir.EmotionalTone != "" {
 			sb.WriteString(fmt.Sprintf(" 情绪:%s", sh.CamDir.EmotionalTone))
 		}
-		if desc := trunc(sh.Description, 60); desc != "" {
+		// description 现在是 AI 出图/出视频的唯一依据，截断长度放宽以便 AI 评估现有质量并决定是否改写
+		if desc := trunc(sh.Description, 250); desc != "" {
 			sb.WriteString(fmt.Sprintf("\n  描述: %s", desc))
 		}
 		if narr := trunc(sh.Narration, 60); narr != "" {
@@ -3231,13 +3137,6 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 		}
 		if tout := trunc(sh.CamDir.TransitionOut, 40); tout != "" {
 			sb.WriteString(fmt.Sprintf("\n  结尾: %s", tout))
-		}
-		// 包含提示词摘要，让 AI 能评估现有质量并决定是否改写
-		if imgP := trunc(sh.GenMeta.Prompt, 120); imgP != "" {
-			sb.WriteString(fmt.Sprintf("\n  image_prompt: %s", imgP))
-		}
-		if vidP := trunc(sh.GenMeta.MotionPrompt, 120); vidP != "" {
-			sb.WriteString(fmt.Sprintf("\n  video_prompt: %s", vidP))
 		}
 		sb.WriteString("\n")
 	}
@@ -3262,6 +3161,7 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 		"ShotsText":         sb.String(),
 		"GlobalSuggestions": review.GlobalSuggestions,
 		"ShotFeedback":      feedbackData,
+		"VideoMode":         videoMode,
 	}
 	result, err := renderPrompt("storyboard_optimize", ctx)
 	if err != nil {
@@ -3293,10 +3193,12 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		return 0, fmt.Errorf("该视频暂无分镜")
 	}
 
-	// 取 Video.NovelID 以便 GenerateWithProvider 能通过小说级 AI 模型配置选择 provider
+	// 取 Video.NovelID / Mode 以便 GenerateWithProvider 能通过小说级 AI 模型配置选择 provider，并区分优化规则
 	var novelID uint
+	var videoMode string
 	if video, err := s.videoRepo.GetByID(videoID); err == nil {
 		novelID = video.NovelID
+		videoMode = video.Mode
 	}
 
 	// 保存优化前快照（用于 rollback）
@@ -3315,7 +3217,7 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		}
 	}
 
-	prompt := buildStoryboardOptimizePrompt(shots, review)
+	prompt := buildStoryboardOptimizePrompt(shots, review, videoMode)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_optimize", prompt, provider)
 	if err != nil {
@@ -3393,18 +3295,6 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		}
 
 		// gen_meta JSON 列子字段（提示词，P0 Fix 2）
-		if upd.ImagePrompt != "" {
-			sh.GenMeta.Prompt = upd.ImagePrompt
-			updatedGenMeta = true
-		}
-		if upd.VideoPrompt != "" {
-			sh.GenMeta.MotionPrompt = upd.VideoPrompt
-			updatedGenMeta = true
-		}
-		if upd.NegativePrompt != "" {
-			sh.GenMeta.NegativePrompt = upd.NegativePrompt
-			updatedGenMeta = true
-		}
 		if upd.SFXTags != "" {
 			sh.GenMeta.SFXTags = upd.SFXTags
 			updatedGenMeta = true
@@ -3622,7 +3512,7 @@ func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredRev
 
 // generateStoryboardArc 在分段生成前调用 AI，从完整章节内容中提取情感弧线骨架。
 // 返回 JSON 字符串（storyboard_arc.j2 格式），失败时返回空字符串（不阻塞主流程）。
-func (s *VideoService) generateStoryboardArc(content string, characters []*model.Character, tenantID, novelID uint, provider string) string {
+func (s *VideoService) generateStoryboardArc(content string, characters []*model.Character, tenantID, novelID uint, provider, videoMode string) string {
 	if s.aiService == nil {
 		return ""
 	}
@@ -3656,6 +3546,7 @@ func (s *VideoService) generateStoryboardArc(content string, characters []*model
 	ctx := map[string]interface{}{
 		"Content":    arcContent,
 		"Characters": arcChars,
+		"VideoMode":  videoMode,
 	}
 	prompt, err := renderPrompt("storyboard_arc", ctx)
 	if err != nil {
