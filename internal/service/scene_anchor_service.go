@@ -608,13 +608,17 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		description = anchor.Description
 	}
 
-	// 查询小说的图片风格（用于模型选择）和标题（用于 OSS 路径）
+	// 查询小说的图片风格（用于模型选择）、画面比例和标题（用于 OSS 路径）
 	imageStyle := ""
+	sizeOverride := ""
 	if s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr != nil {
 			logger.Errorf("[SceneAnchorService] GenerateRefImage: fetch novel novelID=%d: %v (using defaults)", anchor.NovelID, nErr)
 		} else {
 			imageStyle = novel.AIConfig.ImageStyle
+			if novel.VideoConfig != nil && novel.VideoConfig.Config.VideoAspectRatio != "" {
+				sizeOverride = novel.VideoConfig.Config.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
+			}
 			if novel.Title != "" {
 				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 			}
@@ -637,7 +641,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 	prompt, sceneNegative := splitImagePrompt(rendered)
 
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, "")
+	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("generate ref image: %w", err)
