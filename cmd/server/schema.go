@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-18-v4"
+const schemaVersion = "2026-07-22-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -166,6 +166,33 @@ func autoMigrate(db *gorm.DB) error {
 			if err := db.Exec("ALTER TABLE `" + c.table + "` ADD COLUMN `" + c.column + "` INT NOT NULL DEFAULT 0").Error; err != nil {
 				return fmt.Errorf("autoMigrate: failed to add %s.%s: %w", c.table, c.column, err)
 			}
+		}
+	}
+
+	// ink_video.storyboard_mode：分镜生成模式（professional/faithful/concise），Go struct 早已有此
+	// 字段（model.Video.StoryboardMode），但一直没有配对应迁移，导致线上报 Error 1054
+	// Unknown column 'storyboard_mode'（本次补上，模式同 progress 列）。
+	var storyboardModeColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_video' AND COLUMN_NAME = 'storyboard_mode'`,
+	).Scan(&storyboardModeColCnt)
+	if storyboardModeColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_video ADD COLUMN storyboard_mode VARCHAR(20) NOT NULL DEFAULT 'professional'").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_video.storyboard_mode: %w", err)
+		}
+	}
+
+	// ink_storyboard_shot.original_text：分镜对应的章节原文片段（model.StoryboardShot.OriginalText，
+	// 供人工核对分镜与原著的对应关系），新增列，同样需要手动迁移。
+	var originalTextColCnt int64
+	db.Raw(
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_storyboard_shot' AND COLUMN_NAME = 'original_text'`,
+	).Scan(&originalTextColCnt)
+	if originalTextColCnt == 0 {
+		if err := db.Exec("ALTER TABLE ink_storyboard_shot ADD COLUMN original_text TEXT").Error; err != nil {
+			return fmt.Errorf("autoMigrate: failed to add ink_storyboard_shot.original_text: %w", err)
 		}
 	}
 
@@ -417,18 +444,18 @@ func ensureCriticalIndexes(db *gorm.DB) {
 		// 唯一约束：防止同一小说写入重复大纲版本号（2026-06-25-v9）
 		{"ink_novel_outline_version", "idx_outline_novel_ver", "(novel_id, version)", true},
 		// 唯一约束：防止重复实体/章节（2026-06-25-v10）
-		{"ink_worldview_entity",  "idx_we_name_type",         "(worldview_id, name, type)", true},
-		{"ink_reference_novel",   "idx_ref_novel_url_site",   "(source_url, source_site)", true},
+		{"ink_worldview_entity", "idx_we_name_type", "(worldview_id, name, type)", true},
+		{"ink_reference_novel", "idx_ref_novel_url_site", "(source_url, source_site)", true},
 		{"ink_reference_chapter", "idx_ref_chapter_novel_no", "(novel_id, chapter_no)", true},
 		// 唯一约束：角色/道具/快照（2026-06-25-v12）
-		{"ink_character",                "uniq_char_novel_name",        "(novel_id, name)", true},
-		{"ink_item",                     "uniq_item_novel_name",        "(novel_id, name)", true},
-		{"ink_character_state_snapshot", "uniq_snapshot_char_chapter",  "(character_id, chapter_id)", true},
+		{"ink_character", "uniq_char_novel_name", "(novel_id, name)", true},
+		{"ink_item", "uniq_item_novel_name", "(novel_id, name)", true},
+		{"ink_character_state_snapshot", "uniq_snapshot_char_chapter", "(character_id, chapter_id)", true},
 		// 大纲审查与质量控制优化（2026-06-25-v14）
-		{"ink_continuity_report",    "idx_continuity_novel_chapter", "(novel_id, chapter_id)", false},
-		{"ink_review_record",        "idx_review_entity",            "(entity_type, entity_id)", false},
-		{"ink_ignored_review_issue", "idx_ignored_entity",           "(entity_type, entity_id)", false},
-		{"ink_ignored_review_issue", "uniq_ignored_issue",           "(entity_type, entity_id, issue_hash)", true},
+		{"ink_continuity_report", "idx_continuity_novel_chapter", "(novel_id, chapter_id)", false},
+		{"ink_review_record", "idx_review_entity", "(entity_type, entity_id)", false},
+		{"ink_ignored_review_issue", "idx_ignored_entity", "(entity_type, entity_id)", false},
+		{"ink_ignored_review_issue", "uniq_ignored_issue", "(entity_type, entity_id, issue_hash)", true},
 	}
 	for _, idx := range indexes {
 		// 先检查表是否存在，避免在 AutoMigrate 之前报错
