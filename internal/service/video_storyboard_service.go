@@ -1149,7 +1149,7 @@ func (s *VideoService) generateStoryboardSegment(
 		if strings.TrimSpace(aiResult) == "" {
 			continue
 		}
-		parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult, imageStyle)
+		parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult)
 		if parseErr != nil {
 			logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, totalSegments, attempt, parseErr)
 			continue
@@ -1968,7 +1968,7 @@ func (s *VideoService) buildStoryboardPrompt(
 }
 
 // parseStoryboardResult 解析AI分镜响应。解析失败时返回 error（不生成空占位）。
-func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string, imageStyle string) ([]*model.StoryboardShot, error) {
+func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string) ([]*model.StoryboardShot, error) {
 	// 提取 JSON 数组
 	cleaned := extractJSON(result)
 
@@ -2081,13 +2081,10 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			sceneJSON = string(b)
 		}
 
-		// description 是 AI 出图/出视频的唯一依据（见 storyboard_generate.j2）。
-		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词。
-		// 使用风格匹配的质量词（不硬编码 photorealistic，避免与动漫/水彩/国画等风格冲突）。
+		// description 只保留纯画面内容（构图/光线/角色动作等），不含风格标签或画质提升词——
+		// 这两者由 video_image_service.go 在实际生成图片/视频时按项目风格统一注入，
+		// 确保 UI 展示的分镜描述干净可读，同时不影响出图/出视频质量。
 		description := r.Description
-		if !strings.Contains(strings.ToLower(description), "masterpiece") {
-			description += ", " + resolveStyleQualityTokens(imageStyle)
-		}
 
 		cameraType := validCameraType(r.CameraType)
 
