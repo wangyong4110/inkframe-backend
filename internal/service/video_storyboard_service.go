@@ -1769,8 +1769,8 @@ func (s *VideoService) buildStoryboardPrompt(
 	worldviewDesc string,
 	segStartPct, segEndPct int,
 	charVisualPrompts map[uint]string,
-	beatSheet []map[string]interface{},  // P1a: 情节节拍表（本段子集）
-	worldState map[string]interface{},   // P1b: 跨段世界状态快照
+	beatSheet []map[string]interface{}, // P1a: 情节节拍表（本段子集）
+	worldState map[string]interface{}, // P1b: 跨段世界状态快照
 ) string {
 	segLabel := ""
 	if totalSegs > 1 {
@@ -1934,7 +1934,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"SegLabel":            segLabel,
 		"ExpectedShots":       expectedShots,
 		"ExpectedShotsMinus2": expectedShotsMinus2,
-		"VideoMode":           video.Mode, // "slideshow"(图片解说) | "video"(视频动画，含未设置时的默认)
+		"VideoMode":           video.Mode,           // "slideshow"(图片解说) | "video"(视频动画，含未设置时的默认)
 		"StoryboardMode":      video.StoryboardMode, // "professional"(专业分镜) | "faithful"(忠于原文) | "concise"(简洁模式)，含未设置时的默认
 		"PrevShots":           prevShotsData,
 		"Characters":          matchedChars,
@@ -1946,18 +1946,18 @@ func (s *VideoService) buildStoryboardPrompt(
 		"GenreVisualHints":    genreVisualHints(genre),
 		// ImageStyleHint: 画面风格的英文提示词，告知 LLM 生成 image_prompt 时必须使用的风格基调。
 		// 不传原始 imageStyle ID（如 "anime"），而是传对 LLM 最有指导意义的英文描述词。
-		"ImageStyleHint":      resolveStyleIllustrationDesc(imageStyle),
-		"ImageStyleID":        imageStyle,
-		"StyleQualityTokens":  resolveStyleQualityTokens(imageStyle),
-		"ChapterNo":           chapterNo,
-		"IsFirstChapter":      chapterNo == 1,
-		"IsFirstSegment":      segNo == 1,
-		"NovelTitle":          novelTitle,
-		"WorldviewDesc":       worldviewDesc,
-		"SegStartPct":         segStartPct,
-		"SegEndPct":           segEndPct,
-		"BeatSheet":           beatSheet,  // P1a
-		"WorldState":          worldState, // P1b
+		"ImageStyleHint":     resolveStyleIllustrationDesc(imageStyle),
+		"ImageStyleID":       imageStyle,
+		"StyleQualityTokens": resolveStyleQualityTokens(imageStyle),
+		"ChapterNo":          chapterNo,
+		"IsFirstChapter":     chapterNo == 1,
+		"IsFirstSegment":     segNo == 1,
+		"NovelTitle":         novelTitle,
+		"WorldviewDesc":      worldviewDesc,
+		"SegStartPct":        segStartPct,
+		"SegEndPct":          segEndPct,
+		"BeatSheet":          beatSheet,  // P1a
+		"WorldState":         worldState, // P1b
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
@@ -1967,24 +1967,24 @@ func (s *VideoService) buildStoryboardPrompt(
 	return result
 }
 
-
 // parseStoryboardResult 解析AI分镜响应。解析失败时返回 error（不生成空占位）。
 func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string, imageStyle string) ([]*model.StoryboardShot, error) {
 	// 提取 JSON 数组
 	cleaned := extractJSON(result)
 
 	type rawShotType struct {
-		ShotNo      int     `json:"shot_no"`
-		Description string  `json:"description"`
-		Narration   string  `json:"narration"`
-		Dialogue       string  `json:"dialogue"`
-		CameraType     string  `json:"camera_type"`
-		Duration       float64 `json:"duration"`
-		Location       string  `json:"location"`
-		TimeOfDay      string  `json:"time_of_day"`
-		Weather        string  `json:"weather"`
-		Lighting       string  `json:"lighting"`
-		Characters     []struct {
+		ShotNo       int     `json:"shot_no"`
+		Description  string  `json:"description"`
+		Narration    string  `json:"narration"`
+		OriginalText string  `json:"original_text"`
+		Dialogue     string  `json:"dialogue"`
+		CameraType   string  `json:"camera_type"`
+		Duration     float64 `json:"duration"`
+		Location     string  `json:"location"`
+		TimeOfDay    string  `json:"time_of_day"`
+		Weather      string  `json:"weather"`
+		Lighting     string  `json:"lighting"`
+		Characters   []struct {
 			Name       string `json:"name"`
 			Position   string `json:"position"`
 			Pose       string `json:"pose"`
@@ -1996,7 +1996,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Holder   string `json:"holder"`
 			Location string `json:"location"`
 		} `json:"items"`
-		Subtitle      string `json:"subtitle"`       // 画面叠字：时间词或关键字幕（非空时叠加在视频画面上）
+		Subtitle      string `json:"subtitle"` // 画面叠字：时间词或关键字幕（非空时叠加在视频画面上）
 		Transition    string `json:"transition"`
 		TransitionOut string `json:"transition_out"` // 本镜头如何结束（画面状态/角色动作/镜头动势）
 		TransitionIn  string `json:"transition_in"`  // 本镜头如何开始（衔接上一镜头 TransitionOut）
@@ -2114,13 +2114,14 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		}
 
 		shot := &model.StoryboardShot{
-			UUID:        uuid.New().String(),
-			VideoID:     videoID,
-			ChapterID:   chapterID,
-			ShotNo:      shotNo,
-			Description: description,
-			Narration:   r.Narration,
-			Duration:    duration,
+			UUID:         uuid.New().String(),
+			VideoID:      videoID,
+			ChapterID:    chapterID,
+			ShotNo:       shotNo,
+			Description:  description,
+			Narration:    r.Narration,
+			OriginalText: r.OriginalText,
+			Duration:     duration,
 			CamDir: model.ShotCamDir{
 				CameraType:    cameraType,
 				Transition:    validTransition(r.Transition),
@@ -2444,7 +2445,7 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 	}
 	// cam_dir JSON 列中的字段
 	camDirKeys := map[string]bool{
-		"camera_type": true,
+		"camera_type":    true,
 		"emotional_tone": true, "transition": true, "transition_out": true, "transition_in": true,
 	}
 	// 直接列
@@ -2603,11 +2604,11 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 	}
 
 	rendered, tplErr := renderPrompt("regenerate_shot_prompt", map[string]interface{}{
-		"NovelTitle":    novelTitle,
-		"Genre":         genre,
-		"CharacterList": characterList,
-		"ItemList":      itemList,
-		"SceneText":     sceneText,
+		"NovelTitle":     novelTitle,
+		"Genre":          genre,
+		"CharacterList":  characterList,
+		"ItemList":       itemList,
+		"SceneText":      sceneText,
 		"OldDescription": shot.Description,
 	})
 	if tplErr != nil {
@@ -2916,7 +2917,7 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 	}
 
 	type indexedIns struct {
-		ins   model.ShotInsertSuggestion
+		ins     model.ShotInsertSuggestion
 		origIdx int
 	}
 	indexed := make([]indexedIns, 0, len(inserts))
@@ -3055,18 +3056,18 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 
 	shotCount30Pct := int(math.Round(float64(len(shots)) * 0.3))
 	ctx := map[string]interface{}{
-		"ShotCount":          len(shots),
-		"ShotCount30Pct":     shotCount30Pct,
-		"ShotsText":          sb.String(),
-		"HasChapterContent":  truncatedChapter != "",
-		"ChapterContent":     truncatedChapter,
-		"HasPreviousScore":   false, // P2-3: 不注入历史评分，避免 AI 锚定偏差影响本次独立评估
-		"PreviousScoreStr":   "",
-		"HasPreviousFixed":   len(prevFixedLines) > 0,
-		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
-		"HasIgnored":         len(ignoredLines) > 0,
-		"IgnoredText":        strings.Join(ignoredLines, "\n"),
-		"VideoMode":          videoMode,
+		"ShotCount":         len(shots),
+		"ShotCount30Pct":    shotCount30Pct,
+		"ShotsText":         sb.String(),
+		"HasChapterContent": truncatedChapter != "",
+		"ChapterContent":    truncatedChapter,
+		"HasPreviousScore":  false, // P2-3: 不注入历史评分，避免 AI 锚定偏差影响本次独立评估
+		"PreviousScoreStr":  "",
+		"HasPreviousFixed":  len(prevFixedLines) > 0,
+		"PreviousFixedText": strings.Join(prevFixedLines, "\n"),
+		"HasIgnored":        len(ignoredLines) > 0,
+		"IgnoredText":       strings.Join(ignoredLines, "\n"),
+		"VideoMode":         videoMode,
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {
@@ -3094,17 +3095,17 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 
 // shotOptimizeUpdate 表示 AI 返回的单个镜头优化更新
 type shotOptimizeUpdate struct {
-	ShotNo         int     `json:"shot_no"`
-	Description    string  `json:"description"`
-	Narration      *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
-	Dialogue       *string `json:"dialogue"`  // 同上
-	CameraType     string  `json:"camera_type"`
-	Duration       float64 `json:"duration"`
-	EmotionalTone  string  `json:"emotional_tone"`
-	Transition     string  `json:"transition"`
-	TransitionOut  string  `json:"transition_out"`
-	TransitionIn   string  `json:"transition_in"`
-	SFXTags        string  `json:"sfx_tags"` // gen_meta.sfx_tags
+	ShotNo        int     `json:"shot_no"`
+	Description   string  `json:"description"`
+	Narration     *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
+	Dialogue      *string `json:"dialogue"`  // 同上
+	CameraType    string  `json:"camera_type"`
+	Duration      float64 `json:"duration"`
+	EmotionalTone string  `json:"emotional_tone"`
+	Transition    string  `json:"transition"`
+	TransitionOut string  `json:"transition_out"`
+	TransitionIn  string  `json:"transition_in"`
+	SFXTags       string  `json:"sfx_tags"` // gen_meta.sfx_tags
 }
 
 // buildStoryboardOptimizePrompt 构建分镜优化提示词

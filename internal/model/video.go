@@ -9,26 +9,26 @@ import (
 
 // NovelVideoConfigData 视频配置数据（序列化为 JSON 存储）
 type NovelVideoConfigData struct {
-	VideoType             string  `json:"video_type"`
-	VideoResolution       string  `json:"video_resolution"`
-	VideoFPS              int     `json:"video_fps"`
-	VideoAspectRatio      string  `json:"video_aspect_ratio"`
-	NarrationVoice        string  `json:"narration_voice"`
-	SubtitleEnabled       bool    `json:"subtitle_enabled"`
-	SubtitlePosition      string  `json:"subtitle_position"`
-	SubtitleFontSize      int     `json:"subtitle_font_size"`
-	SubtitleColor         string  `json:"subtitle_color"`
-	SubtitleBgStyle       string  `json:"subtitle_bg_style"`
-	ContrastLevel         float64 `json:"contrast_level"`
-	Saturation            float64 `json:"saturation"`
-	FilmGrain             bool    `json:"film_grain"`
-	Vignette              bool    `json:"vignette"`
-	ChromaticAberration   bool    `json:"chromatic_aberration"`
-	KlingProForAction     bool    `json:"kling_pro_for_action"`
-	KlingModel            string  `json:"kling_model"`
-	ThreeDEnabled         bool    `json:"three_d_enabled"`
-	SubtitleStyle         string  `json:"subtitle_style"`
-	SubtitleFont          string  `json:"subtitle_font"`
+	VideoType           string  `json:"video_type"`
+	VideoResolution     string  `json:"video_resolution"`
+	VideoFPS            int     `json:"video_fps"`
+	VideoAspectRatio    string  `json:"video_aspect_ratio"`
+	NarrationVoice      string  `json:"narration_voice"`
+	SubtitleEnabled     bool    `json:"subtitle_enabled"`
+	SubtitlePosition    string  `json:"subtitle_position"`
+	SubtitleFontSize    int     `json:"subtitle_font_size"`
+	SubtitleColor       string  `json:"subtitle_color"`
+	SubtitleBgStyle     string  `json:"subtitle_bg_style"`
+	ContrastLevel       float64 `json:"contrast_level"`
+	Saturation          float64 `json:"saturation"`
+	FilmGrain           bool    `json:"film_grain"`
+	Vignette            bool    `json:"vignette"`
+	ChromaticAberration bool    `json:"chromatic_aberration"`
+	KlingProForAction   bool    `json:"kling_pro_for_action"`
+	KlingModel          string  `json:"kling_model"`
+	ThreeDEnabled       bool    `json:"three_d_enabled"`
+	SubtitleStyle       string  `json:"subtitle_style"`
+	SubtitleFont        string  `json:"subtitle_font"`
 }
 
 // NovelVideoConfig 小说视频/字幕配置（1:1 with Novel，独立表）
@@ -45,18 +45,18 @@ func (NovelVideoConfig) TableName() string { return "ink_novel_video_config" }
 
 // VideoRenderConfig 视频渲染参数（合并存储为 JSON）
 type VideoRenderConfig struct {
-	Type           string `json:"type"`
-	Resolution     string `json:"resolution"`
-	FrameRate      int    `json:"frame_rate"`
-	AspectRatio    string `json:"aspect_ratio"`
-	ArtStyle       string `json:"art_style"`
-	Pacing         string `json:"pacing"`
-	TargetDuration int    `json:"target_duration"`
-	QualityTier    string `json:"quality_tier"`
-	VisualMode     string `json:"visual_mode"`
-	ThreeDStyle    string `json:"three_d_style"`
-	GenerateAudio   *bool `json:"generate_audio"`    // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
-	Priority        int   `json:"priority"`          // Seedance 2.0 请求优先级 0-9（0=默认FIFO，>0插队）
+	Type             string `json:"type"`
+	Resolution       string `json:"resolution"`
+	FrameRate        int    `json:"frame_rate"`
+	AspectRatio      string `json:"aspect_ratio"`
+	ArtStyle         string `json:"art_style"`
+	Pacing           string `json:"pacing"`
+	TargetDuration   int    `json:"target_duration"`
+	QualityTier      string `json:"quality_tier"`
+	VisualMode       string `json:"visual_mode"`
+	ThreeDStyle      string `json:"three_d_style"`
+	GenerateAudio    *bool  `json:"generate_audio"`     // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
+	Priority         int    `json:"priority"`           // Seedance 2.0 请求优先级 0-9（0=默认FIFO，>0插队）
 	WebSearchEnabled bool   `json:"web_search_enabled"` // Seedance 2.0：允许模型联网搜索（提升时效性）
 	VoiceMode        string `json:"voice_mode"`         // 配音模式，生成分镜时写入，供审查使用
 }
@@ -177,8 +177,8 @@ type ShotTaskMeta struct {
 	ShotProviderName    string  `json:"shot_provider_name"`
 	RetryCount          int     `json:"retry_count"`
 	ActualVideoDuration float64 `json:"actual_video_duration"`
-	LastFrameURL        string  `json:"last_frame_url"`      // Seedance return_last_frame 返回的末帧 URL（跳过本地 ffprobe）
-	HasEmbeddedAudio    bool    `json:"has_embedded_audio"`  // Seedance generate_audio=true 时视频已内嵌环境音，合成时无 TTS 则保留原始音轨
+	LastFrameURL        string  `json:"last_frame_url"`     // Seedance return_last_frame 返回的末帧 URL（跳过本地 ffprobe）
+	HasEmbeddedAudio    bool    `json:"has_embedded_audio"` // Seedance generate_audio=true 时视频已内嵌环境音，合成时无 TTS 则保留原始音轨
 	TimelineStart       float64 `json:"timeline_start"`
 	VoiceDelay          float64 `json:"voice_delay"`
 }
@@ -193,8 +193,9 @@ type StoryboardShot struct {
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
-	Description string `json:"description" gorm:"type:text"` // 中文画面描述，AI出图/出视频与人工叙事参考共用的唯一生成提示词
-	Narration   string `json:"narration" gorm:"type:text"`   // 中文旁白文案，供TTS朗读和字幕显示使用
+	Description  string `json:"description" gorm:"type:text"`   // 中文画面描述，AI出图/出视频与人工叙事参考共用的唯一生成提示词
+	Narration    string `json:"narration" gorm:"type:text"`     // 中文旁白文案，供TTS朗读和字幕显示使用
+	OriginalText string `json:"original_text" gorm:"type:text"` // 该分镜对应的章节原文片段，供人工核对/溯源
 
 	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
 
@@ -288,13 +289,13 @@ type ShotVoiceSegment struct {
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_seg_shot_seq,unique,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_seg_shot_seq,unique,priority:2"`
 
-	Text     string `json:"text" gorm:"type:text"`      // TTS 朗读文本（旁白或台词内容）
-	Speaker  string `json:"speaker" gorm:"size:100"`    // 空串=旁白，"角色名"=对白
-	Emotion  string `json:"emotion" gorm:"size:50"`     // 情绪标签（平静/温馨/激动等）
-	Language string `json:"language" gorm:"size:20"`    // 方言/语言（空串=普通话；zh-yue=粤语；zh-scu=四川话；en=英语等）
-	VoiceID  string `json:"voice_id" gorm:"size:100"`   // TTS 声音 ID（覆盖默认值）
+	Text     string `json:"text" gorm:"type:text"`    // TTS 朗读文本（旁白或台词内容）
+	Speaker  string `json:"speaker" gorm:"size:100"`  // 空串=旁白，"角色名"=对白
+	Emotion  string `json:"emotion" gorm:"size:50"`   // 情绪标签（平静/温馨/激动等）
+	Language string `json:"language" gorm:"size:20"`  // 方言/语言（空串=普通话；zh-yue=粤语；zh-scu=四川话；en=英语等）
+	VoiceID  string `json:"voice_id" gorm:"size:100"` // TTS 声音 ID（覆盖默认值）
 
-	AudioPath    string  `json:"audio_path" gorm:"size:1000"`                   // 生成的音频文件路径/URL
+	AudioPath    string  `json:"audio_path" gorm:"size:1000"`                      // 生成的音频文件路径/URL
 	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音频时长（秒）
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -319,7 +320,7 @@ type ShotSFXItem struct {
 
 	Tag          string  `json:"tag" gorm:"size:200"`                              // 音效搜索词
 	URL          string  `json:"url" gorm:"size:1000"`                             // 音效文件 URL
-	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"`     // 混音音量
+	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"`      // 混音音量
 	Source       string  `json:"source" gorm:"size:20"`                            // local/freesound/elevenlabs
 	Disabled     bool    `json:"disabled" gorm:"default:false"`                    // 禁用后不参与合成/预览
 	StartOffset  float64 `json:"start_offset" gorm:"type:decimal(8,3);default:0"`  // 在分镜中的开始时间
@@ -382,15 +383,15 @@ func (VideoBGMSegment) TableName() string { return "ink_video_bgm_segment" }
 
 // ShotReviewFeedback 单个镜头的审查反馈
 type ShotReviewFeedback struct {
-	ShotNo               int      `json:"shot_no"`
-	Issues               []string `json:"issues"`
-	Suggestion           string   `json:"suggestion"`
-	Severity             string   `json:"severity"` // info / warning / error
-	SuggestedNarration    string `json:"suggested_narration,omitempty"`
-	SuggestedDialogue     string `json:"suggested_dialogue,omitempty"`     // 建议对白（替换 dialogue 字段，同时清空 narration）
-	SuggestedDescription  string `json:"suggested_description,omitempty"`
-	SuggestedTransitionOut string `json:"suggested_transition_out,omitempty"`
-	SuggestedTransitionIn  string `json:"suggested_transition_in,omitempty"`
+	ShotNo                 int      `json:"shot_no"`
+	Issues                 []string `json:"issues"`
+	Suggestion             string   `json:"suggestion"`
+	Severity               string   `json:"severity"` // info / warning / error
+	SuggestedNarration     string   `json:"suggested_narration,omitempty"`
+	SuggestedDialogue      string   `json:"suggested_dialogue,omitempty"` // 建议对白（替换 dialogue 字段，同时清空 narration）
+	SuggestedDescription   string   `json:"suggested_description,omitempty"`
+	SuggestedTransitionOut string   `json:"suggested_transition_out,omitempty"`
+	SuggestedTransitionIn  string   `json:"suggested_transition_in,omitempty"`
 }
 
 // ─── 统一审查记录（章节/分镜共用）────────────────────────────────────────────────
@@ -466,30 +467,30 @@ type SensitiveIssue struct {
 
 // StoryboardReview AI 分镜脚本审查报告
 type StoryboardReview struct {
-	OverallScore      float64                `json:"overall_score"`       // 综合得分 0-100
-	NarrativeScore    float64                `json:"narrative_score"`     // 叙事连贯性
-	VisualScore       float64                `json:"visual_score"`        // 视觉多样性
-	PacingScore       float64                `json:"pacing_score"`        // 节奏控制
-	VoiceoverScore    float64                `json:"voiceover_score"`     // 旁白质量
-	DialogueScore     float64                `json:"dialogue_score"`      // 台词质量（潜台词/戏剧功能）
-	ArcScore          float64                `json:"arc_score"`           // 情感节奏曲线完整性
-	Summary           string                 `json:"summary"`             // 综合评价
-	Strengths         []string               `json:"strengths"`           // 亮点
-	Weaknesses        []string               `json:"weaknesses"`          // 主要问题
-	GlobalSuggestions []string               `json:"global_suggestions"`  // 整体改进建议
-	ShotFeedback      []ShotReviewFeedback   `json:"shot_feedback"`       // 逐镜反馈（仅有问题的镜头）
+	OverallScore      float64                `json:"overall_score"`               // 综合得分 0-100
+	NarrativeScore    float64                `json:"narrative_score"`             // 叙事连贯性
+	VisualScore       float64                `json:"visual_score"`                // 视觉多样性
+	PacingScore       float64                `json:"pacing_score"`                // 节奏控制
+	VoiceoverScore    float64                `json:"voiceover_score"`             // 旁白质量
+	DialogueScore     float64                `json:"dialogue_score"`              // 台词质量（潜台词/戏剧功能）
+	ArcScore          float64                `json:"arc_score"`                   // 情感节奏曲线完整性
+	Summary           string                 `json:"summary"`                     // 综合评价
+	Strengths         []string               `json:"strengths"`                   // 亮点
+	Weaknesses        []string               `json:"weaknesses"`                  // 主要问题
+	GlobalSuggestions []string               `json:"global_suggestions"`          // 整体改进建议
+	ShotFeedback      []ShotReviewFeedback   `json:"shot_feedback"`               // 逐镜反馈（仅有问题的镜头）
 	SuggestedInserts  []ShotInsertSuggestion `json:"suggested_inserts,omitempty"` // 建议插入的新镜头
 	SuggestedDeletes  []ShotDeleteSuggestion `json:"suggested_deletes,omitempty"` // 建议删除的镜头
-	HasSensitive      bool                   `json:"has_sensitive"`                // 是否含敏感内容
-	SensitiveIssues   []SensitiveIssue       `json:"sensitive_issues,omitempty"`   // 敏感内容列表（不计入评分）
+	HasSensitive      bool                   `json:"has_sensitive"`               // 是否含敏感内容
+	SensitiveIssues   []SensitiveIssue       `json:"sensitive_issues,omitempty"`  // 敏感内容列表（不计入评分）
 }
 
 // ─── 章节 AI 审查 ──────────────────────────────────────────────────────────────
 
 // ParagraphFeedback 段落级审查反馈（嵌入 JSON，不单独建表）
 type ParagraphFeedback struct {
-	Index             int      `json:"index"`              // 段落序号(0起)
-	OrigText          string   `json:"orig_text"`          // 原文摘要(前80字)
+	Index             int      `json:"index"`     // 段落序号(0起)
+	OrigText          string   `json:"orig_text"` // 原文摘要(前80字)
 	Issues            []string `json:"issues"`
 	Suggestion        string   `json:"suggestion"`
 	Action            string   `json:"action"`             // "rewrite" | "delete" | "restructure"
@@ -520,8 +521,8 @@ type SceneAnalysisItem struct {
 // HookAnalysis 章末钩子专项评估（嵌入 JSON）
 type HookAnalysis struct {
 	Type             string `json:"type"`               // cliffhanger|emotional|action|reversal|none
-	Strength         int    `json:"strength"`            // 0-100
-	HookText         string `json:"hook_text"`           // 章末关键句原文引用
+	Strength         int    `json:"strength"`           // 0-100
+	HookText         string `json:"hook_text"`          // 章末关键句原文引用
 	NextChapterSetup string `json:"next_chapter_setup"` // 读者最想知道的问题
 }
 
@@ -532,10 +533,10 @@ type ChapterReview struct {
 	CharacterScore     float64             `json:"character_score"`
 	WritingScore       float64             `json:"writing_score"`
 	PacingScore        float64             `json:"pacing_score"`
-	DramaticScore      float64             `json:"dramatic_score"`       // 戏剧张力
-	NarrativeNecessity float64             `json:"narrative_necessity"`  // 叙事必要性
-	EmotionalResonance float64             `json:"emotional_resonance"`  // 情感共鸣
-	VisualPotential    float64             `json:"visual_potential"`     // 画面感/可视化潜力
+	DramaticScore      float64             `json:"dramatic_score"`      // 戏剧张力
+	NarrativeNecessity float64             `json:"narrative_necessity"` // 叙事必要性
+	EmotionalResonance float64             `json:"emotional_resonance"` // 情感共鸣
+	VisualPotential    float64             `json:"visual_potential"`    // 画面感/可视化潜力
 	Summary            string              `json:"summary"`
 	Strengths          []string            `json:"strengths"`
 	Weaknesses         []WeaknessItem      `json:"weaknesses"`
@@ -545,7 +546,6 @@ type ChapterReview struct {
 	ParagraphFeedback  []ParagraphFeedback `json:"paragraph_feedback"`
 	RecordID           uint                `json:"record_id,omitempty"`
 }
-
 
 // ─── Video / Storyboard DTOs ───────────────────────────────────────────────────
 
@@ -557,27 +557,27 @@ type CreateVideoRequest struct {
 	ArtStyle    string `json:"art_style"`
 	QualityTier string `json:"quality_tier"` // draft/preview/final
 	ChapterID   *uint  `json:"chapter_id"`
-	Mode        string `json:"mode"`        // video/slideshow
-	VisualMode  string `json:"visual_mode"` // standard/hd/3d/hd_3d
+	Mode        string `json:"mode"`          // video/slideshow
+	VisualMode  string `json:"visual_mode"`   // standard/hd/3d/hd_3d
 	ThreeDStyle string `json:"three_d_style"` // cg/pixar/anime3d/realistic3d
 }
 
 type UpdateVideoRequest struct {
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	Tags          string `json:"tags"`
-	Resolution    string `json:"resolution"`
-	FrameRate     int    `json:"frame_rate"`
-	AspectRatio   string `json:"aspect_ratio"`
-	ArtStyle      string `json:"art_style"`
-	Mode          string `json:"mode"`           // video/slideshow
-	StoryboardMode string `json:"storyboard_mode"` // professional/faithful/concise
-	VisualMode    string `json:"visual_mode"`    // standard/hd/3d/hd_3d
-	ThreeDStyle   string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
-	QualityTier   string `json:"quality_tier"`   // draft/preview/final/production
-	GenerateAudio   *bool `json:"generate_audio"`    // Seedance 2.0/1.5：nil=不变，true=有声，false=静音
-	Priority        *int  `json:"priority"`          // Seedance 2.0 请求优先级 0-9；nil=不修改
-	WebSearchEnabled *bool `json:"web_search_enabled"` // Seedance 2.0 联网搜索；nil=不修改
+	Title            string `json:"title"`
+	Description      string `json:"description"`
+	Tags             string `json:"tags"`
+	Resolution       string `json:"resolution"`
+	FrameRate        int    `json:"frame_rate"`
+	AspectRatio      string `json:"aspect_ratio"`
+	ArtStyle         string `json:"art_style"`
+	Mode             string `json:"mode"`               // video/slideshow
+	StoryboardMode   string `json:"storyboard_mode"`    // professional/faithful/concise
+	VisualMode       string `json:"visual_mode"`        // standard/hd/3d/hd_3d
+	ThreeDStyle      string `json:"three_d_style"`      // cg/pixar/anime3d/realistic3d
+	QualityTier      string `json:"quality_tier"`       // draft/preview/final/production
+	GenerateAudio    *bool  `json:"generate_audio"`     // Seedance 2.0/1.5：nil=不变，true=有声，false=静音
+	Priority         *int   `json:"priority"`           // Seedance 2.0 请求优先级 0-9；nil=不修改
+	WebSearchEnabled *bool  `json:"web_search_enabled"` // Seedance 2.0 联网搜索；nil=不修改
 }
 
 type EnhancementConfig struct {
