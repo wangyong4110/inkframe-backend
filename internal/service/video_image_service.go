@@ -120,6 +120,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			continue
 		}
 		shot.Status = "generating"
+		s.refreshShotUserEditableFields(shot)
 		if err := s.storyboardRepo.Update(shot); err != nil {
 			logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", shot.ShotNo, err)
 		}
@@ -1136,6 +1137,7 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 	// 快捷路径：Seedance return_last_frame 已返回末帧 URL，无需下载视频
 	if shot.TaskMeta.LastFrameURL != "" {
 		nextShot.GenMeta.ReferenceImageURL = shot.TaskMeta.LastFrameURL
+		s.refreshShotUserEditableFields(nextShot)
 		if dbErr := s.storyboardRepo.Update(nextShot); dbErr != nil {
 			logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d Update failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
 			return
@@ -1188,6 +1190,7 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 
 	// 5. 写入下一分镜的 reference_image_url（GenMeta JSON 字段，需整体 Update）
 	nextShot.GenMeta.ReferenceImageURL = frameURL
+	s.refreshShotUserEditableFields(nextShot)
 	if dbErr := s.storyboardRepo.Update(nextShot); dbErr != nil {
 		logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d Update failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
 		return
@@ -1366,6 +1369,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	shot.TaskMeta.ShotTaskID = task.TaskID
 	shot.TaskMeta.ShotProviderName = providerName
 	shot.Status = "processing"
+	s.refreshShotUserEditableFields(shot)
 	return s.storyboardRepo.Update(shot)
 }
 
@@ -1422,6 +1426,7 @@ func (s *VideoService) resolveShotReferenceImage(shot *model.StoryboardShot) (st
 		return "", refLabel, fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
 	}
 	shot.ImageURL = frameURL
+	s.refreshShotUserEditableFields(shot)
 	if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
 		logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 	}
@@ -2100,6 +2105,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	}
 	shot.GenMeta.GenerationMode = "static"
 	shot.Status = "generating"
+	s.refreshShotUserEditableFields(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
 	}
@@ -2112,6 +2118,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		}
 		shot.Status = "failed"
 		shot.TaskMeta.ErrorMessage = errMsg
+		s.refreshShotUserEditableFields(shot)
 		if err := s.storyboardRepo.Update(shot); err != nil {
 			logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
@@ -2126,6 +2133,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	}
 	s.snapshotShotAsset(shot, "image", shot.ImageURL, tenantID)
 	shot.ImageURL = imageURL
+	s.refreshShotUserEditableFields(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
@@ -2244,6 +2252,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 
 	shot.GenMeta.GenerationMode = "static"
 	shot.Status = "generating"
+	s.refreshShotUserEditableFields(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to generating: %v", shot.ShotNo, err)
 	}
@@ -2258,6 +2267,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		logger.Errorf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
 		shot.TaskMeta.ErrorMessage = errMsg
+		s.refreshShotUserEditableFields(shot)
 		if err := s.storyboardRepo.Update(shot); err != nil {
 			logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
@@ -2270,6 +2280,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	shot.ImageURL = imageURL
 	logger.Printf("GenerateSlideshowShotVideo: shot %d storing image_url=%q (len=%d)", shot.ShotNo, imageURL, len(imageURL))
 	// 保存图片 URL（后续步骤失败时图片仍可用）
+	s.refreshShotUserEditableFields(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
@@ -2281,6 +2292,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		logger.Errorf("GenerateSlideshowShotVideo: shot %d resolve image failed: %v — skipping Ken Burns", shot.ShotNo, dlErr)
 		shot.Status = "completed"
 		shot.TaskMeta.Progress = 100
+		s.refreshShotUserEditableFields(shot)
 		return s.storyboardRepo.Update(shot)
 	}
 	defer os.Remove(localImage)
@@ -2315,6 +2327,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 
 	shot.Status = "completed"
 	shot.TaskMeta.Progress = 100
+	s.refreshShotUserEditableFields(shot)
 	return s.storyboardRepo.Update(shot)
 }
 
@@ -2531,6 +2544,7 @@ func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qua
 
 	for idx, shot := range ordered {
 		shot.Status = "generating"
+		s.refreshShotUserEditableFields(shot)
 		if e := s.storyboardRepo.Update(shot); e != nil {
 			logger.Errorf("SequentialGenerateShots: shot %d status update: %v", shot.ShotNo, e)
 		}

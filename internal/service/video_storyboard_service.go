@@ -2491,6 +2491,35 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 // 允许的字段：description, narration, dialogue, subtitle, camera_type,
 // duration, emotional_tone, transition, status, generation_mode.
 //
+// refreshShotUserEditableFields 在生成流水线（图片/视频/Ken Burns 等）覆盖式整行保存
+// （storyboardRepo.Update，即 db.Save）之前调用，把该分镜当前 DB 值中"用户在 produce-v2.vue
+// 里可编辑"的字段重新拉取覆盖到内存副本上。
+//
+// 背景：生成任务在开始时加载一次 shot 到内存，期间可能持续数秒到数分钟，只应改动自己拥有的
+// 字段（status/image_url/video_url/task_meta/generation_mode 等），但沿用整行 Save 落库；
+// 如果用户在这期间通过 UpdateShotPartial（旁白/台词/描述/角色绑定等，走安全的按字段 map 更新）
+// 编辑了该分镜，任务收尾时的 Save 会用自己那份过期的内存副本把用户的编辑静默覆盖丢失。
+// 这里只刷新用户可编辑字段、不动生成任务自己正在维护的字段，读取失败时静默忽略（尽力而为的
+// 安全网，不应阻塞或中断生成流程本身）。
+func (s *VideoService) refreshShotUserEditableFields(shot *model.StoryboardShot) {
+	fresh, err := s.storyboardRepo.GetByID(shot.ID)
+	if err != nil || fresh == nil {
+		return
+	}
+	shot.Description = fresh.Description
+	shot.Narration = fresh.Narration
+	shot.CharacterIDs = fresh.CharacterIDs
+	shot.ItemIDs = fresh.ItemIDs
+	shot.SceneAnchorID = fresh.SceneAnchorID
+	shot.GenMeta.Dialogue = fresh.GenMeta.Dialogue
+	shot.GenMeta.Subtitle = fresh.GenMeta.Subtitle
+	shot.CamDir.EmotionalTone = fresh.CamDir.EmotionalTone
+	shot.CamDir.CameraType = fresh.CamDir.CameraType
+	shot.CamDir.Transition = fresh.CamDir.Transition
+	shot.CamDir.TransitionOut = fresh.CamDir.TransitionOut
+	shot.CamDir.TransitionIn = fresh.CamDir.TransitionIn
+}
+
 // 注意：dialogue/subtitle/generation_mode 存储在 gen_meta JSON 列；
 // camera_type/emotional_tone/transition* 存储在 cam_dir JSON 列。
 // GORM map Updates 不走 serializer，必须手动将这些字段合并到对应 JSON 列后再写入。
@@ -2689,6 +2718,9 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 		return nil, fmt.Errorf("AI 返回的画面描述为空")
 	}
 
+	// 先拉取最新用户可编辑字段（旁白/台词/角色绑定等），再把本函数要改的 Description 盖在上面——
+	// 顺序不能反，否则 refresh 会把这里刚生成的新 Description 又冲回旧值。
+	s.refreshShotUserEditableFields(shot)
 	shot.Description = parsed.Description
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		return nil, fmt.Errorf("save regenerated prompt: %w", err)
