@@ -343,11 +343,6 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		imageStyle = video.RenderConfig.ArtStyle
 	}
 
-	// 串行生成情感弧线骨架，确保所有段落（包括关键的首段开场）均有弧线指导。
-	// Arc 仅截断至 6000 字运行，通常耗时 5-10s；相比首段缺失弧线导致的叙事质量损失，此等待代价可接受。
-	arcPlan := s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider, video.Mode)
-	logger.Printf("[Storyboard] arc ready (%d chars)", len(arcPlan))
-
 	totalRunes := len([]rune(content))
 
 	// 预计算各段的镜头分配、百分比区间、节拍子集——纯本地计算，不涉及 AI 调用。
@@ -363,21 +358,73 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	var sceneIDs []uint // 与 segments 一一对应的 ScreenplaySceneID；非分场模式下为 nil
 	var totalShots int
 
+	// 提前做一次纯 DB 读取（无 AI 调用），判断本次是走"已有分场剧本"路径、
+	// "需要自动生成分场剧本"路径、还是"文本分段+节拍表"路径——从而决定下方情感弧线（arcPlan）
+	// 生成能与哪一个同样独立的 AI 前置调用并发执行。
+	var existingScenes []*model.ScreenplayScene
+	if s.screenplaySvc != nil && chapterID != nil {
+		var scErr error
+		existingScenes, scErr = s.screenplaySvc.ListScenes(*chapterID)
+		if scErr != nil {
+			logger.Errorf("[Storyboard] screenplaySvc.ListScenes chapterID=%d: %v", *chapterID, scErr)
+		}
+	}
+	needAutoGenScreenplay := s.screenplaySvc != nil && chapterID != nil && len(existingScenes) == 0
+	needBeatSheet := !needAutoGenScreenplay && len(existingScenes) == 0
+
+	// P2 优化：arcPlan（情感弧线骨架）与"自动生成分场剧本"/"生成节拍表"互不依赖（各自独立的 AI 调用，
+	// 互相不读取对方的输出），此前严格串行执行会把 arcPlan 的 5-10s 完全浪费在等待队列里；
+	// 并发执行后总耗时约等于二者中较慢的一个，而不是二者相加。
+	var arcPlan string
+	var autoScenes []*model.ScreenplayScene
+	var beatSheetItems []beatSheetItem
+	if needBeatSheet {
+		totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
+	}
+	{
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			arcPlan = s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider, video.Mode)
+		}()
+		switch {
+		case needAutoGenScreenplay:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				logger.Printf("[Storyboard] no screenplay scenes for chapterID=%d, auto-generating", *chapterID)
+				scenes, scErr := s.screenplaySvc.GenerateScreenplayScenesCtx(ctx, tenantID, *chapterID, provider, true)
+				if scErr != nil {
+					logger.Errorf("[Storyboard] auto-generate screenplay chapterID=%d: %v (falling back to text segmentation)", *chapterID, scErr)
+				}
+				autoScenes = scenes
+			}()
+		case needBeatSheet:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
+				// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
+				beatSheetItems = s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots, video.Mode)
+			}()
+		}
+		wg.Wait()
+	}
+	logger.Printf("[Storyboard] arc ready (%d chars)", len(arcPlan))
+	if needBeatSheet {
+		logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
+	}
+
+	scenes := existingScenes
+	if len(autoScenes) > 0 {
+		scenes = autoScenes
+	}
+
 	// 方案B：已注入 ScreenplayService 且该章节存在分场剧本时，逐场生成分镜（每场=一个"段"），
 	// 剧本内容替代原文分段+内存节拍表作为 AI 输入；未注入或无剧本数据时，走原有的文本分段路径。
 	usedScreenplay := false
 	if s.screenplaySvc != nil && chapterID != nil {
-		scenes, scErr := s.screenplaySvc.ListScenes(*chapterID)
-		if scErr != nil {
-			logger.Errorf("[Storyboard] screenplaySvc.ListScenes chapterID=%d: %v", *chapterID, scErr)
-		}
-		if len(scenes) == 0 {
-			logger.Printf("[Storyboard] no screenplay scenes for chapterID=%d, auto-generating", *chapterID)
-			scenes, scErr = s.screenplaySvc.GenerateScreenplayScenesCtx(ctx, tenantID, *chapterID, provider, true)
-			if scErr != nil {
-				logger.Errorf("[Storyboard] auto-generate screenplay chapterID=%d: %v (falling back to text segmentation)", *chapterID, scErr)
-			}
-		}
 		if len(scenes) > 0 {
 			usedScreenplay = true
 			segments = make([]string, len(scenes))
@@ -423,12 +470,16 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	}
 
 	if !usedScreenplay {
-		totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
-
-		// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
-		// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
-		beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots, video.Mode)
-		logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
+		// 正常情况下 needBeatSheet 已在上方与 arcPlan 并发算好 totalShots/beatSheetItems；
+		// 仅当"本应自动生成分场剧本但失败"（needAutoGenScreenplay=true 却 usedScreenplay=false）
+		// 这一少见的兜底场景下才会走到这里补算，此时退化为串行调用，不影响常规路径的并发收益。
+		if !needBeatSheet {
+			totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
+			// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
+			// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
+			beatSheetItems = s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots, video.Mode)
+			logger.Printf("[Storyboard] beatSheet ready (fallback): %d beats", len(beatSheetItems))
+		}
 
 		// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限，
 		// 同时降低单次 AI 调用逼近 provider 默认超时（300s）的概率。
@@ -1143,7 +1194,12 @@ func (s *VideoService) generateStoryboardSegment(
 				}
 				break
 			}
-			continue
+			// P3 优化：非超时错误说明 GenerateWithProviderCtx 内部（RetryProvider）已经对
+			// 429/502/503/504/连接类瞬时错误做过最多3次指数退避重试仍未成功——要么是持续性
+			// 故障，要么是重试也无法恢复的错误（内容策略拒绝/参数错误/额度耗尽等）。在外层原样
+			// 再走2轮、每轮又各自触发一次完整的内部重试链，大概率只是重复相同的失败和退避等待，
+			// 不再于外层继续重试，直接跳出（最坏情况延迟从 3(外层)×3(内层)=9 次调用降到最多3次）。
+			break
 		}
 		logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", segIdx+1, totalSegments, attempt, aiElapsed.Round(time.Millisecond), len(aiResult))
 		if strings.TrimSpace(aiResult) == "" {
@@ -1158,8 +1214,11 @@ func (s *VideoService) generateStoryboardSegment(
 		if len(parsed) > len(bestShots) {
 			bestShots = parsed
 		}
-		if len(parsed) < (attemptShotCount*3+3)/4 && attempt < 2 {
-			logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 75%%), retrying",
+		// P3 优化：验收阈值从75%放宽到60%——75%过于严格，模型基于内容自然压缩产出的镜头数
+		// 略低于目标时也会触发整轮重试（一次完整的 LLM 往返），放宽后只在明显欠产出（<60%）时
+		// 才重试，减少非必要的重试次数；bestShots 兜底逻辑不变，仍会保留历次最多镜头数的结果。
+		if len(parsed) < (attemptShotCount*3)/5 && attempt < 2 {
+			logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 60%%), retrying",
 				segIdx+1, totalSegments, attempt, len(parsed), attemptShotCount)
 			continue
 		}

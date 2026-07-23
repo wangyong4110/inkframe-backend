@@ -821,21 +821,38 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 
 			if params.FullPipeline {
+				// P2 优化：三项提取各自独立（分别读写角色/道具/场景锚点，互不依赖对方产出），
+				// 原先严格串行执行是三次 AI 调用时间的总和；改为并发执行后，这一步总耗时约等于
+				// 三者中最慢的一个。
+				var wg sync.WaitGroup
 				if svcs.CharacterService != nil {
-					if _, err := svcs.CharacterService.AIExtractMinorChars(ctx, tenantID, chapter.NovelID, chapterID, ""); err != nil {
-						logger.Errorf("[TaskResume] screenplay_gen extract characters chapterID=%d: %v", chapterID, err)
-					}
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						if _, err := svcs.CharacterService.AIExtractMinorChars(ctx, tenantID, chapter.NovelID, chapterID, ""); err != nil {
+							logger.Errorf("[TaskResume] screenplay_gen extract characters chapterID=%d: %v", chapterID, err)
+						}
+					}()
 				}
 				if svcs.ItemService != nil {
-					if _, err := svcs.ItemService.AIExtractChapterItems(tenantID, chapter.NovelID, chapterID, ""); err != nil {
-						logger.Errorf("[TaskResume] screenplay_gen extract items chapterID=%d: %v", chapterID, err)
-					}
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						if _, err := svcs.ItemService.AIExtractChapterItems(tenantID, chapter.NovelID, chapterID, ""); err != nil {
+							logger.Errorf("[TaskResume] screenplay_gen extract items chapterID=%d: %v", chapterID, err)
+						}
+					}()
 				}
 				if svcs.SceneAnchorService != nil {
-					if _, err := svcs.SceneAnchorService.ExtractFromChapter(ctx, tenantID, chapter.NovelID, "", chapter.Content, chapterID, ""); err != nil {
-						logger.Errorf("[TaskResume] screenplay_gen extract scene anchors chapterID=%d: %v", chapterID, err)
-					}
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						if _, err := svcs.SceneAnchorService.ExtractFromChapter(ctx, tenantID, chapter.NovelID, "", chapter.Content, chapterID, ""); err != nil {
+							logger.Errorf("[TaskResume] screenplay_gen extract scene anchors chapterID=%d: %v", chapterID, err)
+						}
+					}()
 				}
+				wg.Wait()
 				svcs.TaskService.UpdateProgress(t.TaskID, 30) //nolint:errcheck
 			}
 
