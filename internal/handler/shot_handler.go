@@ -468,7 +468,7 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 
 // Export 多格式导出
 // GET /api/v1/videos/:id/export/:format
-// format: capcut | fcpxml | zip | srt | vtt | edl | otio | csv | xlsx | broll
+// format: capcut | fcpxml | zip | shots | srt | vtt | edl | otio | csv | xlsx | broll
 func (h *VideoHandler) Export(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -493,7 +493,13 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	case "fcpxml":
 		result, err = h.capcutService.ExportFCPXML(video, shots)
 	case "zip":
-		result, err = h.capcutService.ExportResourceZip(video, shots)
+		var bgmSegs []*model.VideoBGMSegment
+		if h.bgmRepo != nil {
+			bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
+		}
+		result, err = h.capcutService.ExportResourceZip(video, shots, bgmSegs)
+	case "shots":
+		result, err = h.capcutService.ExportShotSlices(video, shots)
 	case "srt":
 		result, err = h.capcutService.ExportSRT(video, shots)
 	case "vtt":

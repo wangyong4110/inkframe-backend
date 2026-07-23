@@ -6,8 +6,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -31,7 +31,7 @@ type CapCutService struct {
 	segmentRepo     *repository.ShotVoiceSegmentRepository // P1-2: for including multi-segment audio in exports
 	sfxItemRepo     *repository.ShotSFXItemRepository      // for including multi-item SFX in exports
 	sceneAnchorRepo *repository.SceneAnchorRepository      // for resolving shot.SceneAnchorID → name/description in exports
-	serverBaseURL   string                                  // 服务器自身 base URL，用于解析 /uploads/... 和 /api/v1/media/... 相对路径
+	serverBaseURL   string                                 // 服务器自身 base URL，用于解析 /uploads/... 和 /api/v1/media/... 相对路径
 }
 
 func NewCapCutService() *CapCutService {
@@ -121,8 +121,8 @@ type ccPoint struct {
 }
 
 type ccKeyframe struct {
-	CurveType    string    `json:"curve_type"`  // snake_case：CapCut 按此键解析曲线类型枚举，camelCase 会导致解析失败崩溃
-	GraphID      string    `json:"graph_id"`    // snake_case：同上
+	CurveType    string    `json:"curve_type"` // snake_case：CapCut 按此键解析曲线类型枚举，camelCase 会导致解析失败崩溃
+	GraphID      string    `json:"graph_id"`   // snake_case：同上
 	ID           string    `json:"id"`
 	LeftControl  ccPoint   `json:"left_control"`
 	RightControl ccPoint   `json:"right_control"`
@@ -178,7 +178,7 @@ type ccResponsiveLayout struct {
 // ccSpeedMaterial speed 伴生素材（每个 segment 必须有一个）
 type ccSpeedMaterial struct {
 	ID         string      `json:"id"`
-	Type       string      `json:"type"`        // "speed"
+	Type       string      `json:"type"` // "speed"
 	Mode       int         `json:"mode"`
 	Speed      float64     `json:"speed"`
 	CurveSpeed interface{} `json:"curve_speed"` // null
@@ -198,7 +198,7 @@ type ccPlaceholderInfo struct {
 // ccCanvasMaterial canvas_color 伴生素材（video segment 专用）
 type ccCanvasMaterial struct {
 	ID             string  `json:"id"`
-	Type           string  `json:"type"`           // "canvas_color"
+	Type           string  `json:"type"` // "canvas_color"
 	Color          string  `json:"color"`
 	Blur           float64 `json:"blur"`
 	Image          string  `json:"image"`
@@ -233,10 +233,10 @@ type ccMaterialColor struct {
 // ccVocalSeparation vocal_separation 伴生素材
 type ccVocalSeparation struct {
 	ID             string        `json:"id"`
-	Type           string        `json:"type"`           // "vocal_separation"
+	Type           string        `json:"type"` // "vocal_separation"
 	Choice         int           `json:"choice"`
 	RemovedSounds  []interface{} `json:"removed_sounds"`
-	TimeRange      interface{}   `json:"time_range"`     // null
+	TimeRange      interface{}   `json:"time_range"` // null
 	ProductionPath string        `json:"production_path"`
 	FinalAlgorithm string        `json:"final_algorithm"`
 	EnterFrom      string        `json:"enter_from"`
@@ -254,15 +254,15 @@ type ccAIBeats struct {
 
 // ccBeatsMaterial beats 伴生素材（audio segment 专用）
 type ccBeatsMaterial struct {
-	ID                string      `json:"id"`
-	Type              string      `json:"type"`               // "beats"
-	EnableAIBeats     bool        `json:"enable_ai_beats"`
-	Gear              int         `json:"gear"`               // 404
-	GearCount         int         `json:"gear_count"`
-	Mode              int         `json:"mode"`               // 404
+	ID                string        `json:"id"`
+	Type              string        `json:"type"` // "beats"
+	EnableAIBeats     bool          `json:"enable_ai_beats"`
+	Gear              int           `json:"gear"` // 404
+	GearCount         int           `json:"gear_count"`
+	Mode              int           `json:"mode"` // 404
 	UserBeats         []interface{} `json:"user_beats"`
-	UserDeleteAIBeats interface{} `json:"user_delete_ai_beats"` // null
-	AIBeats           ccAIBeats   `json:"ai_beats"`
+	UserDeleteAIBeats interface{}   `json:"user_delete_ai_beats"` // null
+	AIBeats           ccAIBeats     `json:"ai_beats"`
 }
 
 type ccClip struct {
@@ -279,60 +279,60 @@ type ccTimeRange struct {
 }
 
 type ccSegment struct {
-	Clip              *ccClip     `json:"clip"`                // 音频轨道必须为 null；视频/文本轨道必须为非 null 对象
-	ID                string      `json:"id"`
-	KeyframeRefs      []string    `json:"keyframe_refs"`       // 不用 omitempty：nil 时必须输出 [] 而非 null
-	ExtraMaterialRefs []string    `json:"extra_material_refs"` // 同上，CapCut 迭代 null 会崩溃
-	MaterialID        string      `json:"material_id"`
-	Reverse           bool        `json:"reverse"`
-	Speed             float64     `json:"speed"`
+	Clip              *ccClip      `json:"clip"` // 音频轨道必须为 null；视频/文本轨道必须为非 null 对象
+	ID                string       `json:"id"`
+	KeyframeRefs      []string     `json:"keyframe_refs"`       // 不用 omitempty：nil 时必须输出 [] 而非 null
+	ExtraMaterialRefs []string     `json:"extra_material_refs"` // 同上，CapCut 迭代 null 会崩溃
+	MaterialID        string       `json:"material_id"`
+	Reverse           bool         `json:"reverse"`
+	Speed             float64      `json:"speed"`
 	SourceTimerange   *ccTimeRange `json:"source_timerange"` // text segment 为 null；video/audio 为非 null
 	TargetTimerange   ccTimeRange  `json:"target_timerange"`
 	// Type 字段在真实草稿的 segment 中不存在，不输出（omitempty 保证空字符串被省略）
-	Type              string      `json:"type,omitempty"`
-	Visible           bool        `json:"visible"`
-	Volume            float64     `json:"volume"`
+	Type    string  `json:"type,omitempty"`
+	Visible bool    `json:"visible"`
+	Volume  float64 `json:"volume"`
 
 	// --- 以下字段真实草稿必须有，缺失会导致 CapCut 崩溃或行为异常 ---
-	RenderTimerange       ccTimeRange        `json:"render_timerange"`
-	RenderIndex           int                `json:"render_index"`
-	TrackRenderIndex      int                `json:"track_render_index"`
-	EnableLut             bool               `json:"enable_lut"`
-	EnableAdjust          bool               `json:"enable_adjust"`
-	EnableHsl             bool               `json:"enable_hsl"`
-	EnableColorCurves     bool               `json:"enable_color_curves"`
-	EnableHslCurves       bool               `json:"enable_hsl_curves"`
-	EnableColorWheels     bool               `json:"enable_color_wheels"`
-	HdrSettings           *ccHdrSettings     `json:"hdr_settings"`  // 音频段为null，视频段为非null
-	TrackAttribute        int                `json:"track_attribute"`
-	IsPlaceholder         bool               `json:"is_placeholder"`
-	UniformScale          *ccUniformScale    `json:"uniform_scale"` // 音频段为null，视频段为非null
-	IsLoop                bool               `json:"is_loop"`
-	IsToneModify          bool               `json:"is_tone_modify"`
-	IntensifiesAudio      bool               `json:"intensifies_audio"`
-	Cartoon               bool               `json:"cartoon"`
-	LastNonzeroVolume     float64            `json:"last_nonzero_volume"`
-	Desc                  string             `json:"desc"`
-	EnableAdjustMask           bool   `json:"enable_adjust_mask"`
-	EnableColorAdjustPro       bool   `json:"enable_color_adjust_pro"`
-	EnableColorCorrectAdjust   bool   `json:"enable_color_correct_adjust"`
-	EnableColorMatchAdjust     bool   `json:"enable_color_match_adjust"`
-	EnableMaskShadow           bool   `json:"enable_mask_shadow"`
-	EnableMaskStroke           bool   `json:"enable_mask_stroke"`
-	ColorCorrectAlgResult      string `json:"color_correct_alg_result"`
-	DigitalHumanTemplateGroupID string `json:"digital_human_template_group_id"`
-	State                 int                `json:"state"`
-	GroupID               string             `json:"group_id"`
-	CommonKeyframes       []interface{}      `json:"common_keyframes"`    // CapCut 迭代此数组，null 崩溃
-	CaptionInfo           interface{}        `json:"caption_info"`
-	ResponsiveLayout      ccResponsiveLayout `json:"responsive_layout"`
-	EnableSmartColorAdjust bool              `json:"enable_smart_color_adjust"`
-	Source                string             `json:"source"`
-	TemplateID            string             `json:"template_id"`
-	TemplateScene         string             `json:"template_scene"`
-	RawSegmentID          string             `json:"raw_segment_id"`
-	LyricKeyframes        interface{}        `json:"lyric_keyframes"`     // video/audio: null；text: {"common_keyframes":[],"lyric_keyframes":[]}
-	EnableVideoMask       bool               `json:"enable_video_mask"`
+	RenderTimerange             ccTimeRange        `json:"render_timerange"`
+	RenderIndex                 int                `json:"render_index"`
+	TrackRenderIndex            int                `json:"track_render_index"`
+	EnableLut                   bool               `json:"enable_lut"`
+	EnableAdjust                bool               `json:"enable_adjust"`
+	EnableHsl                   bool               `json:"enable_hsl"`
+	EnableColorCurves           bool               `json:"enable_color_curves"`
+	EnableHslCurves             bool               `json:"enable_hsl_curves"`
+	EnableColorWheels           bool               `json:"enable_color_wheels"`
+	HdrSettings                 *ccHdrSettings     `json:"hdr_settings"` // 音频段为null，视频段为非null
+	TrackAttribute              int                `json:"track_attribute"`
+	IsPlaceholder               bool               `json:"is_placeholder"`
+	UniformScale                *ccUniformScale    `json:"uniform_scale"` // 音频段为null，视频段为非null
+	IsLoop                      bool               `json:"is_loop"`
+	IsToneModify                bool               `json:"is_tone_modify"`
+	IntensifiesAudio            bool               `json:"intensifies_audio"`
+	Cartoon                     bool               `json:"cartoon"`
+	LastNonzeroVolume           float64            `json:"last_nonzero_volume"`
+	Desc                        string             `json:"desc"`
+	EnableAdjustMask            bool               `json:"enable_adjust_mask"`
+	EnableColorAdjustPro        bool               `json:"enable_color_adjust_pro"`
+	EnableColorCorrectAdjust    bool               `json:"enable_color_correct_adjust"`
+	EnableColorMatchAdjust      bool               `json:"enable_color_match_adjust"`
+	EnableMaskShadow            bool               `json:"enable_mask_shadow"`
+	EnableMaskStroke            bool               `json:"enable_mask_stroke"`
+	ColorCorrectAlgResult       string             `json:"color_correct_alg_result"`
+	DigitalHumanTemplateGroupID string             `json:"digital_human_template_group_id"`
+	State                       int                `json:"state"`
+	GroupID                     string             `json:"group_id"`
+	CommonKeyframes             []interface{}      `json:"common_keyframes"` // CapCut 迭代此数组，null 崩溃
+	CaptionInfo                 interface{}        `json:"caption_info"`
+	ResponsiveLayout            ccResponsiveLayout `json:"responsive_layout"`
+	EnableSmartColorAdjust      bool               `json:"enable_smart_color_adjust"`
+	Source                      string             `json:"source"`
+	TemplateID                  string             `json:"template_id"`
+	TemplateScene               string             `json:"template_scene"`
+	RawSegmentID                string             `json:"raw_segment_id"`
+	LyricKeyframes              interface{}        `json:"lyric_keyframes"` // video/audio: null；text: {"common_keyframes":[],"lyric_keyframes":[]}
+	EnableVideoMask             bool               `json:"enable_video_mask"`
 }
 
 // MarshalJSON 确保:
@@ -354,110 +354,110 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		commonKFs = []interface{}{}
 	}
 	type seg struct {
-		Clip                   *ccClip            `json:"clip"`
-		ID                     string             `json:"id"`
-		KeyframeRefs           []string           `json:"keyframe_refs"`
-		ExtraMaterialRefs      []string           `json:"extra_material_refs"`
-		MaterialID             string             `json:"material_id"`
-		Reverse                bool               `json:"reverse"`
-		Speed                  float64            `json:"speed"`
-		SourceTimerange        *ccTimeRange       `json:"source_timerange"` // text segment 为 null
-		TargetTimerange        ccTimeRange        `json:"target_timerange"`
-		Type                   string             `json:"type,omitempty"`
-		Visible                bool               `json:"visible"`
-		Volume                 float64            `json:"volume"`
-		RenderTimerange        ccTimeRange        `json:"render_timerange"`
-		RenderIndex            int                `json:"render_index"`
-		TrackRenderIndex       int                `json:"track_render_index"`
-		EnableLut              bool               `json:"enable_lut"`
-		EnableAdjust           bool               `json:"enable_adjust"`
-		EnableHsl              bool               `json:"enable_hsl"`
-		EnableColorCurves      bool               `json:"enable_color_curves"`
-		EnableHslCurves        bool               `json:"enable_hsl_curves"`
-		EnableColorWheels      bool               `json:"enable_color_wheels"`
-		HdrSettings            *ccHdrSettings     `json:"hdr_settings"`
-		TrackAttribute         int                `json:"track_attribute"`
-		IsPlaceholder          bool               `json:"is_placeholder"`
-		UniformScale           *ccUniformScale    `json:"uniform_scale"`
-		IsLoop                 bool               `json:"is_loop"`
-		IsToneModify           bool               `json:"is_tone_modify"`
-		IntensifiesAudio       bool               `json:"intensifies_audio"`
-		Cartoon                bool               `json:"cartoon"`
-		LastNonzeroVolume      float64            `json:"last_nonzero_volume"`
-		Desc                   string             `json:"desc"`
-		EnableAdjustMask           bool   `json:"enable_adjust_mask"`
-		EnableColorAdjustPro       bool   `json:"enable_color_adjust_pro"`
-		EnableColorCorrectAdjust   bool   `json:"enable_color_correct_adjust"`
-		EnableColorMatchAdjust     bool   `json:"enable_color_match_adjust"`
-		EnableMaskShadow           bool   `json:"enable_mask_shadow"`
-		EnableMaskStroke           bool   `json:"enable_mask_stroke"`
-		ColorCorrectAlgResult      string `json:"color_correct_alg_result"`
-		DigitalHumanTemplateGroupID string `json:"digital_human_template_group_id"`
-		State                  int                `json:"state"`
-		GroupID                string             `json:"group_id"`
-		CommonKeyframes        []interface{}      `json:"common_keyframes"`
-		CaptionInfo            interface{}        `json:"caption_info"`
-		ResponsiveLayout       ccResponsiveLayout `json:"responsive_layout"`
-		EnableSmartColorAdjust bool               `json:"enable_smart_color_adjust"`
-		Source                 string             `json:"source"`
-		TemplateID             string             `json:"template_id"`
-		TemplateScene          string             `json:"template_scene"`
-		RawSegmentID           string             `json:"raw_segment_id"`
-		LyricKeyframes         interface{}        `json:"lyric_keyframes"`
-		EnableVideoMask        bool               `json:"enable_video_mask"`
+		Clip                        *ccClip            `json:"clip"`
+		ID                          string             `json:"id"`
+		KeyframeRefs                []string           `json:"keyframe_refs"`
+		ExtraMaterialRefs           []string           `json:"extra_material_refs"`
+		MaterialID                  string             `json:"material_id"`
+		Reverse                     bool               `json:"reverse"`
+		Speed                       float64            `json:"speed"`
+		SourceTimerange             *ccTimeRange       `json:"source_timerange"` // text segment 为 null
+		TargetTimerange             ccTimeRange        `json:"target_timerange"`
+		Type                        string             `json:"type,omitempty"`
+		Visible                     bool               `json:"visible"`
+		Volume                      float64            `json:"volume"`
+		RenderTimerange             ccTimeRange        `json:"render_timerange"`
+		RenderIndex                 int                `json:"render_index"`
+		TrackRenderIndex            int                `json:"track_render_index"`
+		EnableLut                   bool               `json:"enable_lut"`
+		EnableAdjust                bool               `json:"enable_adjust"`
+		EnableHsl                   bool               `json:"enable_hsl"`
+		EnableColorCurves           bool               `json:"enable_color_curves"`
+		EnableHslCurves             bool               `json:"enable_hsl_curves"`
+		EnableColorWheels           bool               `json:"enable_color_wheels"`
+		HdrSettings                 *ccHdrSettings     `json:"hdr_settings"`
+		TrackAttribute              int                `json:"track_attribute"`
+		IsPlaceholder               bool               `json:"is_placeholder"`
+		UniformScale                *ccUniformScale    `json:"uniform_scale"`
+		IsLoop                      bool               `json:"is_loop"`
+		IsToneModify                bool               `json:"is_tone_modify"`
+		IntensifiesAudio            bool               `json:"intensifies_audio"`
+		Cartoon                     bool               `json:"cartoon"`
+		LastNonzeroVolume           float64            `json:"last_nonzero_volume"`
+		Desc                        string             `json:"desc"`
+		EnableAdjustMask            bool               `json:"enable_adjust_mask"`
+		EnableColorAdjustPro        bool               `json:"enable_color_adjust_pro"`
+		EnableColorCorrectAdjust    bool               `json:"enable_color_correct_adjust"`
+		EnableColorMatchAdjust      bool               `json:"enable_color_match_adjust"`
+		EnableMaskShadow            bool               `json:"enable_mask_shadow"`
+		EnableMaskStroke            bool               `json:"enable_mask_stroke"`
+		ColorCorrectAlgResult       string             `json:"color_correct_alg_result"`
+		DigitalHumanTemplateGroupID string             `json:"digital_human_template_group_id"`
+		State                       int                `json:"state"`
+		GroupID                     string             `json:"group_id"`
+		CommonKeyframes             []interface{}      `json:"common_keyframes"`
+		CaptionInfo                 interface{}        `json:"caption_info"`
+		ResponsiveLayout            ccResponsiveLayout `json:"responsive_layout"`
+		EnableSmartColorAdjust      bool               `json:"enable_smart_color_adjust"`
+		Source                      string             `json:"source"`
+		TemplateID                  string             `json:"template_id"`
+		TemplateScene               string             `json:"template_scene"`
+		RawSegmentID                string             `json:"raw_segment_id"`
+		LyricKeyframes              interface{}        `json:"lyric_keyframes"`
+		EnableVideoMask             bool               `json:"enable_video_mask"`
 	}
 	return json.Marshal(seg{
-		Clip:                   s.Clip,
-		ID:                     s.ID,
-		KeyframeRefs:           kfRefs,
-		ExtraMaterialRefs:      extRefs,
-		MaterialID:             s.MaterialID,
-		Reverse:                s.Reverse,
-		Speed:                  s.Speed,
-		SourceTimerange:        s.SourceTimerange,
-		TargetTimerange:        s.TargetTimerange,
-		Type:                   s.Type,
-		Visible:                s.Visible,
-		Volume:                 s.Volume,
-		RenderTimerange:        s.RenderTimerange,
-		RenderIndex:            s.RenderIndex,
-		TrackRenderIndex:       s.TrackRenderIndex,
-		EnableLut:              s.EnableLut,
-		EnableAdjust:           s.EnableAdjust,
-		EnableHsl:              s.EnableHsl,
-		EnableColorCurves:      s.EnableColorCurves,
-		EnableHslCurves:        s.EnableHslCurves,
-		EnableColorWheels:      s.EnableColorWheels,
-		HdrSettings:            s.HdrSettings,
-		TrackAttribute:         s.TrackAttribute,
-		IsPlaceholder:          s.IsPlaceholder,
-		UniformScale:           s.UniformScale,
-		IsLoop:                 s.IsLoop,
-		IsToneModify:           s.IsToneModify,
-		IntensifiesAudio:       s.IntensifiesAudio,
-		Cartoon:                s.Cartoon,
-		LastNonzeroVolume:      s.LastNonzeroVolume,
-		Desc:                   s.Desc,
-		EnableAdjustMask:           s.EnableAdjustMask,
-		EnableColorAdjustPro:       s.EnableColorAdjustPro,
-		EnableColorCorrectAdjust:   s.EnableColorCorrectAdjust,
-		EnableColorMatchAdjust:     s.EnableColorMatchAdjust,
-		EnableMaskShadow:           s.EnableMaskShadow,
-		EnableMaskStroke:           s.EnableMaskStroke,
-		ColorCorrectAlgResult:      s.ColorCorrectAlgResult,
+		Clip:                        s.Clip,
+		ID:                          s.ID,
+		KeyframeRefs:                kfRefs,
+		ExtraMaterialRefs:           extRefs,
+		MaterialID:                  s.MaterialID,
+		Reverse:                     s.Reverse,
+		Speed:                       s.Speed,
+		SourceTimerange:             s.SourceTimerange,
+		TargetTimerange:             s.TargetTimerange,
+		Type:                        s.Type,
+		Visible:                     s.Visible,
+		Volume:                      s.Volume,
+		RenderTimerange:             s.RenderTimerange,
+		RenderIndex:                 s.RenderIndex,
+		TrackRenderIndex:            s.TrackRenderIndex,
+		EnableLut:                   s.EnableLut,
+		EnableAdjust:                s.EnableAdjust,
+		EnableHsl:                   s.EnableHsl,
+		EnableColorCurves:           s.EnableColorCurves,
+		EnableHslCurves:             s.EnableHslCurves,
+		EnableColorWheels:           s.EnableColorWheels,
+		HdrSettings:                 s.HdrSettings,
+		TrackAttribute:              s.TrackAttribute,
+		IsPlaceholder:               s.IsPlaceholder,
+		UniformScale:                s.UniformScale,
+		IsLoop:                      s.IsLoop,
+		IsToneModify:                s.IsToneModify,
+		IntensifiesAudio:            s.IntensifiesAudio,
+		Cartoon:                     s.Cartoon,
+		LastNonzeroVolume:           s.LastNonzeroVolume,
+		Desc:                        s.Desc,
+		EnableAdjustMask:            s.EnableAdjustMask,
+		EnableColorAdjustPro:        s.EnableColorAdjustPro,
+		EnableColorCorrectAdjust:    s.EnableColorCorrectAdjust,
+		EnableColorMatchAdjust:      s.EnableColorMatchAdjust,
+		EnableMaskShadow:            s.EnableMaskShadow,
+		EnableMaskStroke:            s.EnableMaskStroke,
+		ColorCorrectAlgResult:       s.ColorCorrectAlgResult,
 		DigitalHumanTemplateGroupID: s.DigitalHumanTemplateGroupID,
-		State:                  s.State,
-		GroupID:                s.GroupID,
-		CommonKeyframes:        commonKFs,
-		CaptionInfo:            s.CaptionInfo,
-		ResponsiveLayout:       s.ResponsiveLayout,
-		EnableSmartColorAdjust: s.EnableSmartColorAdjust,
-		Source:                 s.Source,
-		TemplateID:             s.TemplateID,
-		TemplateScene:          s.TemplateScene,
-		RawSegmentID:           s.RawSegmentID,
-		LyricKeyframes:         s.LyricKeyframes,
-		EnableVideoMask:        s.EnableVideoMask,
+		State:                       s.State,
+		GroupID:                     s.GroupID,
+		CommonKeyframes:             commonKFs,
+		CaptionInfo:                 s.CaptionInfo,
+		ResponsiveLayout:            s.ResponsiveLayout,
+		EnableSmartColorAdjust:      s.EnableSmartColorAdjust,
+		Source:                      s.Source,
+		TemplateID:                  s.TemplateID,
+		TemplateScene:               s.TemplateScene,
+		RawSegmentID:                s.RawSegmentID,
+		LyricKeyframes:              s.LyricKeyframes,
+		EnableVideoMask:             s.EnableVideoMask,
 	})
 }
 
@@ -493,9 +493,9 @@ type ccCrop struct {
 }
 
 type ccVideoAlgorithmStoryConfig struct {
-	TaskID              string `json:"task_id"`
-	IsOverwriteLastVideo bool  `json:"is_overwrite_last_video"`
-	TrackerTaskID       string `json:"tracker_task_id"`
+	TaskID               string `json:"task_id"`
+	IsOverwriteLastVideo bool   `json:"is_overwrite_last_video"`
+	TrackerTaskID        string `json:"tracker_task_id"`
 }
 
 type ccVideoAlgorithm struct {
@@ -576,72 +576,72 @@ type ccVideoMaskShadow struct {
 }
 
 type ccVideoMaterial struct {
-	AIGCHistoryID           string                 `json:"aigc_history_id"`
-	AIGCItemID              string                 `json:"aigc_item_id"`
-	AIGCType                string                 `json:"aigc_type"`           // "none"
-	AudioFade               interface{}            `json:"audio_fade"`          // null
-	BeautyBodyAutoPreset    interface{}            `json:"beauty_body_auto_preset"` // null
-	BeautyBodyPresetID      string                 `json:"beauty_body_preset_id"`
-	BeautyFaceAutoPreset    ccBeautyFaceAutoPreset `json:"beauty_face_auto_preset"`
-	BeautyFaceAutoPresetInfos []interface{}        `json:"beauty_face_auto_preset_infos"`
-	BeautyFacePresetInfos   []interface{}          `json:"beauty_face_preset_infos"`
-	CartoonPath             string                 `json:"cartoon_path"`
-	CategoryID              string                 `json:"category_id"`
-	CategoryName            string                 `json:"category_name"`       // "local"
-	CheckFlag               int                    `json:"check_flag"`          // 62978047
-	ContentFeatureInfo      interface{}            `json:"content_feature_info"` // null
-	CornerPin               interface{}            `json:"corner_pin"`          // null
-	Crop                    ccCrop                 `json:"crop"`
-	CropRatio               string                 `json:"crop_ratio"`          // "free"
-	CropScale               float64                `json:"crop_scale"`          // 1.0
-	Duration                int64                  `json:"duration"`
-	ExtraTypeOption         int                    `json:"extra_type_option"`   // 0
-	FormulaID               string                 `json:"formula_id"`
-	Freeze                  interface{}            `json:"freeze"`              // null
-	HasAudio                bool                   `json:"has_audio"`
-	HasSoundSeparated       bool                   `json:"has_sound_separated"`
-	Height                  int                    `json:"height"`
-	ID                      string                 `json:"id"`
-	IntensifiesAudioPath    string                 `json:"intensifies_audio_path"`
-	IntensifiesPath         string                 `json:"intensifies_path"`
-	IsAIGenerateContent     bool                   `json:"is_ai_generate_content"`
-	IsCopyright             bool                   `json:"is_copyright"`
-	IsSetBeautyMode         bool                   `json:"is_set_beauty_mode"`
-	IsTextEditOverdub       bool                   `json:"is_text_edit_overdub"`
-	IsUnifiedBeautyMode     bool                   `json:"is_unified_beauty_mode"`
-	LivePhotoCoverPath      string                 `json:"live_photo_cover_path"`
-	LivePhotoTimestamp      int64                  `json:"live_photo_timestamp"` // -1
-	LocalID                 string                 `json:"local_id"`
-	LocalMaterialFrom       string                 `json:"local_material_from"`
-	LocalMaterialID         string                 `json:"local_material_id"`   // UUID
-	MaterialID              string                 `json:"material_id"`
-	MaterialName            string                 `json:"material_name"`       // filename
-	MaterialURL             string                 `json:"material_url"`
-	Matting                 ccMattingData          `json:"matting"`
-	MediaPath               string                 `json:"media_path"`
-	MultiCameraInfo         interface{}            `json:"multi_camera_info"`   // null
-	ObjectLocked            interface{}            `json:"object_locked"`       // null
-	OriginMaterialID        string                 `json:"origin_material_id"`
-	Path                    string                 `json:"path"`
-	PictureFrom             string                 `json:"picture_from"`        // "none"
-	PictureSetCategoryID    string                 `json:"picture_set_category_id"`
-	PictureSetCategoryName  string                 `json:"picture_set_category_name"`
-	RequestID               string                 `json:"request_id"`
-	ReverseIntensifiesPath  string                 `json:"reverse_intensifies_path"`
-	ReversePath             string                 `json:"reverse_path"`
-	SmartMatchInfo          interface{}            `json:"smart_match_info"`    // null
-	SmartMotion             interface{}            `json:"smart_motion"`        // null
-	Source                  int                    `json:"source"`              // 0（注意：int类型，与ccDraftContent.Source的string类型不同）
-	SourcePlatform          int                    `json:"source_platform"`     // 0
-	Stable                  ccStableData           `json:"stable"`
-	SurfaceTrackings        []interface{}          `json:"surface_trackings"`
-	TeamID                  string                 `json:"team_id"`
-	Type                    string                 `json:"type"`
-	UniqueID                string                 `json:"unique_id"`
-	VideoAlgorithm          ccVideoAlgorithm       `json:"video_algorithm"`
-	VideoMaskShadow         ccVideoMaskShadow      `json:"video_mask_shadow"`
-	VideoMaskStroke         ccVideoMaskStroke      `json:"video_mask_stroke"`
-	Width                   int                    `json:"width"`
+	AIGCHistoryID             string                 `json:"aigc_history_id"`
+	AIGCItemID                string                 `json:"aigc_item_id"`
+	AIGCType                  string                 `json:"aigc_type"`               // "none"
+	AudioFade                 interface{}            `json:"audio_fade"`              // null
+	BeautyBodyAutoPreset      interface{}            `json:"beauty_body_auto_preset"` // null
+	BeautyBodyPresetID        string                 `json:"beauty_body_preset_id"`
+	BeautyFaceAutoPreset      ccBeautyFaceAutoPreset `json:"beauty_face_auto_preset"`
+	BeautyFaceAutoPresetInfos []interface{}          `json:"beauty_face_auto_preset_infos"`
+	BeautyFacePresetInfos     []interface{}          `json:"beauty_face_preset_infos"`
+	CartoonPath               string                 `json:"cartoon_path"`
+	CategoryID                string                 `json:"category_id"`
+	CategoryName              string                 `json:"category_name"`        // "local"
+	CheckFlag                 int                    `json:"check_flag"`           // 62978047
+	ContentFeatureInfo        interface{}            `json:"content_feature_info"` // null
+	CornerPin                 interface{}            `json:"corner_pin"`           // null
+	Crop                      ccCrop                 `json:"crop"`
+	CropRatio                 string                 `json:"crop_ratio"` // "free"
+	CropScale                 float64                `json:"crop_scale"` // 1.0
+	Duration                  int64                  `json:"duration"`
+	ExtraTypeOption           int                    `json:"extra_type_option"` // 0
+	FormulaID                 string                 `json:"formula_id"`
+	Freeze                    interface{}            `json:"freeze"` // null
+	HasAudio                  bool                   `json:"has_audio"`
+	HasSoundSeparated         bool                   `json:"has_sound_separated"`
+	Height                    int                    `json:"height"`
+	ID                        string                 `json:"id"`
+	IntensifiesAudioPath      string                 `json:"intensifies_audio_path"`
+	IntensifiesPath           string                 `json:"intensifies_path"`
+	IsAIGenerateContent       bool                   `json:"is_ai_generate_content"`
+	IsCopyright               bool                   `json:"is_copyright"`
+	IsSetBeautyMode           bool                   `json:"is_set_beauty_mode"`
+	IsTextEditOverdub         bool                   `json:"is_text_edit_overdub"`
+	IsUnifiedBeautyMode       bool                   `json:"is_unified_beauty_mode"`
+	LivePhotoCoverPath        string                 `json:"live_photo_cover_path"`
+	LivePhotoTimestamp        int64                  `json:"live_photo_timestamp"` // -1
+	LocalID                   string                 `json:"local_id"`
+	LocalMaterialFrom         string                 `json:"local_material_from"`
+	LocalMaterialID           string                 `json:"local_material_id"` // UUID
+	MaterialID                string                 `json:"material_id"`
+	MaterialName              string                 `json:"material_name"` // filename
+	MaterialURL               string                 `json:"material_url"`
+	Matting                   ccMattingData          `json:"matting"`
+	MediaPath                 string                 `json:"media_path"`
+	MultiCameraInfo           interface{}            `json:"multi_camera_info"` // null
+	ObjectLocked              interface{}            `json:"object_locked"`     // null
+	OriginMaterialID          string                 `json:"origin_material_id"`
+	Path                      string                 `json:"path"`
+	PictureFrom               string                 `json:"picture_from"` // "none"
+	PictureSetCategoryID      string                 `json:"picture_set_category_id"`
+	PictureSetCategoryName    string                 `json:"picture_set_category_name"`
+	RequestID                 string                 `json:"request_id"`
+	ReverseIntensifiesPath    string                 `json:"reverse_intensifies_path"`
+	ReversePath               string                 `json:"reverse_path"`
+	SmartMatchInfo            interface{}            `json:"smart_match_info"` // null
+	SmartMotion               interface{}            `json:"smart_motion"`     // null
+	Source                    int                    `json:"source"`           // 0（注意：int类型，与ccDraftContent.Source的string类型不同）
+	SourcePlatform            int                    `json:"source_platform"`  // 0
+	Stable                    ccStableData           `json:"stable"`
+	SurfaceTrackings          []interface{}          `json:"surface_trackings"`
+	TeamID                    string                 `json:"team_id"`
+	Type                      string                 `json:"type"`
+	UniqueID                  string                 `json:"unique_id"`
+	VideoAlgorithm            ccVideoAlgorithm       `json:"video_algorithm"`
+	VideoMaskShadow           ccVideoMaskShadow      `json:"video_mask_shadow"`
+	VideoMaskStroke           ccVideoMaskStroke      `json:"video_mask_stroke"`
+	Width                     int                    `json:"width"`
 }
 
 type ccSimilarMusicInfo struct {
@@ -650,10 +650,10 @@ type ccSimilarMusicInfo struct {
 }
 
 type ccTTSBenefitInfo struct {
-	BenefitType     string `json:"benefit_type"`     // "none"
+	BenefitType     string `json:"benefit_type"` // "none"
 	BenefitLogID    string `json:"benefit_log_id"`
 	BenefitLogExtra string `json:"benefit_log_extra"`
-	BenefitAmount   int    `json:"benefit_amount"`   // -1
+	BenefitAmount   int    `json:"benefit_amount"` // -1
 }
 
 // ccAudioMaterial 音频素材（配音 / BGM / SFX）
@@ -665,8 +665,8 @@ type ccAudioMaterial struct {
 	AIGCItemID             string             `json:"aigc_item_id"`
 	AppID                  int                `json:"app_id"`
 	CategoryID             string             `json:"category_id"`
-	CategoryName           string             `json:"category_name"`  // "local"
-	CheckFlag              int                `json:"check_flag"`     // 1
+	CategoryName           string             `json:"category_name"` // "local"
+	CheckFlag              int                `json:"check_flag"`    // 1
 	ClonedModelType        string             `json:"cloned_model_type"`
 	CopyrightLimitType     string             `json:"copyright_limit_type"` // "none"
 	Duration               int64              `json:"duration"`
@@ -726,133 +726,133 @@ type ccAudioMaterial struct {
 // 注意：剪映要求 id 与 material_id 同值，否则 segment.material_id 引用会失效导致字幕不显示。
 // CapCut 8.7+ 严格校验 text material 的完整字段列表，缺字段会导致加载崩溃。
 type ccTextMaterial struct {
-	AddType                            int         `json:"add_type"`
-	Alignment                          int         `json:"alignment"`                // 1=center
-	BackgroundAlpha                    float64     `json:"background_alpha"`
-	BackgroundColor                    string      `json:"background_color"`
-	BackgroundFill                     string      `json:"background_fill"`
-	BackgroundHeight                   float64     `json:"background_height"`
-	BackgroundHorizontalOffset         float64     `json:"background_horizontal_offset"`
-	BackgroundRoundRadius              float64     `json:"background_round_radius"`
-	BackgroundStyle                    int         `json:"background_style"`
-	BackgroundVerticalOffset           float64     `json:"background_vertical_offset"`
-	BackgroundWidth                    float64     `json:"background_width"`
-	BaseContent                        string      `json:"base_content"`
-	BoldWidth                          float64     `json:"bold_width"`
-	BorderAlpha                        float64     `json:"border_alpha"`
-	BorderColor                        string      `json:"border_color"`
-	BorderMode                         int         `json:"border_mode"`
-	BorderWidth                        float64     `json:"border_width"`
-	CaptionTemplateInfo                interface{} `json:"caption_template_info"`   // null
-	CheckFlag                          int         `json:"check_flag"`
-	ComboInfo                          interface{} `json:"combo_info"`              // {"text_templates":[]}
-	Content                            string      `json:"content"`
-	CurrentWords                       interface{} `json:"current_words"`           // {"start_time":[],"end_time":[],"text":[]}
-	CutoffPostfix                      string      `json:"cutoff_postfix"`
-	EnablePathTypesetting              bool        `json:"enable_path_typesetting"`
-	FixedHeight                        float64     `json:"fixed_height"`            // -1.0
-	FixedWidth                         float64     `json:"fixed_width"`             // -1.0
-	FontCategoryID                     string      `json:"font_category_id"`
-	FontCategoryName                   string      `json:"font_category_name"`
-	FontID                             string      `json:"font_id"`
-	FontName                           string      `json:"font_name"`
-	FontPath                           string      `json:"font_path"`
-	FontResourceID                     string      `json:"font_resource_id"`
-	FontSize                           float64     `json:"font_size"`
-	FontSourcePlatform                 int         `json:"font_source_platform"`
-	FontTeamID                         string      `json:"font_team_id"`
-	FontThirdResourceID                string      `json:"font_third_resource_id"`
-	FontTitle                          string      `json:"font_title"`              // "none"
-	FontURL                            string      `json:"font_url"`
-	Fonts                              []interface{} `json:"fonts"`
-	ForceApplyLineMaxWidth             bool        `json:"force_apply_line_max_width"`
-	GlobalAlpha                        float64     `json:"global_alpha"`
-	GroupID                            string      `json:"group_id"`
-	HasShadow                          bool        `json:"has_shadow"`
-	ID                                 string      `json:"id"`
-	InitialScale                       float64     `json:"initial_scale"`
-	InnerPadding                       float64     `json:"inner_padding"`           // -1.0
-	IsBatchReplace                     bool        `json:"is_batch_replace"`
-	IsLyricEffect                      bool        `json:"is_lyric_effect"`
-	IsRichText                         bool        `json:"is_rich_text"`
-	IsSubtitle                         bool        `json:"is_subtitle"`
-	IsWordsLinear                      bool        `json:"is_words_linear"`
-	ItalicDegree                       int         `json:"italic_degree"`
-	KTVColor                           string      `json:"ktv_color"`
-	Language                           string      `json:"language"`
-	LayerWeight                        int         `json:"layer_weight"`
-	LetterSpacing                      float64     `json:"letter_spacing"`
-	LineFeed                           int         `json:"line_feed"`               // 1
-	LineMaxWidth                       float64     `json:"line_max_width"`          // 0.82
-	LineSpacing                        float64     `json:"line_spacing"`
-	LyricGroupID                       string      `json:"lyric_group_id"`
-	LyricsTemplate                     interface{} `json:"lyrics_template"`         // {"resource_id":"","resource_name":"","panel":"","effect_id":"","path":""}
-	MaterialID                         string      `json:"material_id"`             // 必须与 ID 相同
-	MultiLanguageCurrent               string      `json:"multi_language_current"`  // "none"
-	Name                               string      `json:"name"`
-	OffsetOnPath                       float64     `json:"offset_on_path"`
-	OnelineCutoff                      bool        `json:"oneline_cutoff"`
-	OperationType                      int         `json:"operation_type"`
-	OriginalSize                       []interface{} `json:"original_size"`
-	PresetCategory                     string      `json:"preset_category"`
-	PresetCategoryID                   string      `json:"preset_category_id"`
-	PresetHasSetAlignment              bool        `json:"preset_has_set_alignment"`
-	PresetID                           string      `json:"preset_id"`
-	PresetIndex                        int         `json:"preset_index"`
-	PresetName                         string      `json:"preset_name"`
-	PuncModel                          string      `json:"punc_model"`
-	RecognizeModel                     string      `json:"recognize_model"`
-	RecognizeTaskID                    string      `json:"recognize_task_id"`
-	RecognizeText                      string      `json:"recognize_text"`
-	RecognizeType                      int         `json:"recognize_type"`
-	RelevanceSegment                   []interface{} `json:"relevance_segment"`
-	ShadowAlpha                        float64     `json:"shadow_alpha"`
-	ShadowAngle                        float64     `json:"shadow_angle"`
-	ShadowColor                        string      `json:"shadow_color"`
-	ShadowDistance                     float64     `json:"shadow_distance"`
-	ShadowPoint                        interface{} `json:"shadow_point"`            // {"x":0,"y":0}
-	ShadowSmoothing                    float64     `json:"shadow_smoothing"`
-	ShadowThicknessProjectionAngle     float64     `json:"shadow_thickness_projection_angle"`
-	ShadowThicknessProjectionDistance  float64     `json:"shadow_thickness_projection_distance"`
-	ShadowThicknessProjectionEnable    bool        `json:"shadow_thickness_projection_enable"`
-	ShapeClipX                         bool        `json:"shape_clip_x"`
-	ShapeClipY                         bool        `json:"shape_clip_y"`
-	SingleCharBgAlpha                  float64     `json:"single_char_bg_alpha"`
-	SingleCharBgColor                  string      `json:"single_char_bg_color"`
-	SingleCharBgEnable                 bool        `json:"single_char_bg_enable"`
-	SingleCharBgHeight                 float64     `json:"single_char_bg_height"`
-	SingleCharBgHorizontalOffset       float64     `json:"single_char_bg_horizontal_offset"`
-	SingleCharBgRoundRadius            float64     `json:"single_char_bg_round_radius"`
-	SingleCharBgVerticalOffset         float64     `json:"single_char_bg_vertical_offset"`
-	SingleCharBgWidth                  float64     `json:"single_char_bg_width"`
-	SourceFrom                         string      `json:"source_from"`
-	SSMLContent                        string      `json:"ssml_content"`
-	StyleName                          string      `json:"style_name"`
-	SubTemplateID                      int         `json:"sub_template_id"`         // -1
-	SubType                            int         `json:"sub_type"`
-	SubtitleKeywords                   interface{} `json:"subtitle_keywords"`       // null
-	SubtitleKeywordsConfig             interface{} `json:"subtitle_keywords_config"` // null
-	SubtitleTemplateOriginalFontsize   float64     `json:"subtitle_template_original_fontsize"`
-	TextAlpha                          float64     `json:"text_alpha"`
-	TextColor                          string      `json:"text_color"`
-	TextCurve                          interface{} `json:"text_curve"`              // null
-	TextExceedsPathProcessType         int         `json:"text_exceeds_path_process_type"`
-	TextLoopOnPath                     bool        `json:"text_loop_on_path"`
-	TextPresetResourceID               string      `json:"text_preset_resource_id"`
-	TextSize                           int         `json:"text_size"`               // 字号（pt）
-	TextToAudioIDs                     []interface{} `json:"text_to_audio_ids"`
-	TextTypesettingPathIndex           int         `json:"text_typesetting_path_index"`
-	TextTypesettingPaths               interface{} `json:"text_typesetting_paths"`  // null
-	TextTypesettingPathsFile           string      `json:"text_typesetting_paths_file"`
-	TranslateOriginalText              string      `json:"translate_original_text"`
-	TTSAutoUpdate                      bool        `json:"tts_auto_update"`
-	Type                               string      `json:"type"`                    // "text"
-	Typesetting                        int         `json:"typesetting"`
-	Underline                          bool        `json:"underline"`
-	UnderlineOffset                    float64     `json:"underline_offset"`
-	UnderlineWidth                     float64     `json:"underline_width"`
-	UseEffectDefaultColor              bool        `json:"use_effect_default_color"`
-	Words                              interface{} `json:"words"`                   // {"start_time":[],"end_time":[],"text":[]}
+	AddType                           int           `json:"add_type"`
+	Alignment                         int           `json:"alignment"` // 1=center
+	BackgroundAlpha                   float64       `json:"background_alpha"`
+	BackgroundColor                   string        `json:"background_color"`
+	BackgroundFill                    string        `json:"background_fill"`
+	BackgroundHeight                  float64       `json:"background_height"`
+	BackgroundHorizontalOffset        float64       `json:"background_horizontal_offset"`
+	BackgroundRoundRadius             float64       `json:"background_round_radius"`
+	BackgroundStyle                   int           `json:"background_style"`
+	BackgroundVerticalOffset          float64       `json:"background_vertical_offset"`
+	BackgroundWidth                   float64       `json:"background_width"`
+	BaseContent                       string        `json:"base_content"`
+	BoldWidth                         float64       `json:"bold_width"`
+	BorderAlpha                       float64       `json:"border_alpha"`
+	BorderColor                       string        `json:"border_color"`
+	BorderMode                        int           `json:"border_mode"`
+	BorderWidth                       float64       `json:"border_width"`
+	CaptionTemplateInfo               interface{}   `json:"caption_template_info"` // null
+	CheckFlag                         int           `json:"check_flag"`
+	ComboInfo                         interface{}   `json:"combo_info"` // {"text_templates":[]}
+	Content                           string        `json:"content"`
+	CurrentWords                      interface{}   `json:"current_words"` // {"start_time":[],"end_time":[],"text":[]}
+	CutoffPostfix                     string        `json:"cutoff_postfix"`
+	EnablePathTypesetting             bool          `json:"enable_path_typesetting"`
+	FixedHeight                       float64       `json:"fixed_height"` // -1.0
+	FixedWidth                        float64       `json:"fixed_width"`  // -1.0
+	FontCategoryID                    string        `json:"font_category_id"`
+	FontCategoryName                  string        `json:"font_category_name"`
+	FontID                            string        `json:"font_id"`
+	FontName                          string        `json:"font_name"`
+	FontPath                          string        `json:"font_path"`
+	FontResourceID                    string        `json:"font_resource_id"`
+	FontSize                          float64       `json:"font_size"`
+	FontSourcePlatform                int           `json:"font_source_platform"`
+	FontTeamID                        string        `json:"font_team_id"`
+	FontThirdResourceID               string        `json:"font_third_resource_id"`
+	FontTitle                         string        `json:"font_title"` // "none"
+	FontURL                           string        `json:"font_url"`
+	Fonts                             []interface{} `json:"fonts"`
+	ForceApplyLineMaxWidth            bool          `json:"force_apply_line_max_width"`
+	GlobalAlpha                       float64       `json:"global_alpha"`
+	GroupID                           string        `json:"group_id"`
+	HasShadow                         bool          `json:"has_shadow"`
+	ID                                string        `json:"id"`
+	InitialScale                      float64       `json:"initial_scale"`
+	InnerPadding                      float64       `json:"inner_padding"` // -1.0
+	IsBatchReplace                    bool          `json:"is_batch_replace"`
+	IsLyricEffect                     bool          `json:"is_lyric_effect"`
+	IsRichText                        bool          `json:"is_rich_text"`
+	IsSubtitle                        bool          `json:"is_subtitle"`
+	IsWordsLinear                     bool          `json:"is_words_linear"`
+	ItalicDegree                      int           `json:"italic_degree"`
+	KTVColor                          string        `json:"ktv_color"`
+	Language                          string        `json:"language"`
+	LayerWeight                       int           `json:"layer_weight"`
+	LetterSpacing                     float64       `json:"letter_spacing"`
+	LineFeed                          int           `json:"line_feed"`      // 1
+	LineMaxWidth                      float64       `json:"line_max_width"` // 0.82
+	LineSpacing                       float64       `json:"line_spacing"`
+	LyricGroupID                      string        `json:"lyric_group_id"`
+	LyricsTemplate                    interface{}   `json:"lyrics_template"`        // {"resource_id":"","resource_name":"","panel":"","effect_id":"","path":""}
+	MaterialID                        string        `json:"material_id"`            // 必须与 ID 相同
+	MultiLanguageCurrent              string        `json:"multi_language_current"` // "none"
+	Name                              string        `json:"name"`
+	OffsetOnPath                      float64       `json:"offset_on_path"`
+	OnelineCutoff                     bool          `json:"oneline_cutoff"`
+	OperationType                     int           `json:"operation_type"`
+	OriginalSize                      []interface{} `json:"original_size"`
+	PresetCategory                    string        `json:"preset_category"`
+	PresetCategoryID                  string        `json:"preset_category_id"`
+	PresetHasSetAlignment             bool          `json:"preset_has_set_alignment"`
+	PresetID                          string        `json:"preset_id"`
+	PresetIndex                       int           `json:"preset_index"`
+	PresetName                        string        `json:"preset_name"`
+	PuncModel                         string        `json:"punc_model"`
+	RecognizeModel                    string        `json:"recognize_model"`
+	RecognizeTaskID                   string        `json:"recognize_task_id"`
+	RecognizeText                     string        `json:"recognize_text"`
+	RecognizeType                     int           `json:"recognize_type"`
+	RelevanceSegment                  []interface{} `json:"relevance_segment"`
+	ShadowAlpha                       float64       `json:"shadow_alpha"`
+	ShadowAngle                       float64       `json:"shadow_angle"`
+	ShadowColor                       string        `json:"shadow_color"`
+	ShadowDistance                    float64       `json:"shadow_distance"`
+	ShadowPoint                       interface{}   `json:"shadow_point"` // {"x":0,"y":0}
+	ShadowSmoothing                   float64       `json:"shadow_smoothing"`
+	ShadowThicknessProjectionAngle    float64       `json:"shadow_thickness_projection_angle"`
+	ShadowThicknessProjectionDistance float64       `json:"shadow_thickness_projection_distance"`
+	ShadowThicknessProjectionEnable   bool          `json:"shadow_thickness_projection_enable"`
+	ShapeClipX                        bool          `json:"shape_clip_x"`
+	ShapeClipY                        bool          `json:"shape_clip_y"`
+	SingleCharBgAlpha                 float64       `json:"single_char_bg_alpha"`
+	SingleCharBgColor                 string        `json:"single_char_bg_color"`
+	SingleCharBgEnable                bool          `json:"single_char_bg_enable"`
+	SingleCharBgHeight                float64       `json:"single_char_bg_height"`
+	SingleCharBgHorizontalOffset      float64       `json:"single_char_bg_horizontal_offset"`
+	SingleCharBgRoundRadius           float64       `json:"single_char_bg_round_radius"`
+	SingleCharBgVerticalOffset        float64       `json:"single_char_bg_vertical_offset"`
+	SingleCharBgWidth                 float64       `json:"single_char_bg_width"`
+	SourceFrom                        string        `json:"source_from"`
+	SSMLContent                       string        `json:"ssml_content"`
+	StyleName                         string        `json:"style_name"`
+	SubTemplateID                     int           `json:"sub_template_id"` // -1
+	SubType                           int           `json:"sub_type"`
+	SubtitleKeywords                  interface{}   `json:"subtitle_keywords"`        // null
+	SubtitleKeywordsConfig            interface{}   `json:"subtitle_keywords_config"` // null
+	SubtitleTemplateOriginalFontsize  float64       `json:"subtitle_template_original_fontsize"`
+	TextAlpha                         float64       `json:"text_alpha"`
+	TextColor                         string        `json:"text_color"`
+	TextCurve                         interface{}   `json:"text_curve"` // null
+	TextExceedsPathProcessType        int           `json:"text_exceeds_path_process_type"`
+	TextLoopOnPath                    bool          `json:"text_loop_on_path"`
+	TextPresetResourceID              string        `json:"text_preset_resource_id"`
+	TextSize                          int           `json:"text_size"` // 字号（pt）
+	TextToAudioIDs                    []interface{} `json:"text_to_audio_ids"`
+	TextTypesettingPathIndex          int           `json:"text_typesetting_path_index"`
+	TextTypesettingPaths              interface{}   `json:"text_typesetting_paths"` // null
+	TextTypesettingPathsFile          string        `json:"text_typesetting_paths_file"`
+	TranslateOriginalText             string        `json:"translate_original_text"`
+	TTSAutoUpdate                     bool          `json:"tts_auto_update"`
+	Type                              string        `json:"type"` // "text"
+	Typesetting                       int           `json:"typesetting"`
+	Underline                         bool          `json:"underline"`
+	UnderlineOffset                   float64       `json:"underline_offset"`
+	UnderlineWidth                    float64       `json:"underline_width"`
+	UseEffectDefaultColor             bool          `json:"use_effect_default_color"`
+	Words                             interface{}   `json:"words"` // {"start_time":[],"end_time":[],"text":[]}
 }
 
 // newTextMaterial 构造完整的 ccTextMaterial，填充 CapCut 8.7+ 所需的所有字段默认值。
@@ -863,53 +863,53 @@ func newTextMaterial(name, id, content string, isSubtitle bool, textSize int) cc
 		"text":       []interface{}{},
 	}
 	return ccTextMaterial{
-		AddType:             0,
-		Alignment:           1,
-		BackgroundAlpha:     1.0,
-		BackgroundHeight:    0.14,
-		BackgroundWidth:     0.14,
-		BoldWidth:           0.0,
-		BorderAlpha:         1.0,
-		BorderWidth:         0.06,
-		CheckFlag:           7,
-		ComboInfo:           map[string]interface{}{"text_templates": []interface{}{}},
-		Content:             content,
-		CurrentWords:        wordsObj,
-		FixedHeight:         -1.0,
-		FixedWidth:          -1.0,
-		FontSize:            float64(textSize) / 2.0,
-		FontTitle:           "none",
-		Fonts:               []interface{}{},
-		GlobalAlpha:         1.0,
-		ID:                  id,
-		InnerPadding:        -1.0,
-		IsSubtitle:          isSubtitle,
-		LineFeed:            1,
-		LineMaxWidth:        0.82,
-		LineSpacing:         0.2,
+		AddType:          0,
+		Alignment:        1,
+		BackgroundAlpha:  1.0,
+		BackgroundHeight: 0.14,
+		BackgroundWidth:  0.14,
+		BoldWidth:        0.0,
+		BorderAlpha:      1.0,
+		BorderWidth:      0.06,
+		CheckFlag:        7,
+		ComboInfo:        map[string]interface{}{"text_templates": []interface{}{}},
+		Content:          content,
+		CurrentWords:     wordsObj,
+		FixedHeight:      -1.0,
+		FixedWidth:       -1.0,
+		FontSize:         float64(textSize) / 2.0,
+		FontTitle:        "none",
+		Fonts:            []interface{}{},
+		GlobalAlpha:      1.0,
+		ID:               id,
+		InnerPadding:     -1.0,
+		IsSubtitle:       isSubtitle,
+		LineFeed:         1,
+		LineMaxWidth:     0.82,
+		LineSpacing:      0.2,
 		LyricsTemplate: map[string]interface{}{
 			"resource_id": "", "resource_name": "", "panel": "",
 			"effect_id": "", "path": "", "category_id": "",
 			"category_name": "", "request_id": "",
 		},
-		MaterialID:           id,
-		MultiLanguageCurrent: "none",
-		Name:                 name,
-		OriginalSize:         []interface{}{},
-		RelevanceSegment:     []interface{}{},
-		ShadowAlpha:          0.8,
-		ShadowPoint:          map[string]interface{}{"x": 0.0, "y": 0.0},
-		SingleCharBgAlpha:    1.0,
+		MaterialID:              id,
+		MultiLanguageCurrent:    "none",
+		Name:                    name,
+		OriginalSize:            []interface{}{},
+		RelevanceSegment:        []interface{}{},
+		ShadowAlpha:             0.8,
+		ShadowPoint:             map[string]interface{}{"x": 0.0, "y": 0.0},
+		SingleCharBgAlpha:       1.0,
 		SingleCharBgRoundRadius: 0.3,
-		SubTemplateID:        -1,
-		TextAlpha:            1.0,
-		TextSize:             textSize,
-		TextToAudioIDs:       []interface{}{},
-		Type:                 "text",
-		UnderlineOffset:      0.22,
-		UnderlineWidth:       0.05,
-		UseEffectDefaultColor: true,
-		Words:                wordsObj,
+		SubTemplateID:           -1,
+		TextAlpha:               1.0,
+		TextSize:                textSize,
+		TextToAudioIDs:          []interface{}{},
+		Type:                    "text",
+		UnderlineOffset:         0.22,
+		UnderlineWidth:          0.05,
+		UseEffectDefaultColor:   true,
+		Words:                   wordsObj,
 	}
 }
 
@@ -972,7 +972,7 @@ type ccMaterials struct {
 
 type ccCanvasConfig struct {
 	Height     int         `json:"height"`
-	Ratio      string      `json:"ratio"`      // 字符串形式："16:9"/"9:16"/"1:1"/"4:5"（CapCut 6.x+ 规范要求）
+	Ratio      string      `json:"ratio"` // 字符串形式："16:9"/"9:16"/"1:1"/"4:5"（CapCut 6.x+ 规范要求）
 	Width      int         `json:"width"`
 	Background interface{} `json:"background"` // null（真实草稿要求此字段存在）
 }
@@ -1179,7 +1179,6 @@ type ExportResult struct {
 	ContentType string
 }
 
-
 // aspectRatioDimensions 根据宽高比返回 (width, height)
 func aspectRatioDimensions(ratio string) (int, int) {
 	switch ratio {
@@ -1351,8 +1350,8 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 		}
 	case "box":
 		style["background"] = map[string]interface{}{
-			"alpha": 0.6,
-			"color": map[string]interface{}{"a": 1.0, "b": 0.0, "g": 0.0, "r": 0.0},
+			"alpha":        0.6,
+			"color":        map[string]interface{}{"a": 1.0, "b": 0.0, "g": 0.0, "r": 0.0},
 			"round_radius": 4.0,
 			"style":        2,
 		}
@@ -1441,7 +1440,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	// 四类轨道数据
 	var videoMaterials []ccVideoMaterial
-	videoSegments := []ccSegment{} // 直接初始化为非 nil 空切片：var 声明为 nil，拷贝进 track 后再赋值无法修正
+	videoSegments := []ccSegment{}     // 直接初始化为非 nil 空切片：var 声明为 nil，拷贝进 track 后再赋值无法修正
 	allKFGroups := []ccKeyframeGroup{} // 图片分镜的 Ken Burns 运镜关键帧
 
 	var audioMaterials []ccAudioMaterial
@@ -1456,13 +1455,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	var transitionMaterials []ccTransitionMaterial // 转场素材
 
 	// 伴生素材集合（每个 segment 对应若干条，CapCut 通过 extra_material_refs 引用）
-	var speedsSlice        []ccSpeedMaterial
-	var placeholderSlice   []ccPlaceholderInfo
-	var canvasSlice        []ccCanvasMaterial
-	var soundChannelSlice  []ccSoundChannelMapping
+	var speedsSlice []ccSpeedMaterial
+	var placeholderSlice []ccPlaceholderInfo
+	var canvasSlice []ccCanvasMaterial
+	var soundChannelSlice []ccSoundChannelMapping
 	var materialColorSlice []ccMaterialColor
-	var vocalSepSlice      []ccVocalSeparation
-	var beatsSlice         []ccBeatsMaterial
+	var vocalSepSlice []ccVocalSeparation
+	var beatsSlice []ccBeatsMaterial
 
 	// Bug2修复：按 shot_no 升序排列，确保视频/音频/字幕轨道顺序与分镜编号一致。
 	// 数据库返回顺序不保证有序，直接遍历会导致配音顺序与画面顺序错位。
@@ -1544,21 +1543,21 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			matDuration = 10_800_000_000 // 图片素材 duration 固定为 3 小时，CapCut 按 SourceTimerange 截取实际时长
 		}
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			AIGCType:     "none",
+			AIGCType:                  "none",
 			BeautyFaceAutoPresetInfos: []interface{}{},
 			BeautyFacePresetInfos:     []interface{}{},
-			CategoryName: "local",
-			CheckFlag:    62978047,
-			Crop:         defaultCrop,
-			CropRatio:    "free",
-			CropScale:    1.0,
-			Duration:     matDuration,
-			HasAudio:     false, // AI 生成的视频无内嵌音频轨道；配音通过独立 audio segment 播放
-			Height:       height,
-			ID:           vidMatID,
-			LivePhotoTimestamp: -1,
-			LocalMaterialID: uuid.New().String(),
-			MaterialName: vidFilename,
+			CategoryName:              "local",
+			CheckFlag:                 62978047,
+			Crop:                      defaultCrop,
+			CropRatio:                 "free",
+			CropScale:                 1.0,
+			Duration:                  matDuration,
+			HasAudio:                  false, // AI 生成的视频无内嵌音频轨道；配音通过独立 audio segment 播放
+			Height:                    height,
+			ID:                        vidMatID,
+			LivePhotoTimestamp:        -1,
+			LocalMaterialID:           uuid.New().String(),
+			MaterialName:              vidFilename,
 			Matting: ccMattingData{
 				InteractiveTime: []interface{}{},
 				Strokes:         []interface{}{},
@@ -1581,7 +1580,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		segID := uuid.New().String()
 		seg := ccSegment{
-			Clip: &ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+			Clip:            &ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
 			ID:              segID,
 			MaterialID:      vidMatID,
 			Speed:           1.0,
@@ -1847,8 +1846,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			soundChannelSlice = append(soundChannelSlice, txtSc)
 			txtSeg := ccSegment{
 				Clip: &ccClip{
-					Alpha: 1.0,
-					Scale: ccScale{X: 1.0, Y: 1.0},
+					Alpha:     1.0,
+					Scale:     ccScale{X: 1.0, Y: 1.0},
 					Transform: ccTransform{Y: subtitleTransformY(subCfg.position)},
 				},
 				ID:              uuid.New().String(),
@@ -1917,7 +1916,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if len(bgmSegs) > 0 {
 		// shot 已按 shot_no 升序排列，构建两张快查表（O(1) 查找，避免 O(N²) 嵌套）
 		shotStartMap := make(map[int]int64, len(shots))
-		shotEndMap   := make(map[int]int64, len(shots))
+		shotEndMap := make(map[int]int64, len(shots))
 		var acc int64
 		for _, sh := range shots {
 			shotStartMap[sh.ShotNo] = acc
@@ -2217,23 +2216,23 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	draftMatValues := make([]interface{}, 0, len(draftMatEntries))
 	for _, e := range draftMatEntries {
 		draftMatValues = append(draftMatValues, map[string]interface{}{
-			"ai_group_type": "",
-			"create_time":   now,
-			"duration":      e.duration,
-			"enter_from":    0,
-			"extra_info":    e.filename,
-			"file_Path":     e.filename,
-			"height":        e.height,
-			"id":            uuid.New().String(),
-			"import_time":   now,
-			"import_time_ms": nowMicros,
-			"item_source":   1,
-			"md5":           "",
-			"metetype":      e.metetype,
+			"ai_group_type":       "",
+			"create_time":         now,
+			"duration":            e.duration,
+			"enter_from":          0,
+			"extra_info":          e.filename,
+			"file_Path":           e.filename,
+			"height":              e.height,
+			"id":                  uuid.New().String(),
+			"import_time":         now,
+			"import_time_ms":      nowMicros,
+			"item_source":         1,
+			"md5":                 "",
+			"metetype":            e.metetype,
 			"roughcut_time_range": map[string]interface{}{"duration": e.duration, "start": int64(0)},
 			"sub_time_range":      map[string]interface{}{"duration": int64(-1), "start": int64(-1)},
-			"type":          0,
-			"width":         e.width,
+			"type":                0,
+			"width":               e.width,
 		})
 	}
 	draftMaterials := []interface{}{
@@ -2247,22 +2246,22 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	meta := ccMetaInfo{
-		DraftCover:               draftCoverName,
-		DraftEnterpriseInfo:      ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
-		DraftID:                  draftID,
-		DraftIsFromDeeplink:      "false",
-		DraftMaterials:           draftMaterials,
-		DraftMaterialsCopiedInfo: []interface{}{},
-		DraftName:                video.Title,
-		DraftNewVersion:          "",
-		DraftSegmentExtraInfo:    []interface{}{},
-		TmDraftCloudEntryID:      -1,
+		DraftCover:                draftCoverName,
+		DraftEnterpriseInfo:       ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
+		DraftID:                   draftID,
+		DraftIsFromDeeplink:       "false",
+		DraftMaterials:            draftMaterials,
+		DraftMaterialsCopiedInfo:  []interface{}{},
+		DraftName:                 video.Title,
+		DraftNewVersion:           "",
+		DraftSegmentExtraInfo:     []interface{}{},
+		TmDraftCloudEntryID:       -1,
 		TmDraftCloudParentEntryID: -1,
-		TmDraftCloudSpaceID:      -1,
-		TmDraftCloudUserID:       -1,
-		TmDraftCreate:            nowMicros,
-		TmDraftModify:            nowMicros,
-		TmDuration:               totalDuration,
+		TmDraftCloudSpaceID:       -1,
+		TmDraftCloudUserID:        -1,
+		TmDraftCreate:             nowMicros,
+		TmDraftModify:             nowMicros,
+		TmDuration:                totalDuration,
 	}
 
 	contentJSON, err := json.MarshalIndent(content, "", "  ")
@@ -2492,13 +2491,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	var annSegments []ccSegment
 
 	// 伴生素材集合（ExportBRollDraft 与 ExportCapCutDraft 共用相同的伴生素材逻辑）
-	var brollSpeedsSlice        []ccSpeedMaterial
-	var brollPlaceholderSlice   []ccPlaceholderInfo
-	var brollCanvasSlice        []ccCanvasMaterial
-	var brollSoundChannelSlice  []ccSoundChannelMapping
+	var brollSpeedsSlice []ccSpeedMaterial
+	var brollPlaceholderSlice []ccPlaceholderInfo
+	var brollCanvasSlice []ccCanvasMaterial
+	var brollSoundChannelSlice []ccSoundChannelMapping
 	var brollMaterialColorSlice []ccMaterialColor
-	var brollVocalSepSlice      []ccVocalSeparation
-	var brollBeatsSlice         []ccBeatsMaterial
+	var brollVocalSepSlice []ccVocalSeparation
+	var brollBeatsSlice []ccBeatsMaterial
 
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
@@ -2553,21 +2552,21 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		})
 
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			AIGCType:     "none",
+			AIGCType:                  "none",
 			BeautyFaceAutoPresetInfos: []interface{}{},
 			BeautyFacePresetInfos:     []interface{}{},
-			CategoryName: "local",
-			CheckFlag:    62978047,
-			Crop:         defaultCrop,
-			CropRatio:    "free",
-			CropScale:    1.0,
-			Duration:     10_800_000_000, // 图片素材固定 3 小时
-			HasAudio:     false,
-			Height:       height,
-			ID:           vidMatID,
-			LivePhotoTimestamp: -1,
-			LocalMaterialID: uuid.New().String(),
-			MaterialName: vidFilename,
+			CategoryName:              "local",
+			CheckFlag:                 62978047,
+			Crop:                      defaultCrop,
+			CropRatio:                 "free",
+			CropScale:                 1.0,
+			Duration:                  10_800_000_000, // 图片素材固定 3 小时
+			HasAudio:                  false,
+			Height:                    height,
+			ID:                        vidMatID,
+			LivePhotoTimestamp:        -1,
+			LocalMaterialID:           uuid.New().String(),
+			MaterialName:              vidFilename,
 			Matting: ccMattingData{
 				InteractiveTime: []interface{}{},
 				Strokes:         []interface{}{},
@@ -2732,8 +2731,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			brollSoundChannelSlice = append(brollSoundChannelSlice, bsubSc)
 			bsubSeg := ccSegment{
 				Clip: &ccClip{
-					Alpha: 1.0,
-					Scale: ccScale{X: 1.0, Y: 1.0},
+					Alpha:     1.0,
+					Scale:     ccScale{X: 1.0, Y: 1.0},
 					Transform: ccTransform{Y: subtitleTransformY(subCfg.position)},
 				},
 				ID:              uuid.New().String(),
@@ -2776,8 +2775,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		brollSoundChannelSlice = append(brollSoundChannelSlice, bannSc)
 		bannSeg := ccSegment{
 			Clip: &ccClip{
-				Alpha: 1.0,
-				Scale: ccScale{X: 1.0, Y: 1.0},
+				Alpha:     1.0,
+				Scale:     ccScale{X: 1.0, Y: 1.0},
 				Transform: ccTransform{Y: subtitleTransformY("top")},
 			},
 			ID:              uuid.New().String(),
@@ -3022,23 +3021,23 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	brollDraftMatValues := make([]interface{}, 0, len(draftMatEntries))
 	for _, e := range draftMatEntries {
 		brollDraftMatValues = append(brollDraftMatValues, map[string]interface{}{
-			"ai_group_type": "",
-			"create_time":   now,
-			"duration":      e.duration,
-			"enter_from":    0,
-			"extra_info":    e.filename,
-			"file_Path":     e.filename,
-			"height":        e.height,
-			"id":            uuid.New().String(),
-			"import_time":   now,
-			"import_time_ms": nowMicros,
-			"item_source":   1,
-			"md5":           "",
-			"metetype":      e.metetype,
+			"ai_group_type":       "",
+			"create_time":         now,
+			"duration":            e.duration,
+			"enter_from":          0,
+			"extra_info":          e.filename,
+			"file_Path":           e.filename,
+			"height":              e.height,
+			"id":                  uuid.New().String(),
+			"import_time":         now,
+			"import_time_ms":      nowMicros,
+			"item_source":         1,
+			"md5":                 "",
+			"metetype":            e.metetype,
 			"roughcut_time_range": map[string]interface{}{"duration": e.duration, "start": int64(0)},
 			"sub_time_range":      map[string]interface{}{"duration": int64(-1), "start": int64(-1)},
-			"type":          0,
-			"width":         e.width,
+			"type":                0,
+			"width":               e.width,
 		})
 	}
 	brollDraftMaterials := []interface{}{
@@ -3052,22 +3051,22 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	}
 
 	meta := ccMetaInfo{
-		DraftCover:               brollCoverName,
-		DraftEnterpriseInfo:      ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
-		DraftID:                  draftID,
-		DraftIsFromDeeplink:      "false",
-		DraftMaterials:           brollDraftMaterials,
-		DraftMaterialsCopiedInfo: []interface{}{},
-		DraftName:                video.Title + " (B剪)",
-		DraftNewVersion:          "",
-		DraftSegmentExtraInfo:    []interface{}{},
-		TmDraftCloudEntryID:      -1,
+		DraftCover:                brollCoverName,
+		DraftEnterpriseInfo:       ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
+		DraftID:                   draftID,
+		DraftIsFromDeeplink:       "false",
+		DraftMaterials:            brollDraftMaterials,
+		DraftMaterialsCopiedInfo:  []interface{}{},
+		DraftName:                 video.Title + " (B剪)",
+		DraftNewVersion:           "",
+		DraftSegmentExtraInfo:     []interface{}{},
+		TmDraftCloudEntryID:       -1,
 		TmDraftCloudParentEntryID: -1,
-		TmDraftCloudSpaceID:      -1,
-		TmDraftCloudUserID:       -1,
-		TmDraftCreate:            nowMicros,
-		TmDraftModify:            nowMicros,
-		TmDuration:               totalDuration,
+		TmDraftCloudSpaceID:       -1,
+		TmDraftCloudUserID:        -1,
+		TmDraftCreate:             nowMicros,
+		TmDraftModify:             nowMicros,
+		TmDuration:                totalDuration,
 	}
 
 	contentJSON, err := json.MarshalIndent(content, "", "  ")
@@ -3523,18 +3522,19 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 
 // shotJSONMeta 素材包 shots.json 中每镜元数据
 type shotJSONMeta struct {
-	ShotNo      int     `json:"shot_no"`
-	Description string  `json:"description"`
-	Dialogue    string  `json:"dialogue"`
-	Narration   string  `json:"narration"`
-	Duration    float64 `json:"duration"`
-	VideoFile   string  `json:"video_file,omitempty"`
-	ImageFile   string  `json:"image_file,omitempty"`
-	AudioFile   string  `json:"audio_file,omitempty"`
+	ShotNo      int      `json:"shot_no"`
+	Description string   `json:"description"`
+	Dialogue    string   `json:"dialogue"`
+	Narration   string   `json:"narration"`
+	Duration    float64  `json:"duration"`
+	VideoFile   string   `json:"video_file,omitempty"`
+	ImageFile   string   `json:"image_file,omitempty"`
+	AudioFile   string   `json:"audio_file,omitempty"`
+	SFXFiles    []string `json:"sfx_files,omitempty"`
 }
 
 // ExportResourceZip 导出素材包 ZIP（图片/视频 + 音频 + SRT + shots.json，可用于任意剪辑软件）
-func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot) (retResult *ExportResult, retErr error) {
+func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot, bgmSegs []*model.VideoBGMSegment) (retResult *ExportResult, retErr error) {
 	exportStart := time.Now()
 	defer func() {
 		status := "success"
@@ -3638,7 +3638,50 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 			}
 		}
 
+		// 音效：从 ShotSFXItem 加载（P2-4 同一总量上限内一并计入）
+		if s.sfxItemRepo != nil {
+			items, sfxErr := s.sfxItemRepo.ListByShotID(shot.ID)
+			if sfxErr == nil {
+				for _, item := range items {
+					if item.Disabled || item.URL == "" {
+						continue
+					}
+					if data, rdErr := s.resolveMedia(item.URL); rdErr == nil && len(data) > 0 {
+						if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+							logger.Printf("[ExportResourceZip] ShotSFXItem: total media exceeds 2GiB, skipping shot %d sfx %d", shot.ShotNo, item.SeqNo)
+							break
+						}
+						zipLoadedBytes += int64(len(data))
+						ext := audioExtension(item.URL)
+						filename := fmt.Sprintf("%03d_sfx%02d%s", shot.ShotNo, item.SeqNo, ext)
+						if e := writeZip("sfx/"+filename, data); e == nil {
+							meta.SFXFiles = append(meta.SFXFiles, "sfx/"+filename)
+						}
+					}
+				}
+			}
+		}
+
 		metas = append(metas, meta)
+	}
+
+	// BGM：从 VideoBGMSegment 加载（视频级音轨，不属于任何单个分镜）
+	for _, seg := range bgmSegs {
+		if seg == nil || seg.Disabled || seg.URL == "" {
+			continue
+		}
+		if data, rdErr := s.resolveMedia(seg.URL); rdErr == nil && len(data) > 0 {
+			if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+				logger.Printf("[ExportResourceZip] BGMSegment: total media exceeds 2GiB, skipping seg %d", seg.SeqNo)
+				break
+			}
+			zipLoadedBytes += int64(len(data))
+			ext := audioExtension(seg.URL)
+			filename := fmt.Sprintf("seg%02d%s", seg.SeqNo, ext)
+			if e := writeZip("bgm/"+filename, data); e != nil {
+				return nil, fmt.Errorf("write bgm/%s: %w", filename, e)
+			}
+		}
 	}
 
 	// shots.json
@@ -3676,6 +3719,97 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		ContentType: "application/zip",
 	}
 	logger.Printf("[CapCutService] ExportResourceZip done: filename=%s size=%d", result.Filename, len(result.Data))
+	return result, nil
+}
+
+// ExportShotSlices 导出"分镜切片"：每个分镜的渲染成片（视频/图片）独立打包为 zip，
+// 不含配音/音效/BGM/元数据——供只需要按分镜拆开重新剪辑画面的场景使用。
+// 与 ExportResourceZip（"素材"模式，含全部音视频素材+shots.json+字幕）是两种不同粒度的导出，
+// 不要合并实现，以免其中一种需求变化时误改到另一种。
+func (s *CapCutService) ExportShotSlices(video *model.Video, shots []*model.StoryboardShot) (retResult *ExportResult, retErr error) {
+	exportStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ExportCapCutTotal.WithLabelValues("shots", status).Inc()
+		metrics.ExportCapCutDuration.WithLabelValues("shots").Observe(time.Since(exportStart).Seconds())
+	}()
+	logger.Printf("[CapCutService] ExportShotSlices: videoID=%d shots=%d", video.ID, len(shots))
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	zipFile, err := os.CreateTemp("", "inkframe-shots-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("create temp zip file: %w", err)
+	}
+	zipFilePath := zipFile.Name()
+	defer os.Remove(zipFilePath)
+
+	zw := zip.NewWriter(zipFile)
+	writeZip := func(name string, data []byte) error {
+		w, e := zw.Create(name)
+		if e != nil {
+			return e
+		}
+		_, e = w.Write(data)
+		return e
+	}
+
+	var zipLoadedBytes int64
+	for _, shot := range shots {
+		vidSrc, _ := shotVideoSource(shot)
+		if vidSrc != "" {
+			filename := fmt.Sprintf("%03d.mp4", shot.ShotNo)
+			if data, err := s.resolveMedia(vidSrc); err == nil && len(data) > 0 {
+				if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+					logger.Printf("[ExportShotSlices] P2-4: total media exceeds 2GiB, skipping shot %d video", shot.ShotNo)
+					continue
+				}
+				zipLoadedBytes += int64(len(data))
+				if e := writeZip(filename, data); e != nil {
+					return nil, fmt.Errorf("write %s: %w", filename, e)
+				}
+			}
+		} else if shot.ImageURL != "" {
+			filename := fmt.Sprintf("%03d.jpg", shot.ShotNo)
+			if data, err := s.resolveMedia(shot.ImageURL); err == nil && len(data) > 0 {
+				if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+					logger.Printf("[ExportShotSlices] P2-4: total media exceeds 2GiB, skipping shot %d image", shot.ShotNo)
+					continue
+				}
+				zipLoadedBytes += int64(len(data))
+				if e := writeZip(filename, data); e != nil {
+					return nil, fmt.Errorf("write %s: %w", filename, e)
+				}
+			}
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		zipFile.Close()
+		logger.Errorf("[CapCutService] ExportShotSlices: close zip failed: %v", err)
+		return nil, fmt.Errorf("close zip: %w", err)
+	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
+
+	zipData, err := os.ReadFile(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
+	result := &ExportResult{
+		Data:        zipData,
+		Filename:    projectName + "_shots.zip",
+		ContentType: "application/zip",
+	}
+	logger.Printf("[CapCutService] ExportShotSlices done: filename=%s size=%d", result.Filename, len(result.Data))
 	return result, nil
 }
 
@@ -3898,10 +4032,10 @@ func newVocalSeparation() ccVocalSeparation {
 // newBeatsMaterial 创建 beats 伴生素材（audio segment 专用）
 func newBeatsMaterial() ccBeatsMaterial {
 	return ccBeatsMaterial{
-		ID:    uuid.New().String(),
-		Type:  "beats",
-		Gear:  404,
-		Mode:  404,
+		ID:        uuid.New().String(),
+		Type:      "beats",
+		Gear:      404,
+		Mode:      404,
 		UserBeats: []interface{}{},
 		AIBeats:   ccAIBeats{MelodyPercents: []float64{0.0}, BeatSpeedInfos: []interface{}{}},
 	}

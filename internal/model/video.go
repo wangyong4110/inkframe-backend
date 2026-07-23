@@ -261,15 +261,17 @@ func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
 		Alias
 		// flatten CamDir
-		CameraType    string `json:"camera_type,omitempty"`
-		EmotionalTone string `json:"emotional_tone,omitempty"`
-		Transition    string `json:"transition,omitempty"`
-		TransitionOut string `json:"transition_out,omitempty"`
-		TransitionIn  string `json:"transition_in,omitempty"`
+		// 注意：不能加 omitempty——清空这些字段后（如清空台词）后端会存入空字符串，
+		// 若序列化时省略该 key，前端会把"缺失字段"误判为"未变化"，导致清空后又显示回旧值。
+		CameraType    string `json:"camera_type"`
+		EmotionalTone string `json:"emotional_tone"`
+		Transition    string `json:"transition"`
+		TransitionOut string `json:"transition_out"`
+		TransitionIn  string `json:"transition_in"`
 		// flatten GenMeta
-		SFXTags  string `json:"sfx_tags,omitempty"`
-		Dialogue string `json:"dialogue,omitempty"`
-		Subtitle string `json:"subtitle,omitempty"`
+		SFXTags  string `json:"sfx_tags"`
+		Dialogue string `json:"dialogue"`
+		Subtitle string `json:"subtitle"`
 	}{
 		Alias:         (Alias)(s),
 		CameraType:    s.CamDir.CameraType,
