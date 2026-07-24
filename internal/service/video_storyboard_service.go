@@ -98,14 +98,36 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 
 	// Prevent concurrent storyboard generation for the same video — across instances via Redis SETNX.
 	// This is a mutual-exclusion lock (a different concern from cancellation, which now flows through ctx).
+	//
+	// Lease + heartbeat instead of a single long TTL: a fixed 30min TTL meant that if the process
+	// crashed or was restarted mid-generation, the deferred Del() never ran and the lock stayed
+	// orphaned for up to 30 minutes, permanently blocking retries until it expired. Using a short
+	// TTL that's continuously renewed while this goroutine is alive means a crash/restart releases
+	// the lock within one lease period instead of up to 30 minutes, while still correctly blocking a
+	// genuinely concurrent generation for the same video.
 	if s.cache != nil {
 		redisKey := lockKey("storyboard", "gen", videoID)
-		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
+		const leaseTTL = 45 * time.Second
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", leaseTTL).Result()
 		if err == nil {
 			if !ok {
 				metrics.StoryboardGenerationTotal.WithLabelValues("conflict").Inc()
 				return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
 			}
+			renewDone := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(leaseTTL / 3)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-renewDone:
+						return
+					case <-ticker.C:
+						s.cache.Expire(context.Background(), redisKey, leaseTTL)
+					}
+				}
+			}()
+			defer close(renewDone)
 			defer s.cache.Del(context.Background(), redisKey)
 		}
 		// err != nil: Redis unavailable, fall through without the distributed lock
@@ -1477,6 +1499,8 @@ func calcTotalShots(totalRunes int, videoMode, storyboardMode string) int {
 		// 简洁模式：只保留 major 节拍生成分镜，目标镜头数下调至约一半，避免下游为凑数而拆细次要情节
 		n = n * 5 / 10
 	}
+	// 整体分镜数下调至约一半，避免剧情过于拖沓
+	n = n / 2
 	if n < 5 {
 		n = 5
 	}
