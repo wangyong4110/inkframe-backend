@@ -474,6 +474,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/screenplay/generate-full", cfg.ScreenplayHandler.GenerateScreenplayFull)
 			chapters.GET("/:id/screenplay", cfg.ScreenplayHandler.ListScreenplayScenes)
 			chapters.GET("/:id/screenplay/export", cfg.ScreenplayHandler.ExportScreenplay)
+			chapters.GET("/:id/screenplay/storyboard-export", cfg.ScreenplayHandler.ExportScreenplayStoryboard)
 
 			// 大纲审查
 			if cfg.OutlineReviewHandler != nil {

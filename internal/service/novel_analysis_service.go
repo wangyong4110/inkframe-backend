@@ -19,7 +19,6 @@ import (
 // AnalysisTask 分析任务状态（线程安全，仅作 goroutine 内部追踪）
 type AnalysisTask struct {
 	NovelID        uint               `json:"novel_id"`
-	CreateOutlines bool               `json:"-"`
 	cancel         context.CancelFunc `json:"-"`
 	taskSvc        *TaskService       `json:"-"` // 统一任务服务（可为 nil，降级为纯内存模式）
 	externalTaskID string             `json:"-"` // TaskService 分配的 task_id
@@ -175,7 +174,6 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 		Status:         model.StatusPending,
 		Progress:       0,
 		Step:           "准备中",
-		CreateOutlines: createOutlines,
 		cancel:         cancel,
 		taskSvc:        s.taskSvc,
 		externalTaskID: externalTaskID,
@@ -205,7 +203,6 @@ func (s *NovelAnalysisService) ResumeAnalysis(t *model.AsyncTask, createOutlines
 		Status:         model.StatusPending,
 		Progress:       0,
 		Step:           "恢复中...",
-		CreateOutlines: createOutlines,
 		cancel:         cancel,
 		taskSvc:        s.taskSvc,
 		externalTaskID: t.TaskID,

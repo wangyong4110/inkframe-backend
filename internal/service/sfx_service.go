@@ -59,8 +59,8 @@ type SFXService struct {
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
 	queryCache       sync.Map          // "source:query" → sfxCacheEntry（进程内二级缓存）
-	elevenLabsSem    chan struct{}      // 限制 ElevenLabs 并发数（免费版最多 4 路）
-	aiSfxSem         chan struct{}      // 限制 AI 文生音效（Kling 等）并发数，避免触发资源包超限
+	elevenLabsSem    chan struct{}     // 限制 ElevenLabs 并发数（免费版最多 4 路）
+	aiSfxSem         chan struct{}     // 限制 AI 文生音效（Kling 等）并发数，避免触发资源包超限
 	cache            *redis.Client     // optional: shared query cache across instances
 }
 
@@ -141,18 +141,18 @@ func buildDefaultSFXLib() map[string]string {
 		"river_flowing":  "river_flowing.wav",
 		"fire_crackle":   "fire_crackle.wav",
 		// 环境音 — 室内/城市
-		"crowd_outdoor":  "crowd_outdoor.wav",
-		"crowd_indoor":   "crowd_indoor.wav",
-		"crowd_murmur":   "crowd_murmur.wav",
-		"city_ambient":   "city_ambient.wav",
-		"ambient_room":   "ambient_room.wav",
+		"crowd_outdoor": "crowd_outdoor.wav",
+		"crowd_indoor":  "crowd_indoor.wav",
+		"crowd_murmur":  "crowd_murmur.wav",
+		"city_ambient":  "city_ambient.wav",
+		"ambient_room":  "ambient_room.wav",
 		// 动作音 — 武侠/战斗
-		"sword_clash":       "sword_clash.wav",
-		"sword_draw":        "sword_draw.wav",
-		"arrow_whoosh":      "arrow_whoosh.wav",
-		"explosion":         "explosion.wav",
-		"punch_impact":      "punch_impact.wav",
-		"horse_gallop":      "horse_gallop.wav",
+		"sword_clash":  "sword_clash.wav",
+		"sword_draw":   "sword_draw.wav",
+		"arrow_whoosh": "arrow_whoosh.wav",
+		"explosion":    "explosion.wav",
+		"punch_impact": "punch_impact.wav",
+		"horse_gallop": "horse_gallop.wav",
 		// 动作音 — 日常
 		"footsteps_stone":   "footsteps_stone.wav",
 		"footsteps_running": "footsteps_running.wav",
@@ -288,8 +288,8 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	if maxDur <= 0 {
 		maxDur = 0
 	}
-	hasSpeech := shot.GenMeta.Dialogue != ""
-	hasNarration := shot.Narration != ""
+	hasSpeech := shot.Dialogue() != ""
+	hasNarration := shot.Narration() != ""
 
 	// 2. 逐 tag 搜索
 	type sfxResult struct {
@@ -724,7 +724,7 @@ func sceneKeyOf(shot *model.StoryboardShot) string {
 // --- 内部方法 ---
 
 // buildShotAIPrompt 从分镜字段构建中文自然语言描述，供 AI 文生音效提供商（Kling SFX / ElevenLabs）使用。
-// 包含场景环境、画面描述和情绪基调，最多 200 个字符。
+// 包含场景环境和画面描述，最多 200 个字符。
 func buildShotAIPrompt(shot *model.StoryboardShot) string {
 	var parts []string
 	if shot.GenMeta.Scene != "" {
@@ -737,9 +737,6 @@ func buildShotAIPrompt(shot *model.StoryboardShot) string {
 		}
 		parts = append(parts, string(runes))
 	}
-	if shot.CamDir.EmotionalTone != "" {
-		parts = append(parts, shot.CamDir.EmotionalTone)
-	}
 	prompt := strings.Join(parts, "。")
 	if prompt == "" {
 		return ""
@@ -751,10 +748,10 @@ func buildShotAIPrompt(shot *model.StoryboardShot) string {
 	return prompt
 }
 
-// fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。
+// fallbackTags 基于规则从描述 / 场景 / 镜头类型推断标签（LLM 不可用时的降级）。
 // 格式：[物体/声源] [动作/质感]，不含 loop / single 等描述符。
 func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
-	desc := strings.ToLower(shot.Description + " " + shot.CamDir.EmotionalTone + " " + shot.GenMeta.Scene + " " + shot.Narration)
+	desc := strings.ToLower(shot.Description + " " + shot.GenMeta.Scene + " " + shot.Narration())
 	// [中文关键词] → [Freesound 有效搜索词]
 	rules := [][2]string{
 		// 天气/自然环境

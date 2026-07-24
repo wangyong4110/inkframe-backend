@@ -34,10 +34,7 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	if shot.GenMeta.Scene != "" {
 		fmt.Fprintf(&sceneCtx, "场景环境：%s\n", shot.GenMeta.Scene)
 	}
-	if shot.CamDir.EmotionalTone != "" {
-		fmt.Fprintf(&sceneCtx, "情绪基调：%s\n", shot.CamDir.EmotionalTone)
-	}
-	if shot.GenMeta.Dialogue != "" {
+	if shot.Dialogue() != "" {
 		fmt.Fprintf(&sceneCtx, "⚠️ 含对白：所有音效必须为 subtle，禁止任何冲击/爆发音，人声频段（300Hz–3kHz）绝对不可遮蔽\n")
 	}
 	if userContext != "" {

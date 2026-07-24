@@ -1657,10 +1657,8 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				CamDir: model.ShotCamDir{
 					CameraType: string(shot.CameraMovement),
 				},
-				GenMeta: model.ShotGenMeta{
-					Dialogue: shot.Dialogue,
-				},
 			}
+			dbShot.SetDialogue(shot.Dialogue)
 			if s.storyboardRepo != nil {
 				if err := s.storyboardRepo.Create(dbShot); err != nil {
 					logger.Errorf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)

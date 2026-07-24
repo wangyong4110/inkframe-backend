@@ -127,7 +127,13 @@ func (s *ScreenplayService) ExportScenesDocx(title string, scenes []*model.Scree
 	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 		`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
 		body.String() + `<w:sectPr/></w:body></w:document>`
+	return buildMinimalDocx(documentXML)
+}
 
+// buildMinimalDocx 把已拼好的 word/document.xml 打包成最小合法 docx（zip 包含
+// [Content_Types].xml + _rels/.rels + word/document.xml 三个部分），供所有需要导出
+// docx 的场景（分场剧本、分镜脚本等）共用。
+func buildMinimalDocx(documentXML string) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	// 固定写入顺序，保证同样输入产出确定性的字节流，方便测试对比。

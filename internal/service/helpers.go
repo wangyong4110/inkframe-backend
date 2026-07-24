@@ -1,8 +1,6 @@
 package service
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -213,26 +211,6 @@ func countChineseChars(text string) int {
 		}
 	}
 	return count
-}
-
-// sanitizeStorageName strips unsafe characters and limits length to 64 runes.
-func sanitizeStorageName(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_':
-			b.WriteRune(r)
-		case r == ' ':
-			b.WriteRune('_')
-		case r >= 0x4E00 && r <= 0x9FFF: // CJK Unified Ideographs
-			b.WriteRune(r)
-		}
-	}
-	runes := []rune(b.String())
-	if len(runes) > 64 {
-		runes = runes[:64]
-	}
-	return string(runes)
 }
 
 // extractJSONAuto picks the right extractor based on whether the AI response is an object or
@@ -517,15 +495,5 @@ func insertMissingCommasJSON(s string) string {
 		i++
 	}
 	return buf.String()
-}
-
-// unmarshalAIJSON extracts JSON from an AI response string and unmarshals it into T.
-func unmarshalAIJSON[T any](raw string) (*T, error) {
-	cleaned := extractJSON(strings.TrimSpace(raw))
-	var result T
-	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		return nil, fmt.Errorf("unmarshalAIJSON: %w (raw: %s)", err, cleaned[:min(200, len(cleaned))])
-	}
-	return &result, nil
 }
 

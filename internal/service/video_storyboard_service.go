@@ -64,14 +64,6 @@ func splitBeatLines(beats string) []string {
 	return lines
 }
 
-// validEmotionalTones 是 storyboard_generate.j2 中 emotional_tone 字段的合法值集合。
-// AI 偶尔会输出列表外的值（如英文词或自创词），校验后统一回落到"平静"。
-var validEmotionalTones = map[string]bool{
-	"平静": true, "悲伤": true, "紧张": true, "愤怒": true, "喜悦": true,
-	"浪漫": true, "惊恐": true, "压抑": true, "释怀": true, "悬疑": true,
-	"振奋": true, "恐惧": true, "得意": true, "讽刺": true, "留白": true,
-}
-
 // beatSheetItem 是从 storyboard_beat.j2 解析出的单个情节节拍
 type beatSheetItem struct {
 	No             int      `json:"no"`
@@ -379,7 +371,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	var autoScenes []*model.ScreenplayScene
 	var beatSheetItems []beatSheetItem
 	if needBeatSheet {
-		totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
+		totalShots = calcTotalShots(totalRunes, video.Mode, video.StoryboardMode)
 	}
 	{
 		var wg sync.WaitGroup
@@ -474,7 +466,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 		// 仅当"本应自动生成分场剧本但失败"（needAutoGenScreenplay=true 却 usedScreenplay=false）
 		// 这一少见的兜底场景下才会走到这里补算，此时退化为串行调用，不影响常规路径的并发收益。
 		if !needBeatSheet {
-			totalShots = calcTotalShots(totalRunes, video.StoryboardMode)
+			totalShots = calcTotalShots(totalRunes, video.Mode, video.StoryboardMode)
 			// P1a: 情节节拍表（Beat Sheet）——提取章节中每一个可视化叙事单元，
 			// 注入到各 segment prompt 中，确保分镜逐拍覆盖原文情节，防止"平均主义"跳跃。
 			beatSheetItems = s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots, video.Mode)
@@ -921,6 +913,20 @@ func (s *VideoService) GetVideoByChapterID(tenantID, chapterID uint) (*model.Vid
 	return video, nil
 }
 
+// FindVideoByChapterID 按章节 id 查找其关联的视频项目；与 GetVideoByChapterID 不同，不存在时
+// 返回 (nil, nil) 而不是自动创建——供导出等只读场景使用，避免产生"点一下导出就多建了一个空视频
+// 项目"的副作用。
+func (s *VideoService) FindVideoByChapterID(tenantID, chapterID uint) (*model.Video, error) {
+	videos, _, err := s.videoRepo.List(nil, &chapterID, "", tenantID, 1, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(videos) > 0 {
+		return videos[0], nil
+	}
+	return nil, nil
+}
+
 // GetVideoIDForScreenplayScene 供 handler 在创建异步任务前解析场次归属的视频 id
 // （任务记录需要一个明确的 entity_id，才能像整视频分镜生成一样支持 /videos/:id/progress 轮询）。
 func (s *VideoService) GetVideoIDForScreenplayScene(tenantID, sceneID uint) (uint, error) {
@@ -1296,7 +1302,7 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 			continue
 		}
 		// ② narration 关键词扫描
-		if tryAnchor(shot.Narration) {
+		if tryAnchor(shot.Narration()) {
 			matchCount++
 			logger.Printf("[AutoMatch] scene: shot#%d narration match → anchorID=%d", shot.ShotNo, *shot.SceneAnchorID)
 			continue
@@ -1312,8 +1318,7 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 	logger.Printf("[AutoMatch] scene: matched %d/%d shots", matchCount, len(shots))
 }
 
-// autoMatchShotCharacters 按多来源匹配小说角色，写入 CharacterIDs。
-// 匹配优先级：① shot.Characters JSON（LLM明确列出的视觉在场角色）→ ② shot.GenMeta.Dialogue "角色名：台词"。
+// autoMatchShotCharacters 按 shot.GenMeta.Dialogue "角色名：台词" 匹配小说角色，写入 CharacterIDs。
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
 	if len(chars) == 0 {
@@ -1360,51 +1365,30 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 		var matched model.JSONUintSlice
 		seen := make(map[uint]bool)
 
-		// ① Characters JSON: [{"name":"..."}]
-		if shot.GenMeta.Characters != "" {
-			var shotChars []struct {
-				Name string `json:"name"`
-			}
-			if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil {
-				for _, sc := range shotChars {
-					tryMatch(sc.Name, seen, &matched)
-				}
-			} else {
-				logger.Printf("[AutoMatch] char: shot#%d Characters JSON parse err: %v (raw=%q)", shot.ShotNo, err, shot.GenMeta.Characters)
+		// 台词行的 character 字段即精确说话角色名，无需再从文本中解析
+		for _, l := range shot.VoiceLines() {
+			if l.Character != "" && len([]rune(l.Character)) <= 10 { // 合理的角色名长度
+				tryMatch(l.Character, seen, &matched)
 			}
 		}
 
-		// ② Dialogue: "角色名：台词" — 提取冒号前的角色名
-		if len(matched) == 0 && shot.GenMeta.Dialogue != "" {
-			for _, sep := range []string{"：", ":"} {
-				if idx := strings.Index(shot.GenMeta.Dialogue, sep); idx > 0 {
-					name := shot.GenMeta.Dialogue[:idx]
-					if len([]rune(name)) <= 10 { // 合理的角色名长度
-						tryMatch(name, seen, &matched)
-					}
-					break
-				}
-			}
-		}
-
-		// ③ Narration 和 Description 扫描已移除：
+		// Narration 和 Description 扫描不用于匹配：
 		// 旁白/描述中提到角色名（"三年前他来过这里"）≠ 该角色在画面中出现。
 		// 用旁白扫描匹配会导致角色参考图被错误地注入到空景/环境镜头，产生"幽灵角色"。
-		// CharacterIDs 只应来源于 LLM 明确填写的 characters[] 字段（①）和对白说话角色（②）。
+		// CharacterIDs 只应来源于对白说话角色。
 
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched
 			charMatchCount++
-			logger.Printf("[AutoMatch] char: shot#%d → charIDs=%v (chars_json=%q)", shot.ShotNo, []uint(matched), shot.GenMeta.Characters)
+			logger.Printf("[AutoMatch] char: shot#%d → charIDs=%v", shot.ShotNo, []uint(matched))
 		} else {
-			logger.Printf("[AutoMatch] char: shot#%d no match (chars_json=%q)", shot.ShotNo, shot.GenMeta.Characters)
+			logger.Printf("[AutoMatch] char: shot#%d no match", shot.ShotNo)
 		}
 	}
 	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
 }
 
-// autoMatchShotItems 按多来源匹配小说道具，写入 ItemIDs。
-// 优先级：① shot.GenMeta.Items JSON → ② shot.Description/Narration 关键词扫描。
+// autoMatchShotItems 按 shot.Description/Narration 关键词扫描匹配小说道具，写入 ItemIDs。
 // 已有 ItemIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items []*EffectiveItem) {
 	if len(items) == 0 {
@@ -1415,27 +1399,6 @@ func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items [
 		nameMap[strings.ToLower(ei.Name)] = ei.ID
 	}
 
-	tryMatch := func(rawName string, seen map[uint]bool, matched *model.JSONUintSlice) {
-		nameLower := strings.ToLower(strings.TrimSpace(rawName))
-		if nameLower == "" {
-			return
-		}
-		if id, ok := nameMap[nameLower]; ok && !seen[id] {
-			*matched = append(*matched, id)
-			seen[id] = true
-			return
-		}
-		for name, id := range nameMap {
-			if strings.Contains(nameLower, name) {
-				if !seen[id] {
-					*matched = append(*matched, id)
-					seen[id] = true
-				}
-				return
-			}
-		}
-	}
-
 	matchCount := 0
 	for _, shot := range shots {
 		if len(shot.ItemIDs) > 0 {
@@ -1444,26 +1407,11 @@ func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items [
 		var matched model.JSONUintSlice
 		seen := make(map[uint]bool)
 
-		// ① Items JSON: [{"name":"..."}]
-		if shot.GenMeta.Items != "" {
-			var shotItems []struct {
-				Name string `json:"name"`
-			}
-			if err := json.Unmarshal([]byte(shot.GenMeta.Items), &shotItems); err == nil {
-				for _, si := range shotItems {
-					tryMatch(si.Name, seen, &matched)
-				}
-			}
-		}
-
-		// ② Description/Narration 关键词扫描（兜底）
-		if len(matched) == 0 {
-			text := strings.ToLower(shot.Description + " " + shot.Narration)
-			for name, id := range nameMap {
-				if strings.Contains(text, name) && !seen[id] {
-					matched = append(matched, id)
-					seen[id] = true
-				}
+		text := strings.ToLower(shot.Description + " " + shot.Narration())
+		for name, id := range nameMap {
+			if strings.Contains(text, name) && !seen[id] {
+				matched = append(matched, id)
+				seen[id] = true
 			}
 		}
 
@@ -1514,8 +1462,11 @@ func charRuneOverlap(a, b string) float64 {
 }
 
 // calcTotalShots 按字数密度估算全章期望分镜总数（自动模式，唯一支持的模式）。
-func calcTotalShots(totalRunes int, storyboardMode string) int {
-	s := 4 // 自动节奏：比原 normal(5s) 略快，镜头更丰富
+func calcTotalShots(totalRunes int, videoMode, storyboardMode string) int {
+	s := 15 // 视频动画模式：AI 生成运镜视频，一个分镜约 15 秒
+	if videoMode == "slideshow" {
+		s = 5 // 图片解说模式：静态图 + Ken Burns，一个分镜约 5 秒
+	}
 
 	// 先估算视频时长，再折算分镜数。
 	// 汉字阅读速度约 300 字/分钟，视频精炼比约 0.5（10 分钟文章 → 5 分钟视频）。
@@ -1523,8 +1474,8 @@ func calcTotalShots(totalRunes int, storyboardMode string) int {
 	estimatedSecs := totalRunes / 10
 	n := estimatedSecs / s
 	if storyboardMode == "concise" {
-		// 简洁模式：只保留 major 节拍生成分镜，目标镜头数相应下调，避免下游为凑数而拆细次要情节
-		n = n * 6 / 10
+		// 简洁模式：只保留 major 节拍生成分镜，目标镜头数下调至约一半，避免下游为凑数而拆细次要情节
+		n = n * 5 / 10
 	}
 	if n < 5 {
 		n = 5
@@ -1598,134 +1549,19 @@ func extractSceneField(sceneJSON, field string) string {
 	return m[field]
 }
 
-// extractWorldStateFromShots 从末尾分镜中提取跨段世界状态快照（P1b + C3）。
-// 返回的 map 包含 Location / TimeOfDay / Weather / Characters / CharStates / ItemStates，
-// 供下一段 prompt 注入，保证角色状态和道具持有的跨段一致性。
+// extractWorldStateFromShots 从末尾分镜中提取跨段世界状态快照（P1b）。
+// 返回的 map 包含 Location，供下一段 prompt 注入，保证地点的跨段一致性。
 func extractWorldStateFromShots(shots []*model.StoryboardShot) map[string]interface{} {
 	if len(shots) == 0 {
 		return nil
 	}
 	last := shots[len(shots)-1]
 	location := extractSceneField(last.GenMeta.Scene, "location")
-	timeOfDay := extractSceneField(last.GenMeta.Scene, "time_of_day")
-	weather := extractSceneField(last.GenMeta.Scene, "weather")
-
-	// 收集末尾几镜的在场角色（去重，保留出现顺序）
-	seen := make(map[string]bool)
-	var charNames []string
-	for _, shot := range shots {
-		if shot.GenMeta.Characters == "" {
-			continue
-		}
-		var chars []struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &chars); err == nil {
-			for _, c := range chars {
-				if c.Name != "" && !seen[c.Name] {
-					charNames = append(charNames, c.Name)
-					seen[c.Name] = true
-				}
-			}
-		}
+	if location == "" {
+		return nil
 	}
-
-	// C3: 收集末尾几镜中每个角色的最新动作/表情状态（以最后一次出现为准）
-	type charStateEntry struct {
-		Name       string
-		Action     string
-		Expression string
-	}
-	charStateMap := make(map[string]charStateEntry)
-	for _, shot := range shots {
-		if shot.GenMeta.Characters == "" {
-			continue
-		}
-		var chars []struct {
-			Name       string `json:"name"`
-			Action     string `json:"action"`
-			Expression string `json:"expression"`
-		}
-		if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &chars); err == nil {
-			for _, c := range chars {
-				if c.Name == "" {
-					continue
-				}
-				entry := charStateMap[c.Name]
-				entry.Name = c.Name
-				if c.Action != "" {
-					entry.Action = c.Action
-				}
-				if c.Expression != "" {
-					entry.Expression = c.Expression
-				}
-				charStateMap[c.Name] = entry
-			}
-		}
-	}
-	var charStates []map[string]string
-	for _, name := range charNames { // 按出场顺序输出，与 Characters 字段保持一致
-		if cs, ok := charStateMap[name]; ok && (cs.Action != "" || cs.Expression != "") {
-			entry := map[string]string{"Name": cs.Name}
-			if cs.Action != "" {
-				entry["Action"] = cs.Action
-			}
-			if cs.Expression != "" {
-				entry["Expression"] = cs.Expression
-			}
-			charStates = append(charStates, entry)
-		}
-	}
-
-	// C3: 收集末尾几镜的道具持有状态（以最后一次出现的持有信息为准）
-	type itemStateEntry struct {
-		Name   string
-		Holder string
-	}
-	itemStateMap := make(map[string]itemStateEntry)
-	var itemOrder []string
-	for _, shot := range shots {
-		if shot.GenMeta.Items == "" {
-			continue
-		}
-		var items []struct {
-			Name   string `json:"name"`
-			Holder string `json:"holder"`
-		}
-		if err := json.Unmarshal([]byte(shot.GenMeta.Items), &items); err == nil {
-			for _, it := range items {
-				if it.Name == "" {
-					continue
-				}
-				if _, exists := itemStateMap[it.Name]; !exists {
-					itemOrder = append(itemOrder, it.Name)
-				}
-				entry := itemStateMap[it.Name]
-				entry.Name = it.Name
-				if it.Holder != "" {
-					entry.Holder = it.Holder
-				}
-				itemStateMap[it.Name] = entry
-			}
-		}
-	}
-	var itemStates []map[string]string
-	for _, name := range itemOrder {
-		it := itemStateMap[name]
-		entry := map[string]string{"Name": it.Name}
-		if it.Holder != "" {
-			entry["Holder"] = it.Holder
-		}
-		itemStates = append(itemStates, entry)
-	}
-
 	return map[string]interface{}{
-		"Location":   location,
-		"TimeOfDay":  timeOfDay,
-		"Weather":    weather,
-		"Characters": charNames,
-		"CharStates": charStates, // C3: 角色最新动作/表情状态
-		"ItemStates": itemStates, // C3: 道具最新持有状态
+		"Location": location,
 	}
 }
 
@@ -1931,18 +1767,16 @@ func (s *VideoService) buildStoryboardPrompt(
 	// 上一段末尾分镜（携带完整状态供 AI 做无缝衔接）
 	prevShotsData := make([]map[string]interface{}, 0, len(prevShots))
 	for _, ps := range prevShots {
-		narrOrDesc := ps.Narration
+		narrOrDesc := ps.Narration()
 		if narrOrDesc == "" {
 			narrOrDesc = ps.Description
 		}
 		prevShotsData = append(prevShotsData, map[string]interface{}{
-			"ShotNo":        ps.ShotNo,
-			"NarrOrDesc":    narrOrDesc,
-			"Dialogue":      ps.GenMeta.Dialogue,
-			"EmotionalTone": ps.CamDir.EmotionalTone,
-			"CameraType":    ps.CamDir.CameraType,
-			"Location":      extractLocationFromScene(ps.GenMeta.Scene),
-			"TransitionOut": ps.CamDir.TransitionOut,
+			"ShotNo":     ps.ShotNo,
+			"NarrOrDesc": narrOrDesc,
+			"Dialogue":   ps.Dialogue(),
+			"CameraType": ps.CamDir.CameraType,
+			"Location":   extractLocationFromScene(ps.GenMeta.Scene),
 		})
 	}
 
@@ -2034,37 +1868,21 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	type rawShotType struct {
 		ShotNo       int     `json:"shot_no"`
 		Description  string  `json:"description"`
-		Narration    string  `json:"narration"`
 		OriginalText string  `json:"original_text"`
-		Dialogue     string  `json:"dialogue"`
 		CameraType   string  `json:"camera_type"`
 		Duration     float64 `json:"duration"`
 		Location     string  `json:"location"`
-		TimeOfDay    string  `json:"time_of_day"`
-		Weather      string  `json:"weather"`
-		Lighting     string  `json:"lighting"`
-		Characters   []struct {
-			Name       string `json:"name"`
-			Position   string `json:"position"`
-			Pose       string `json:"pose"`
-			Action     string `json:"action"`
-			Expression string `json:"expression"`
-		} `json:"characters"`
-		Items []struct {
-			Name     string `json:"name"`
-			Holder   string `json:"holder"`
-			Location string `json:"location"`
-		} `json:"items"`
-		Subtitle      string `json:"subtitle"` // 画面叠字：时间词或关键字幕（非空时叠加在视频画面上）
-		Transition    string `json:"transition"`
-		TransitionOut string `json:"transition_out"` // 本镜头如何结束（画面状态/角色动作/镜头动势）
-		TransitionIn  string `json:"transition_in"`  // 本镜头如何开始（衔接上一镜头 TransitionOut）
-		SFXTags       []struct {
+		Transition   string  `json:"transition"`
+		VoiceLines   []struct {
+			Character string `json:"character"`
+			Content   string `json:"content"`
+			Emotion   string `json:"emotion"`
+		} `json:"voice_lines"`
+		SFXTags []struct {
 			Tag     string `json:"tag"`
 			SFXType string `json:"type"`
 			Prompt  string `json:"prompt"`
 		} `json:"sfx_tags"`
-		EmotionalTone string `json:"emotional_tone"`
 	}
 
 	var rawShots []rawShotType
@@ -2112,28 +1930,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			duration = defaultShotDurationSecs
 		}
 
-		// 将角色信息序列化为 JSON 存储
-		var charsJSON string
-		if len(r.Characters) > 0 {
-			if b, err := json.Marshal(r.Characters); err == nil {
-				charsJSON = string(b)
-			}
-		}
-
-		// 将道具信息序列化为 JSON 存储
-		var itemsJSON string
-		if len(r.Items) > 0 {
-			if b, err := json.Marshal(r.Items); err == nil {
-				itemsJSON = string(b)
-			}
-		}
-
 		// 将场景配置序列化
 		scene := map[string]string{
-			"location":    r.Location,
-			"time_of_day": r.TimeOfDay,
-			"weather":     r.Weather,
-			"lighting":    r.Lighting,
+			"location": r.Location,
 		}
 		var sceneJSON string
 		if b, err := json.Marshal(scene); err == nil {
@@ -2155,18 +1954,17 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			}
 		}
 
-		// B1: 字段质量校验 ── description 长度 + emotional_tone 合法性
+		// 将旁白/台词行序列化存储（合并字段：character 为空=旁白，非空=该角色台词）
+		var voiceLinesJSON string
+		if len(r.VoiceLines) > 0 {
+			if b, err := json.Marshal(r.VoiceLines); err == nil {
+				voiceLinesJSON = string(b)
+			}
+		}
+
+		// B1: 字段质量校验 ── description 长度
 		if len([]rune(description)) < 100 {
 			logger.Printf("[Storyboard][B1] shot_no=%d: description too short (%d runes), generation quality may degrade", shotNo, len([]rune(description)))
-		}
-		emotionalTone := r.EmotionalTone
-		if !validEmotionalTones[emotionalTone] {
-			if emotionalTone != "" {
-				logger.Printf("[Storyboard][B1] shot_no=%d: invalid emotional_tone %q, defaulting to 平静", shotNo, emotionalTone)
-			} else {
-				logger.Printf("[Storyboard][B1] shot_no=%d: emotional_tone missing from AI response, defaulting to 平静", shotNo)
-			}
-			emotionalTone = "平静"
 		}
 
 		shot := &model.StoryboardShot{
@@ -2175,23 +1973,16 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			ChapterID:    chapterID,
 			ShotNo:       shotNo,
 			Description:  description,
-			Narration:    r.Narration,
 			OriginalText: r.OriginalText,
 			Duration:     duration,
 			CamDir: model.ShotCamDir{
-				CameraType:    cameraType,
-				Transition:    validTransition(r.Transition),
-				TransitionOut: r.TransitionOut,
-				TransitionIn:  r.TransitionIn,
-				EmotionalTone: emotionalTone,
+				CameraType: cameraType,
+				Transition: validTransition(r.Transition),
 			},
 			GenMeta: model.ShotGenMeta{
-				Characters: charsJSON,
-				Items:      itemsJSON,
 				Scene:      sceneJSON,
 				SFXTags:    sfxTagsJSON,
-				Subtitle:   r.Subtitle,
-				Dialogue:   r.Dialogue,
+				VoiceLines: voiceLinesJSON,
 			},
 			Status: "pending",
 		}
@@ -2246,21 +2037,7 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		motion = "平滑镜头运动，带自然微稳定，几乎不可察觉的呼吸抖动"
 	}
 
-	// 从 shot.GenMeta.Scene 中提取时间/天气用于大气描述
-	timeOfDay := "daytime"
-	if shot.GenMeta.Scene != "" {
-		var sceneData map[string]string
-		if err := json.Unmarshal([]byte(shot.GenMeta.Scene), &sceneData); err == nil {
-			if tod := sceneData["time_of_day"]; tod != "" {
-				timeOfDay = tod
-			}
-		}
-	}
-
 	atmos := "环境尘埃粒子在可见光柱中缓慢漂浮，速度约每秒0.3厘米"
-	if strings.Contains(timeOfDay, "night") || strings.Contains(timeOfDay, "dusk") || strings.Contains(timeOfDay, "evening") {
-		atmos = "地面轻微雾气，高度5-10厘米，缓慢飘动，火把或月光投下柔和的移动阴影"
-	}
 
 	desc := shot.Description
 	if len([]rune(desc)) > 150 {
@@ -2507,35 +2284,29 @@ func (s *VideoService) refreshShotUserEditableFields(shot *model.StoryboardShot)
 		return
 	}
 	shot.Description = fresh.Description
-	shot.Narration = fresh.Narration
 	shot.CharacterIDs = fresh.CharacterIDs
 	shot.ItemIDs = fresh.ItemIDs
 	shot.SceneAnchorID = fresh.SceneAnchorID
-	shot.GenMeta.Dialogue = fresh.GenMeta.Dialogue
-	shot.GenMeta.Subtitle = fresh.GenMeta.Subtitle
-	shot.CamDir.EmotionalTone = fresh.CamDir.EmotionalTone
+	shot.GenMeta.VoiceLines = fresh.GenMeta.VoiceLines
 	shot.CamDir.CameraType = fresh.CamDir.CameraType
 	shot.CamDir.Transition = fresh.CamDir.Transition
-	shot.CamDir.TransitionOut = fresh.CamDir.TransitionOut
-	shot.CamDir.TransitionIn = fresh.CamDir.TransitionIn
 }
 
-// 注意：dialogue/subtitle/generation_mode 存储在 gen_meta JSON 列；
-// camera_type/emotional_tone/transition* 存储在 cam_dir JSON 列。
+// 注意：dialogue/generation_mode 存储在 gen_meta JSON 列；
+// camera_type/transition 存储在 cam_dir JSON 列。
 // GORM map Updates 不走 serializer，必须手动将这些字段合并到对应 JSON 列后再写入。
 func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{}) (*model.StoryboardShot, error) {
-	// gen_meta JSON 列中的字段
+	// gen_meta JSON 列中的字段（narration/dialogue 现合并存储于 gen_meta.voice_lines）
 	genMetaKeys := map[string]bool{
-		"dialogue": true, "subtitle": true, "generation_mode": true,
+		"narration": true, "dialogue": true, "generation_mode": true,
 	}
 	// cam_dir JSON 列中的字段
 	camDirKeys := map[string]bool{
-		"camera_type":    true,
-		"emotional_tone": true, "transition": true, "transition_out": true, "transition_in": true,
+		"camera_type": true, "transition": true,
 	}
 	// 直接列
 	directKeys := map[string]bool{
-		"description": true, "narration": true, "duration": true,
+		"description": true, "duration": true,
 		"status": true, "image_url": true,
 	}
 
@@ -2560,11 +2331,11 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 		for k, v := range fields {
 			sv, _ := v.(string)
 			switch k {
-			case "dialogue":
-				shot.GenMeta.Dialogue = sv
+			case "narration":
+				shot.SetNarration(sv)
 				updatedGenMeta = true
-			case "subtitle":
-				shot.GenMeta.Subtitle = sv
+			case "dialogue":
+				shot.SetDialogue(sv)
 				updatedGenMeta = true
 			case "generation_mode":
 				shot.GenMeta.GenerationMode = sv
@@ -2572,17 +2343,8 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 			case "camera_type":
 				shot.CamDir.CameraType = sv
 				updatedCamDir = true
-			case "emotional_tone":
-				shot.CamDir.EmotionalTone = sv
-				updatedCamDir = true
 			case "transition":
 				shot.CamDir.Transition = sv
-				updatedCamDir = true
-			case "transition_out":
-				shot.CamDir.TransitionOut = sv
-				updatedCamDir = true
-			case "transition_in":
-				shot.CamDir.TransitionIn = sv
 				updatedCamDir = true
 			}
 		}
@@ -2695,6 +2457,7 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 		"ItemList":       itemList,
 		"SceneText":      sceneText,
 		"OldDescription": shot.Description,
+		"StoryboardMode": video.StoryboardMode,
 	})
 	if tplErr != nil {
 		return nil, fmt.Errorf("render regenerate_shot_prompt: %w", tplErr)
@@ -2737,7 +2500,6 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 	shot := &model.StoryboardShot{
 		VideoID:     videoID,
 		UUID:        uuid.New().String(),
-		Narration:   narration,
 		Description: description,
 		Duration:    duration,
 		CamDir: model.ShotCamDir{
@@ -2746,6 +2508,7 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 		},
 		Status: "pending",
 	}
+	shot.SetNarration(narration)
 	// Shift + create must be atomic to avoid a corrupt shot_no sequence on partial failure.
 	// Two-phase UPDATE: first shift all affected rows into a collision-free temp range
 	// (+shiftTempOffset), then shift back to the intended position. A single-step UPDATE
@@ -2813,7 +2576,6 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		ChapterID:         src.ChapterID,
 		UUID:              uuid.New().String(),
 		Description:       src.Description,
-		Narration:         src.Narration,
 		Duration:          src.Duration,
 		CamDir:            src.CamDir,
 		GenMeta:           src.GenMeta,
@@ -3100,18 +2862,15 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 	for _, shot := range shots {
 		sb.WriteString(fmt.Sprintf("[镜%d] 时长:%4.1fs 运镜:%-8s",
 			shot.ShotNo, shot.Duration, shot.CamDir.CameraType))
-		if shot.CamDir.EmotionalTone != "" {
-			sb.WriteString(fmt.Sprintf(" 情绪:%s", truncate(shot.CamDir.EmotionalTone, 12)))
-		}
 		// description 现在是 AI 出图/出视频的唯一依据，截断长度放宽以便审查员评估视觉质量
 		if desc := truncate(shot.Description, 200); desc != "" {
 			sb.WriteString(fmt.Sprintf("\n      描述: %s", desc))
 		}
-		if narr := truncate(shot.Narration, 80); narr != "" {
+		if narr := truncate(shot.Narration(), 80); narr != "" {
 			sb.WriteString(fmt.Sprintf("\n      旁白: %s", narr))
 		}
-		if shot.GenMeta.Dialogue != "" {
-			sb.WriteString(fmt.Sprintf("\n      台词: %s", truncate(shot.GenMeta.Dialogue, 50)))
+		if dial := shot.Dialogue(); dial != "" {
+			sb.WriteString(fmt.Sprintf("\n      台词: %s", truncate(dial, 50)))
 		}
 		sb.WriteString("\n")
 	}
@@ -3183,17 +2942,14 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 
 // shotOptimizeUpdate 表示 AI 返回的单个镜头优化更新
 type shotOptimizeUpdate struct {
-	ShotNo        int     `json:"shot_no"`
-	Description   string  `json:"description"`
-	Narration     *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
-	Dialogue      *string `json:"dialogue"`  // 同上
-	CameraType    string  `json:"camera_type"`
-	Duration      float64 `json:"duration"`
-	EmotionalTone string  `json:"emotional_tone"`
-	Transition    string  `json:"transition"`
-	TransitionOut string  `json:"transition_out"`
-	TransitionIn  string  `json:"transition_in"`
-	SFXTags       string  `json:"sfx_tags"` // gen_meta.sfx_tags
+	ShotNo      int     `json:"shot_no"`
+	Description string  `json:"description"`
+	Narration   *string `json:"narration"` // 指针：区分"AI未提及此字段"(nil)与"AI显式清空"(指向"")，避免误删未提及字段
+	Dialogue    *string `json:"dialogue"`  // 同上
+	CameraType  string  `json:"camera_type"`
+	Duration    float64 `json:"duration"`
+	Transition  string  `json:"transition"`
+	SFXTags     string  `json:"sfx_tags"` // gen_meta.sfx_tags
 }
 
 // buildStoryboardOptimizePrompt 构建分镜优化提示词
@@ -3211,21 +2967,15 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 	for _, sh := range shots {
 		sb.WriteString(fmt.Sprintf("[镜%d] 时长:%.0fs 镜头:%s",
 			sh.ShotNo, sh.Duration, sh.CamDir.CameraType))
-		if sh.CamDir.EmotionalTone != "" {
-			sb.WriteString(fmt.Sprintf(" 情绪:%s", sh.CamDir.EmotionalTone))
-		}
 		// description 现在是 AI 出图/出视频的唯一依据，截断长度放宽以便 AI 评估现有质量并决定是否改写
 		if desc := trunc(sh.Description, 250); desc != "" {
 			sb.WriteString(fmt.Sprintf("\n  描述: %s", desc))
 		}
-		if narr := trunc(sh.Narration, 60); narr != "" {
+		if narr := trunc(sh.Narration(), 60); narr != "" {
 			sb.WriteString(fmt.Sprintf("\n  旁白: %s", narr))
 		}
-		if dial := trunc(sh.GenMeta.Dialogue, 60); dial != "" {
+		if dial := trunc(sh.Dialogue(), 60); dial != "" {
 			sb.WriteString(fmt.Sprintf("\n  对白: %s", dial))
-		}
-		if tout := trunc(sh.CamDir.TransitionOut, 40); tout != "" {
-			sb.WriteString(fmt.Sprintf("\n  结尾: %s", tout))
 		}
 		sb.WriteString("\n")
 	}
@@ -3233,15 +2983,13 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 	feedbackData := make([]map[string]interface{}, 0, len(review.ShotFeedback))
 	for _, fb := range review.ShotFeedback {
 		feedbackData = append(feedbackData, map[string]interface{}{
-			"ShotNo":                 fb.ShotNo,
-			"Severity":               fb.Severity,
-			"Issues":                 fb.Issues,
-			"Suggestion":             fb.Suggestion,
-			"SuggestedNarration":     fb.SuggestedNarration,
-			"SuggestedDialogue":      fb.SuggestedDialogue,
-			"SuggestedDescription":   fb.SuggestedDescription,
-			"SuggestedTransitionOut": fb.SuggestedTransitionOut,
-			"SuggestedTransitionIn":  fb.SuggestedTransitionIn,
+			"ShotNo":               fb.ShotNo,
+			"Severity":             fb.Severity,
+			"Issues":               fb.Issues,
+			"Suggestion":           fb.Suggestion,
+			"SuggestedNarration":   fb.SuggestedNarration,
+			"SuggestedDialogue":    fb.SuggestedDialogue,
+			"SuggestedDescription": fb.SuggestedDescription,
 		})
 	}
 
@@ -3353,11 +3101,13 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		// narration/dialogue：AI 遵循"只输出实质改动字段"的指令时，未提及的字段在 JSON 里
 		// 是完全缺失的 key，而不是空字符串——用指针类型区分"未提及"(nil)与"显式清空"(指向"")，
 		// 分别独立判断是否更新，避免只改其中一个字段时把另一个未提及的字段误清空。
+		// narration/dialogue 现合并存储于 gen_meta.voice_lines，须走 JSON 列合并路径。
 		if upd.Narration != nil {
-			safeFields["narration"] = *upd.Narration
+			sh.SetNarration(*upd.Narration)
+			updatedGenMeta = true
 		}
 		if upd.Dialogue != nil {
-			sh.GenMeta.Dialogue = *upd.Dialogue
+			sh.SetDialogue(*upd.Dialogue)
 			updatedGenMeta = true
 		}
 
@@ -3366,20 +3116,8 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 			sh.CamDir.CameraType = upd.CameraType
 			updatedCamDir = true
 		}
-		if upd.EmotionalTone != "" {
-			sh.CamDir.EmotionalTone = upd.EmotionalTone
-			updatedCamDir = true
-		}
 		if upd.Transition != "" {
 			sh.CamDir.Transition = upd.Transition
-			updatedCamDir = true
-		}
-		if upd.TransitionOut != "" {
-			sh.CamDir.TransitionOut = upd.TransitionOut
-			updatedCamDir = true
-		}
-		if upd.TransitionIn != "" {
-			sh.CamDir.TransitionIn = upd.TransitionIn
 			updatedCamDir = true
 		}
 

@@ -489,9 +489,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	// BGM 混音（非致命：失败时使用无BGM版本）
 	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
 	if s.bgmService != nil {
-		// P1-1: 根据分镜情感基调选择 BGM，而非固定传空字符串
-		emotion := dominantEmotion(shots)
-		bgmURL := s.bgmService.SelectBGM(emotion)
+		bgmURL := s.bgmService.SelectBGM("")
 		if bgmURL != "" {
 			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
 			if mixErr := s.bgmService.MixBGM(ctx, stitchedPath, bgmURL, outputPath); mixErr != nil {
@@ -1542,24 +1540,6 @@ func buildAudioMergeArgs(audioPath string, clipDur, audioDur float64) []string {
 		"-c:a", "aac",
 		"-shortest",
 	}
-}
-
-// dominantEmotion 从分镜列表中计算主导情感基调，用于 BGM 选择。
-// P2-1: lexicographic tiebreak makes result deterministic regardless of map iteration order.
-func dominantEmotion(shots []*model.StoryboardShot) string {
-	counts := make(map[string]int)
-	for _, sh := range shots {
-		if t := strings.TrimSpace(sh.CamDir.EmotionalTone); t != "" {
-			counts[t]++
-		}
-	}
-	best, bestN := "", 0
-	for tone, n := range counts {
-		if n > bestN || (n == bestN && (best == "" || tone < best)) {
-			best, bestN = tone, n
-		}
-	}
-	return best
 }
 
 // uploadClipToStorage 将本地 MP4 文件上传到持久存储（OSS），返回持久 URL。

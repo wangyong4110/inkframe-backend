@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -147,24 +148,25 @@ func (Video) TableName() string {
 
 // ShotCamDir 摄像机方向与风格配置（合并存储为 JSON）
 type ShotCamDir struct {
-	CameraType    string `json:"camera_type"`
-	EmotionalTone string `json:"emotional_tone"`
-	Transition    string `json:"transition"`
-	TransitionOut string `json:"transition_out"`
-	TransitionIn  string `json:"transition_in"`
+	CameraType string `json:"camera_type"`
+	Transition string `json:"transition"`
 }
 
 // ShotGenMeta AI生成元数据（合并存储为 JSON）
 type ShotGenMeta struct {
-	Characters        string  `json:"characters"`
-	Items             string  `json:"items"` // AI-generated item list JSON: [{"name":"...","holder":"...","location":"..."}]
-	Scene             string  `json:"scene"`
-	GenerationMode    string  `json:"generation_mode"`
-	ConsistencyScore  float64 `json:"consistency_score"`
-	ReferenceImageURL string  `json:"reference_image_url"`
-	SFXTags           string  `json:"sfx_tags"`
-	Dialogue          string  `json:"dialogue"`
-	Subtitle          string  `json:"subtitle"`
+	Scene             string `json:"scene"` // JSON: {"location":"..."}
+	GenerationMode    string `json:"generation_mode"`
+	ReferenceImageURL string `json:"reference_image_url"`
+	SFXTags           string `json:"sfx_tags"`
+	VoiceLines        string `json:"voice_lines"` // JSON 数组：旁白/台词合并存储，见 VoiceLine
+}
+
+// VoiceLine 一条画外音/台词——旁白与对白的统一表示。
+// Character 为空表示旁白（画外音），非空表示该角色的台词；Emotion 驱动 TTS 配音情感。
+type VoiceLine struct {
+	Character string `json:"character"`
+	Content   string `json:"content"`
+	Emotion   string `json:"emotion"`
 }
 
 // ShotTaskMeta 任务状态与时间轴（JSON存储）
@@ -194,7 +196,6 @@ type StoryboardShot struct {
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
 	Description  string `json:"description" gorm:"type:text"`   // 中文画面描述，AI出图/出视频与人工叙事参考共用的唯一生成提示词
-	Narration    string `json:"narration" gorm:"type:text"`     // 中文旁白文案，供TTS朗读和字幕显示使用
 	OriginalText string `json:"original_text" gorm:"type:text"` // 该分镜对应的章节原文片段，供人工核对/溯源
 
 	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
@@ -254,7 +255,7 @@ type StoryboardShotVersion struct {
 func (StoryboardShotVersion) TableName() string { return "ink_storyboard_shot_version" }
 
 // MarshalJSON flattens CamDir and GenMeta fields to the top level so the frontend
-// can access shot.camera_type / shot.sfx_tags / shot.dialogue etc. directly.
+// can access shot.camera_type / shot.sfx_tags / shot.narration / shot.dialogue etc. directly.
 // The nested cam_dir / gen_meta objects are still included for tooling that needs them.
 func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 	type Alias StoryboardShot // break MarshalJSON recursion
@@ -263,26 +264,120 @@ func (s StoryboardShot) MarshalJSON() ([]byte, error) {
 		// flatten CamDir
 		// 注意：不能加 omitempty——清空这些字段后（如清空台词）后端会存入空字符串，
 		// 若序列化时省略该 key，前端会把"缺失字段"误判为"未变化"，导致清空后又显示回旧值。
-		CameraType    string `json:"camera_type"`
-		EmotionalTone string `json:"emotional_tone"`
-		Transition    string `json:"transition"`
-		TransitionOut string `json:"transition_out"`
-		TransitionIn  string `json:"transition_in"`
+		CameraType string `json:"camera_type"`
+		Transition string `json:"transition"`
 		// flatten GenMeta
-		SFXTags  string `json:"sfx_tags"`
-		Dialogue string `json:"dialogue"`
-		Subtitle string `json:"subtitle"`
+		SFXTags    string      `json:"sfx_tags"`
+		Narration  string      `json:"narration"`
+		Dialogue   string      `json:"dialogue"`
+		VoiceLines []VoiceLine `json:"voice_lines_parsed"`
 	}{
-		Alias:         (Alias)(s),
-		CameraType:    s.CamDir.CameraType,
-		EmotionalTone: s.CamDir.EmotionalTone,
-		Transition:    s.CamDir.Transition,
-		TransitionOut: s.CamDir.TransitionOut,
-		TransitionIn:  s.CamDir.TransitionIn,
-		SFXTags:       s.GenMeta.SFXTags,
-		Dialogue:      s.GenMeta.Dialogue,
-		Subtitle:      s.GenMeta.Subtitle,
+		Alias:      (Alias)(s),
+		CameraType: s.CamDir.CameraType,
+		Transition: s.CamDir.Transition,
+		SFXTags:    s.GenMeta.SFXTags,
+		Narration:  s.Narration(),
+		Dialogue:   s.Dialogue(),
+		VoiceLines: s.VoiceLines(),
 	})
+}
+
+// VoiceLines returns the parsed旁白/台词列表（GenMeta.VoiceLines 反序列化），解析失败时返回 nil。
+func (s *StoryboardShot) VoiceLines() []VoiceLine {
+	if s.GenMeta.VoiceLines == "" {
+		return nil
+	}
+	var lines []VoiceLine
+	if err := json.Unmarshal([]byte(s.GenMeta.VoiceLines), &lines); err != nil {
+		return nil
+	}
+	return lines
+}
+
+// Narration 返回旁白行（Character==""）的文本内容，无旁白时返回 ""。
+func (s *StoryboardShot) Narration() string {
+	for _, l := range s.VoiceLines() {
+		if l.Character == "" && l.Content != "" {
+			return l.Content
+		}
+	}
+	return ""
+}
+
+// Dialogue 返回台词行（Character!=""）格式化为 "角色名：内容"，无台词时返回 ""。
+func (s *StoryboardShot) Dialogue() string {
+	for _, l := range s.VoiceLines() {
+		if l.Character != "" && l.Content != "" {
+			return l.Character + "：" + l.Content
+		}
+	}
+	return ""
+}
+
+// SetNarration 设置/替换旁白行内容；text 为空时移除旁白行。
+func (s *StoryboardShot) SetNarration(text string) {
+	lines := s.VoiceLines()
+	out := make([]VoiceLine, 0, len(lines)+1)
+	found := false
+	for _, l := range lines {
+		if l.Character == "" {
+			found = true
+			if text == "" {
+				continue
+			}
+			l.Content = text
+		}
+		out = append(out, l)
+	}
+	if !found && text != "" {
+		out = append([]VoiceLine{{Character: "", Content: text}}, out...)
+	}
+	s.setVoiceLines(out)
+}
+
+// SetDialogue 设置/替换台词行；text 需为 "角色名：内容" 格式，为空时移除台词行。
+func (s *StoryboardShot) SetDialogue(text string) {
+	character, content := splitDialogueText(text)
+	lines := s.VoiceLines()
+	out := make([]VoiceLine, 0, len(lines)+1)
+	found := false
+	for _, l := range lines {
+		if l.Character != "" {
+			found = true
+			if text == "" {
+				continue
+			}
+			l.Character, l.Content = character, content
+		}
+		out = append(out, l)
+	}
+	if !found && text != "" {
+		out = append(out, VoiceLine{Character: character, Content: content})
+	}
+	s.setVoiceLines(out)
+}
+
+func (s *StoryboardShot) setVoiceLines(lines []VoiceLine) {
+	if len(lines) == 0 {
+		s.GenMeta.VoiceLines = ""
+		return
+	}
+	b, err := json.Marshal(lines)
+	if err != nil {
+		return
+	}
+	s.GenMeta.VoiceLines = string(b)
+}
+
+// splitDialogueText 把 "角色名：内容" 或 "角色名:内容" 拆分为 (角色名, 内容)。
+// 无法识别分隔符时，整个字符串视为内容，角色名留空。
+func splitDialogueText(text string) (character, content string) {
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			return strings.TrimSpace(text[:idx]), strings.TrimSpace(text[idx+len(sep):])
+		}
+	}
+	return "", text
 }
 
 // ShotVoiceSegment 分镜语音段落（一个分镜可包含多条语音/字幕段落）
@@ -385,15 +480,13 @@ func (VideoBGMSegment) TableName() string { return "ink_video_bgm_segment" }
 
 // ShotReviewFeedback 单个镜头的审查反馈
 type ShotReviewFeedback struct {
-	ShotNo                 int      `json:"shot_no"`
-	Issues                 []string `json:"issues"`
-	Suggestion             string   `json:"suggestion"`
-	Severity               string   `json:"severity"` // info / warning / error
-	SuggestedNarration     string   `json:"suggested_narration,omitempty"`
-	SuggestedDialogue      string   `json:"suggested_dialogue,omitempty"` // 建议对白（替换 dialogue 字段，同时清空 narration）
-	SuggestedDescription   string   `json:"suggested_description,omitempty"`
-	SuggestedTransitionOut string   `json:"suggested_transition_out,omitempty"`
-	SuggestedTransitionIn  string   `json:"suggested_transition_in,omitempty"`
+	ShotNo               int      `json:"shot_no"`
+	Issues               []string `json:"issues"`
+	Suggestion           string   `json:"suggestion"`
+	Severity             string   `json:"severity"` // info / warning / error
+	SuggestedNarration   string   `json:"suggested_narration,omitempty"`
+	SuggestedDialogue    string   `json:"suggested_dialogue,omitempty"` // 建议对白（替换 dialogue 字段，同时清空 narration）
+	SuggestedDescription string   `json:"suggested_description,omitempty"`
 }
 
 // ─── 统一审查记录（章节/分镜共用）────────────────────────────────────────────────

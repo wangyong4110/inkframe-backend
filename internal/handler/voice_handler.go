@@ -17,6 +17,7 @@ import (
 )
 
 func (h *VideoHandler) ListVoiceSegments(c *gin.Context) {
+	videoID := c.Param("id")
 	shotID, ok := parseID(c, "shot_id")
 	if !ok {
 		return
@@ -26,7 +27,26 @@ func (h *VideoHandler) ListVoiceSegments(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, segs)
+	dtos := make([]voiceSegmentDTO, len(segs))
+	for i, seg := range segs {
+		dtos[i] = voiceSegmentDTO{ShotVoiceSegment: seg, AudioURL: segmentAudioURL(videoID, shotID, seg)}
+	}
+	respondOK(c, dtos)
+}
+
+// voiceSegmentDTO wraps ShotVoiceSegment and adds a computed audio_url field for browser
+// playback — audio_path may be a local file:// path, which the browser can't load directly.
+type voiceSegmentDTO struct {
+	*model.ShotVoiceSegment
+	AudioURL string `json:"audio_url"`
+}
+
+// segmentAudioURL returns the serve endpoint for a segment's audio, or "" if it has none yet.
+func segmentAudioURL(videoID string, shotID uint, seg *model.ShotVoiceSegment) string {
+	if seg.AudioPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("/api/v1/videos/%s/shots/%d/segments/%d/audio", videoID, shotID, seg.ID)
 }
 
 // AppendVoiceSegment POST /videos/:id/shots/:shot_id/segments
@@ -626,7 +646,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	// 筛选需要生成配音的分镜（有文本，且未有配音或强制重生）
 	var targets []*model.StoryboardShot
 	for _, s := range allShots {
-		if s.Narration == "" && s.GenMeta.Dialogue == "" && s.Description == "" {
+		if s.Narration() == "" && s.Dialogue() == "" && s.Description == "" {
 			continue
 		}
 		if skipExisting {

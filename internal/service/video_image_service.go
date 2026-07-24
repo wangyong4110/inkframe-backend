@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -503,81 +502,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// cachedNovelChars 延迟加载：降级一名称匹配使用
-	var cachedNovelChars []*model.Character
-
-	// 降级一：若 CharacterIDs 未命中，从 shot.GenMeta.Characters JSON 内联名称匹配
-	// （CharacterIDs 由 autoMatchShotCharacters 在分镜生成时设置，若名称有偏差则可能为空）
-	if len(characterPortraits) == 0 && shot.GenMeta.Characters != "" {
-		var shotChars []struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil && len(shotChars) > 0 {
-			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
-				if cachedNovelChars == nil {
-					var e error
-					cachedNovelChars, e = s.characterRepo.ListByNovel(video.NovelID)
-					if e != nil {
-						logger.Errorf("[VideoService] characterRepo.ListByNovel novelID=%d: %v", video.NovelID, e)
-					}
-				}
-				if len(cachedNovelChars) > 0 {
-					nameMap := make(map[string]*model.Character, len(cachedNovelChars))
-					for _, c := range cachedNovelChars {
-						nameMap[strings.ToLower(c.Name)] = c
-					}
-					// 匹配并收集所有命中角色
-					type inlineRef struct {
-						name string
-						char *model.Character
-						look *model.CharacterLook // 预取的激活形象
-					}
-					var inlineChars []inlineRef
-					seenIDs := make(map[uint]bool)
-					for _, sc := range shotChars {
-						nameLow := strings.ToLower(sc.Name)
-						char, ok := nameMap[nameLow]
-						if !ok {
-							for n, c := range nameMap {
-								nRunes := []rune(n)
-								nmRunes := []rune(nameLow)
-								if len(nRunes) >= 2 && len(nmRunes) >= 2 &&
-									(strings.Contains(nameLow, n) || strings.Contains(n, nameLow)) {
-									char = c
-									ok = true
-									break
-								}
-							}
-						}
-						if ok && char != nil && !seenIDs[char.ID] {
-							seenIDs[char.ID] = true
-							activeLook := s.getCharDefaultLook(char)
-							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char, look: activeLook})
-						}
-					}
-					for _, ir := range inlineChars {
-						irVP := buildCharTextAnchor(ir.char)
-						if ir.look != nil && ir.look.VisualPrompt != "" {
-							irVP = ir.look.VisualPrompt
-						}
-						var refURL string
-						if ir.look != nil && len(characterPortraits) < maxCharRefs {
-							// 同主流程：两图都有时合并，只有一图时直接用
-							refURL = s.charLookRefImage(ir.look)
-						}
-						if refURL != "" {
-							characterPortraits = append(characterPortraits, refURL)
-							refSources = append(refSources, fmt.Sprintf("inline name=%q Portrait", ir.name))
-							portraitOwners = append(portraitOwners, portraitOwner{name: ir.name, vp: irVP})
-						} else {
-							noPortraitVPs = append(noPortraitVPs, irVP)
-						}
-					}
-				}
-			}
-		}
-	}
-
 	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
 		shot.ShotNo, shot.CharacterIDs, refSources, len(characterPortraits))
 	if len(shot.CharacterIDs) > 0 && len(characterPortraits) == 0 {
@@ -631,80 +555,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 角色名排在 prompt 最前使 Seedream 将其识别为画面主体。
 	// DreamO 模式（有参考图）和 Text2ImgV3 模式（无参考图）均注入，确保模型知道角色在做什么。
 	hasAnyShotChars := len(characterPortraits) > 0 || len(noPortraitVPs) > 0 || len(portraitOwners) > 0
-	if hasAnyShotChars || shot.GenMeta.Characters != "" {
-		var presenceTokens []string // 人物存在性 + 位置/动作/表情
-		if shot.GenMeta.Characters != "" {
-			var shotCharsAction []struct {
-				Name       string `json:"name"`
-				Position   string `json:"position"`
-				Pose       string `json:"pose"`
-				Action     string `json:"action"`
-				Expression string `json:"expression"`
-			}
-			if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
-				for _, c := range shotCharsAction {
-					if c.Name == "" {
-						continue
-					}
-					// 构建结构化描述：name position, pose/action, expression
-					tok := c.Name
-					if c.Position != "" {
-						tok += " " + c.Position
-					}
-					var details []string
-					if c.Action != "" {
-						details = append(details, c.Action)
-					} else if c.Pose != "" {
-						details = append(details, c.Pose)
-					}
-					if c.Expression != "" {
-						details = append(details, c.Expression)
-					}
-					if len(details) > 0 {
-						tok += ", " + strings.Join(details, ", ")
-					}
-					presenceTokens = append(presenceTokens, tok)
-				}
-			}
-		}
-		// GenMeta.Characters 为空或解析失败时，从 portraitOwners 加载的角色名兜底
-		if len(presenceTokens) == 0 {
-			for _, po := range portraitOwners {
-				if po.name != "" {
-					presenceTokens = append(presenceTokens, po.name)
-				}
+	if hasAnyShotChars {
+		var presenceTokens []string // 人物存在性，从 portraitOwners 加载的角色名
+		for _, po := range portraitOwners {
+			if po.name != "" {
+				presenceTokens = append(presenceTokens, po.name)
 			}
 		}
 		if len(presenceTokens) > 0 {
 			promptText = strings.Join(presenceTokens, "; ") + ", " + promptText
-		}
-	}
-
-	// 道具信息注入：从 GenMeta.Items 提取道具名+持有者+位置，注入 image_prompt 前缀
-	if shot.GenMeta.Items != "" {
-		var shotItems []struct {
-			Name     string `json:"name"`
-			Holder   string `json:"holder"`
-			Location string `json:"location"`
-		}
-		if err := json.Unmarshal([]byte(shot.GenMeta.Items), &shotItems); err == nil && len(shotItems) > 0 {
-			var itemTokens []string
-			for _, si := range shotItems {
-				if si.Name == "" {
-					continue
-				}
-				tok := si.Name
-				if si.Holder != "" {
-					tok += " held by " + si.Holder
-				} else if si.Location != "" {
-					tok += " at " + si.Location
-				}
-				itemTokens = append(itemTokens, tok)
-			}
-			if len(itemTokens) > 0 {
-				promptText = strings.Join(itemTokens, ", ") + ", " + promptText
-				logger.Printf("[ItemInject] shot#%d injected %d item tokens into prompt", shot.ShotNo, len(itemTokens))
-			}
 		}
 	}
 
@@ -825,8 +684,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		"oversaturated, overexposed, underexposed"
 	// 无角色参考图且分镜中确实没有任何角色时，加无人物排除词（纯环境镜头）。
 	// 若分镜有角色（即使是没有参考图的路人），不加此约束，让模型根据 image_prompt 自行生成角色形象。
-	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0 ||
-		(shot.GenMeta.Characters != "" && shot.GenMeta.Characters != "[]" && shot.GenMeta.Characters != "null")
+	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0
 	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
 	if !shotHasAnyCharacter {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
@@ -1214,43 +1072,14 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// emotionToKlingParams 根据情绪/摄像机类型映射最优的 Kling 生成参数。
-// 动作/史诗场景使用 pro 模式 + 10 秒时长，获得更高画质；
-// 风景/全景使用高 CFG + 10 秒；对话/温情使用 5 秒防止内容填充。
-func emotionToKlingParams(emotion, cameraType string) (mode string, cfgScale float64, duration float64) {
-	// 将情绪标签规范化到英文
-	e := strings.ToLower(emotion)
+// cameraTypeToKlingParams 根据摄像机类型映射最优的 Kling 生成参数。
+// 升降/环绕等大范围运镜使用高 CFG + 10 秒展现全貌；其余镜头默认 5 秒防止内容填充。
+func cameraTypeToKlingParams(cameraType string) (mode string, cfgScale float64, duration float64) {
 	ct := strings.ToLower(cameraType)
 
-	switch {
-	case strings.Contains(e, "battle") || strings.Contains(e, "combat") ||
-		strings.Contains(e, "战斗") || strings.Contains(e, "打斗") ||
-		strings.Contains(e, "action") || strings.Contains(e, "fight"):
-		return "pro", 0.45, 10
-
-	case strings.Contains(e, "epic") || strings.Contains(e, "史诗") ||
-		strings.Contains(e, "宏大") || strings.Contains(e, "壮观") ||
-		strings.Contains(e, "climax") || strings.Contains(e, "高潮"):
-		return "pro", 0.5, 10
-
-	case strings.Contains(e, "dramatic") || strings.Contains(e, "紧张") ||
-		strings.Contains(e, "suspense") || strings.Contains(e, "danger") ||
-		strings.Contains(e, "危险") || strings.Contains(e, "恐惧"):
-		return "std", 0.7, 5
-
-	case strings.Contains(e, "landscape") || strings.Contains(e, "scenery") ||
-		strings.Contains(e, "风景") || strings.Contains(e, "空镜") ||
-		ct == "crane" || (ct == "pan" && strings.Contains(e, "wide")):
+	switch ct {
+	case "crane_up", "crane_down", "crane":
 		return "std", 0.8, 10
-
-	case strings.Contains(e, "romantic") || strings.Contains(e, "浪漫") ||
-		strings.Contains(e, "tender") || strings.Contains(e, "温情"):
-		return "std", 0.6, 5
-
-	case strings.Contains(e, "sad") || strings.Contains(e, "悲") ||
-		strings.Contains(e, "离别") || strings.Contains(e, "grief"):
-		return "std", 0.65, 5
-
 	default:
 		// 默认 CFG=0.65：偏高忠实度，视频贴近参考帧，减少偏离场景的随机发挥
 		return "std", 0.65, 5
@@ -1317,8 +1146,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	videoTraits := ai.VideoEngineTraitsFor(providerName)
 
-	// 动态 Kling 参数（根据情绪和摄像机类型选择最优配置）
-	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.CamDir.EmotionalTone, shot.CamDir.CameraType)
+	// 动态 Kling 参数（根据摄像机类型选择最优配置）
+	klingMode, klingCFG, klingDefaultDur := cameraTypeToKlingParams(shot.CamDir.CameraType)
 	shotDuration := s.resolveShotDuration(shot, klingDefaultDur, videoTraits)
 
 	// 检查项目配置：KlingProForAction、HD、3D、Seedance 分辨率/音频
@@ -1433,26 +1262,16 @@ func (s *VideoService) resolveShotReferenceImage(shot *model.StoryboardShot) (st
 	return frameURL, refLabel, nil
 }
 
-// buildContinuityPrefix 计算衔接语义前缀（优先级：TransitionIn > 前一镜头 TransitionOut > 前一镜头 MotionPrompt 截断）。
-// TransitionIn 由 AI 分镜师生成，精确描述本镜头应如何衔接上一镜头的结束状态。
+// buildContinuityPrefix 计算衔接语义前缀：截取上一镜头 Description 作粗粒度衔接引导。
 // 仅在无 I2V 末帧时调用（有末帧时视频模型已能自动感知运动延续，文字引导可能干扰）。
 func (s *VideoService) buildContinuityPrefix(shot *model.StoryboardShot) string {
 	if shot.ShotNo <= 1 || shot.GenMeta.ReferenceImageURL != "" || s.storyboardRepo == nil {
 		return ""
 	}
-	if shot.CamDir.TransitionIn != "" {
-		// ① 使用本镜头自己的 transition_in（最精确）
-		return shot.CamDir.TransitionIn
-	}
 	prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1)
 	if prevErr != nil || prev == nil {
 		return ""
 	}
-	if prev.CamDir.TransitionOut != "" {
-		// ② 使用上一镜头的 transition_out（次精确）
-		return "continuing from: " + prev.CamDir.TransitionOut
-	}
-	// ③ 降级：截取上一镜头 Description 作粗粒度引导
 	desc := prev.Description
 	if len([]rune(desc)) > 80 {
 		desc = string([]rune(desc)[:80]) + "..."
@@ -1480,65 +1299,20 @@ func (s *VideoService) buildShotVideoPrompt(shot *model.StoryboardShot, videoArt
 	if videoArtStyle != "" {
 		videoPrompt = resolveVideoStylePrefix(videoArtStyle) + videoPrompt
 	}
-	videoPrompt = injectCharacterActionTokens(videoPrompt, shot.GenMeta.Characters)
 	videoPrompt = appendNarrationDialogueSFX(videoPrompt, shot)
 	return videoPrompt
-}
-
-// injectCharacterActionTokens 从 GenMeta.Characters 提取 name+action/pose 注入 video_prompt。
-// 仅在 video_prompt 尚未包含该角色名时才注入，避免与 LLM 已写好的角色动作描述重复。
-func injectCharacterActionTokens(videoPrompt, charactersJSON string) string {
-	if charactersJSON == "" {
-		return videoPrompt
-	}
-	var shotChars []struct {
-		Name     string `json:"name"`
-		Position string `json:"position"`
-		Pose     string `json:"pose"`
-		Action   string `json:"action"`
-	}
-	if err := json.Unmarshal([]byte(charactersJSON), &shotChars); err != nil || len(shotChars) == 0 {
-		return videoPrompt
-	}
-	var charActionTokens []string
-	promptLower := strings.ToLower(videoPrompt)
-	for _, c := range shotChars {
-		if c.Name == "" {
-			continue
-		}
-		// 若 video_prompt 已包含角色名（LLM 已写了动作描述），跳过注入
-		if strings.Contains(promptLower, strings.ToLower(c.Name)) {
-			continue
-		}
-		tok := c.Name
-		if c.Action != "" {
-			tok += " " + c.Action
-		} else if c.Pose != "" {
-			tok += " " + c.Pose
-		}
-		if c.Position != "" {
-			tok += " at " + c.Position
-		}
-		charActionTokens = append(charActionTokens, tok)
-	}
-	if len(charActionTokens) == 0 {
-		return videoPrompt
-	}
-	return strings.Join(charActionTokens, "; ") + ", " + videoPrompt
 }
 
 // appendNarrationDialogueSFX 将旁白、角色台词、音效标签注入 prompt，帮助模型理解画面动作和声音氛围。
 func appendNarrationDialogueSFX(videoPrompt string, shot *model.StoryboardShot) string {
 	var extras []string
-	if shot.Narration != "" {
-		n := shot.Narration
+	if n := shot.Narration(); n != "" {
 		if len([]rune(n)) > 50 {
 			n = string([]rune(n)[:50]) + "…"
 		}
 		extras = append(extras, "narration: "+n)
 	}
-	if shot.GenMeta.Dialogue != "" {
-		d := shot.GenMeta.Dialogue
+	if d := shot.Dialogue(); d != "" {
 		if len([]rune(d)) > 60 {
 			d = string([]rune(d)[:60]) + "…"
 		}
@@ -1640,10 +1414,10 @@ func (s *VideoService) resolveVideoRenderConfig(shot *model.StoryboardShot, tena
 	return cfg
 }
 
-// buildShotCinematicPrompt 组装电影级动态前缀（运镜词+情绪氛围词+3D风格）与负向提示词。
+// buildShotCinematicPrompt 组装电影级动态前缀（运镜词+3D风格）与负向提示词。
 func buildShotCinematicPrompt(shot *model.StoryboardShot, videoPrompt, videoArtStyle string, cfg shotVideoRenderConfig) (string, string) {
-	// 电影级动态前缀——注入运镜词+情绪氛围词，风格自适应前缀（赛博朋克等特殊风格替换 film 词汇）
-	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, shot.CamDir.EmotionalTone, videoArtStyle)
+	// 电影级动态前缀——注入运镜词，风格自适应前缀（赛博朋克等特殊风格替换 film 词汇）
+	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, videoArtStyle)
 	if cfg.threeDEnabled {
 		cinematicPrefix = resolve3DStylePrefix(cfg.threeDStyle) + ", " + cinematicPrefix
 	}
@@ -1814,11 +1588,10 @@ func buildVideoGenerateRequest(shot *model.StoryboardShot, videoPromptFinal, neg
 	return req
 }
 
-// buildCinematicPrefix 根据摄像机类型和情绪生成动态电影级 prompt 前缀。
+// buildCinematicPrefix 根据摄像机类型生成动态电影级 prompt 前缀。
 // 刻意移除了 "film still"（静帧含义），改用 "cinematic sequence" 强化动态感。
-func buildCinematicPrefix(cameraType, emotionalTone, artStyle string) string {
+func buildCinematicPrefix(cameraType, artStyle string) string {
 	motion := cameraMotionToken(cameraType)
-	atmos := emotionAtmosphereToken(emotionalTone)
 
 	var base string
 	switch artStyle {
@@ -1852,9 +1625,6 @@ func buildCinematicPrefix(cameraType, emotionalTone, artStyle string) string {
 
 	if motion != "" {
 		base = motion + ", " + base
-	}
-	if atmos != "" {
-		base += ", " + atmos
 	}
 	return base + ", "
 }
@@ -1926,40 +1696,6 @@ func cameraMotionToken(cameraType string) string {
 	case "whip_pan":
 		return "whip pan transition, fast swipe"
 	default: // "static" or unknown — no motion token
-		return ""
-	}
-}
-
-// emotionAtmosphereToken 把情绪基调映射为氛围关键词，注入 prompt 以影响画面色调与动态能量。
-func emotionAtmosphereToken(emotion string) string {
-	e := strings.ToLower(emotion)
-	switch {
-	case strings.Contains(e, "battle") || strings.Contains(e, "combat") ||
-		strings.Contains(e, "战斗") || strings.Contains(e, "打斗") || strings.Contains(e, "action"):
-		return "intense action atmosphere, dynamic motion blur, adrenaline energy"
-	case strings.Contains(e, "epic") || strings.Contains(e, "史诗") ||
-		strings.Contains(e, "宏大") || strings.Contains(e, "climax") || strings.Contains(e, "高潮"):
-		return "epic grand atmosphere, sweeping cinematic motion, heroic scale"
-	case strings.Contains(e, "dramatic") || strings.Contains(e, "紧张") ||
-		strings.Contains(e, "suspense") || strings.Contains(e, "danger") || strings.Contains(e, "tension"):
-		return "dramatic tense atmosphere, deep shadows, ominous mood"
-	case strings.Contains(e, "romantic") || strings.Contains(e, "浪漫") ||
-		strings.Contains(e, "tender") || strings.Contains(e, "温情"):
-		return "soft romantic atmosphere, warm golden bokeh, intimate mood"
-	case strings.Contains(e, "sad") || strings.Contains(e, "悲") ||
-		strings.Contains(e, "grief") || strings.Contains(e, "离别") || strings.Contains(e, "melancholy"):
-		return "melancholic somber atmosphere, cool desaturated tones, slow motion feel"
-	case strings.Contains(e, "landscape") || strings.Contains(e, "风景") ||
-		strings.Contains(e, "scenery") || strings.Contains(e, "空镜"):
-		return "breathtaking scenic vista, sweeping majestic atmosphere"
-	case strings.Contains(e, "peaceful") || strings.Contains(e, "平静") || strings.Contains(e, "calm"):
-		return "serene tranquil atmosphere, soft diffused light, gentle motion"
-	case strings.Contains(e, "funny") || strings.Contains(e, "humorous") || strings.Contains(e, "幽默"):
-		return "lively energetic atmosphere, bright warm tones"
-	case strings.Contains(e, "cyberpunk") || strings.Contains(e, "sci-fi") ||
-		strings.Contains(e, "科幻") || strings.Contains(e, "赛博") || strings.Contains(e, "neon"):
-		return "neon-lit cyberpunk atmosphere, synthetic digital glow, rain-soaked futuristic dystopia, holographic interference"
-	default:
 		return ""
 	}
 }

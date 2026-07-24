@@ -272,12 +272,10 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 
 	ttsStart := time.Now()
 
-	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② EmotionalTone
+	// 预加载 shot + video 一次，用于角色声音查找
 	var novelID uint
-	var shotEmotionalTone string
 	if s.storyboardRepo != nil && s.videoRepo != nil {
 		if shot, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
-			shotEmotionalTone = shot.CamDir.EmotionalTone
 			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
 				novelID = video.NovelID
 			}
@@ -313,13 +311,9 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 			logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR list characters for novelID=%d: %v", segID, novelID, e)
 		}
 	}
-	// 情绪优先级：段落显式情绪（最高）> 分镜情绪基调映射 > 角色静态风格
+	// 情绪优先级：段落显式情绪（最高）> 角色静态风格
 	if seg.Emotion != "" {
 		style = seg.Emotion
-	} else if shotEmotionalTone != "" {
-		if mapped := mapEmotionalToneToTTS(shotEmotionalTone); mapped != "" {
-			style = mapped
-		}
 	}
 	if voice == "" {
 		voice = defaultVoice
@@ -469,10 +463,10 @@ func (s *VideoService) GenerateShotAudio(ctx context.Context, shot *model.Storyb
 
 	// Determine the text to synthesize: narration > dialogue.
 	// description is for image/video generation only — never read it aloud.
-	text := shot.Narration
+	text := shot.Narration()
 	textSource := "narration"
 	if text == "" {
-		text = stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
+		text = stripDialogueSpeakerPrefix(shot.Dialogue())
 		textSource = "dialogue"
 	}
 	if text == "" {
@@ -575,13 +569,11 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 // 文本优先级：Dialogue > Narration > Description（兜底兼容旧数据）。
 func GenerateShotSRT(shot *model.StoryboardShot) string {
 	var text string
-	if shot.GenMeta.Subtitle != "" {
-		text = shot.GenMeta.Subtitle
-	} else if shot.GenMeta.Dialogue != "" {
+	if dial := shot.Dialogue(); dial != "" {
 		// 去除"角色名："前缀，字幕只显示台词内容
-		text = stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
-	} else if shot.Narration != "" {
-		text = shot.Narration
+		text = stripDialogueSpeakerPrefix(dial)
+	} else if narr := shot.Narration(); narr != "" {
+		text = narr
 	} else {
 		text = shot.Description
 	}
@@ -839,7 +831,7 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 	voice = narrationVoice // 空串 = 由 TTS Provider 自选默认音色
 	speed = 1.0
 
-	if novelID != 0 && s.characterRepo != nil && shot.Narration == "" {
+	if novelID != 0 && s.characterRepo != nil && shot.Narration() == "" {
 		// 对白镜头：尝试按发言角色查找专属音色和静态风格。
 		// 旁白镜头（Narration 非空）直接使用 narrationVoice，不做角色音色覆盖。
 		// 注意：autoMatchShotCharacters 会把旁白中出现的角色名写入 CharacterIDs，
@@ -857,11 +849,11 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 			style = c.VoiceConfig.VoiceStyle // 角色静态风格作为基准，后续被情感覆盖
 		}
 
-		// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
+		// 步骤一：台词行的 character 字段即精确发言角色名，无需再从文本中解析。
 		speakerName := ""
-		for _, sep := range []string{"：", ":"} {
-			if idx := strings.Index(shot.GenMeta.Dialogue, sep); idx > 0 && idx < 20 {
-				speakerName = strings.TrimSpace(shot.GenMeta.Dialogue[:idx])
+		for _, l := range shot.VoiceLines() {
+			if l.Character != "" {
+				speakerName = l.Character
 				break
 			}
 		}
@@ -873,7 +865,7 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 				for _, c := range characters {
 					if strings.EqualFold(c.Name, speakerName) {
 						applyCharVoice(c)
-						goto applyEmotion
+						return
 					}
 				}
 				// 发言角色名无法匹配：保持 narrationVoice，不按 CharacterIDs 兜底。
@@ -882,50 +874,7 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		}
 	}
 
-applyEmotion:
-	// 分镜情绪基调始终作为最终覆盖，优先级高于角色静态风格。
-	// 旁白和对白镜头均适用。
-	if shot.CamDir.EmotionalTone != "" {
-		if mapped := mapEmotionalToneToTTS(shot.CamDir.EmotionalTone); mapped != "" {
-			style = mapped
-		}
-	}
-
 	return
-}
-
-// mapEmotionalToneToTTS 将分镜情绪基调（中文）映射为 TTS 通用情感标签。
-// 返回空串表示无法映射，调用方应保持当前 style 不变。
-func mapEmotionalToneToTTS(tone string) string {
-	switch {
-	// 惊恐必须在"惊讶/惊"之前，否则"惊"字会误捕获
-	case strings.Contains(tone, "惊恐") || strings.Contains(tone, "恐惧") || strings.Contains(tone, "害怕") || strings.Contains(tone, "惶恐"):
-		return "fear"
-	case strings.Contains(tone, "紧张") || strings.Contains(tone, "悬疑"):
-		return "fear"
-	case strings.Contains(tone, "愤怒") || strings.Contains(tone, "愤") || strings.Contains(tone, "怒") || strings.Contains(tone, "激怒"):
-		return "angry"
-	case strings.Contains(tone, "悲伤") || strings.Contains(tone, "悲") || strings.Contains(tone, "哀") || strings.Contains(tone, "哭") || strings.Contains(tone, "伤心"):
-		return "sad"
-	case strings.Contains(tone, "压抑") || strings.Contains(tone, "沉重") || strings.Contains(tone, "绝望"):
-		return "sad"
-	case strings.Contains(tone, "快乐") || strings.Contains(tone, "开心") || strings.Contains(tone, "喜悦") || strings.Contains(tone, "兴奋") || strings.Contains(tone, "欢"):
-		return "happy"
-	case strings.Contains(tone, "振奋") || strings.Contains(tone, "浪漫") || strings.Contains(tone, "温柔") || strings.Contains(tone, "温情"):
-		return "happy"
-	case strings.Contains(tone, "平静") || strings.Contains(tone, "宁静") || strings.Contains(tone, "淡然") || strings.Contains(tone, "释怀"):
-		return "calm"
-	case strings.Contains(tone, "惊讶") || strings.Contains(tone, "惊"):
-		return "surprised"
-	case strings.Contains(tone, "得意"):
-		return "happy"
-	case strings.Contains(tone, "讽刺"):
-		return "surprised"
-	case strings.Contains(tone, "留白"):
-		return "calm"
-	default:
-		return ""
-	}
 }
 
 // detectAudioFormat 通过 magic bytes 检测音频格式，返回 (format, contentType, fileExt)。

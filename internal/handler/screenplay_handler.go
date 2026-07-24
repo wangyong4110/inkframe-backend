@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -199,6 +200,89 @@ func (h *ScreenplayHandler) ExportScreenplay(c *gin.Context) {
 	}
 
 	filename := fmt.Sprintf("%s_分场剧本.%s", title, ext)
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, contentType, data)
+}
+
+// ExportScreenplayStoryboard 导出分镜脚本文件（按分场剧本场次分组，每场下列出对应分镜）
+// GET /chapters/:id/screenplay/storyboard-export?format=txt|markdown|docx（默认 txt）
+func (h *ScreenplayHandler) ExportScreenplayStoryboard(c *gin.Context) {
+	if h.videoSvc == nil {
+		respondErr(c, http.StatusInternalServerError, "storyboard export not available")
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkChapterTenant(c, uint(id)) {
+		return
+	}
+	format := c.DefaultQuery("format", "txt")
+	if format != "txt" && format != "markdown" && format != "docx" {
+		respondBadRequest(c, "format must be txt, markdown or docx")
+		return
+	}
+
+	chapter, err := h.chapterSvc.GetChapter(uint(id), getTenantID(c))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	title := chapter.Title
+	if title == "" {
+		title = fmt.Sprintf("第%d章", chapter.ChapterNo)
+	}
+	scenes, err := h.svc.ListScenes(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var shots []*model.StoryboardShot
+	video, err := h.videoSvc.FindVideoByChapterID(getTenantID(c), uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if video != nil {
+		if shots, err = h.videoSvc.GetStoryboard(video.ID, 0); err != nil {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if len(shots) == 0 {
+		respondBadRequest(c, "分镜脚本尚未生成，请先生成分镜后再导出")
+		return
+	}
+
+	var (
+		data        []byte
+		contentType string
+		ext         string
+	)
+	switch format {
+	case "markdown":
+		data = h.svc.ExportStoryboardMarkdown(title, scenes, shots)
+		contentType = "text/markdown; charset=utf-8"
+		ext = "md"
+	case "docx":
+		docxData, dErr := h.svc.ExportStoryboardDocx(title, scenes, shots)
+		if dErr != nil {
+			reqLogger(c).Errorf("[ScreenplayHandler] ExportScreenplayStoryboard docx: %v", dErr)
+			respondErr(c, http.StatusInternalServerError, "failed to export docx")
+			return
+		}
+		data = docxData
+		contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		ext = "docx"
+	default:
+		data = h.svc.ExportStoryboardTXT(title, scenes, shots)
+		contentType = "text/plain; charset=utf-8"
+		ext = "txt"
+	}
+
+	filename := fmt.Sprintf("%s_分镜脚本.%s", title, ext)
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, contentType, data)
 }

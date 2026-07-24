@@ -519,7 +519,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			var targets []*model.StoryboardShot
 			for _, s := range shots {
-				if s.Narration == "" && s.GenMeta.Dialogue == "" && s.Description == "" {
+				if s.Narration() == "" && s.Dialogue() == "" && s.Description == "" {
 					continue
 				}
 				if params.SkipExisting && hasAudio(s.ID) {

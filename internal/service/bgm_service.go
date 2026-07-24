@@ -36,16 +36,16 @@ const bgmCacheTTL = 24 * time.Hour
 // BGMService BGM 背景音乐服务。
 // 三层降级：本地目录 → Jamendo API → Pixabay API。
 type BGMService struct {
-	bgmDir           string       // 本地 BGM 文件目录（优先）
-	aiSvc            *AIService   // AI 分析（可选）
+	bgmDir           string     // 本地 BGM 文件目录（优先）
+	aiSvc            *AIService // AI 分析（可选）
 	storageSvc       storage.Service
 	assetRepo        *repository.AssetRepository
 	tagRepo          *repository.TagRepository
 	httpClient       *http.Client
 	cache            *redis.Client // optional: cross-instance BGM URL cache
-	localUploadCache sync.Map // local path → OSS URL (process-local fallback)
-	queryCache       sync.Map // "jamendo:query" / "pixabay:query" → bgmCacheEntry
-	localFileCache   sync.Map // dirPath → []string (已扫描的文件名列表)
+	localUploadCache sync.Map      // local path → OSS URL (process-local fallback)
+	queryCache       sync.Map      // "jamendo:query" / "pixabay:query" → bgmCacheEntry
+	localFileCache   sync.Map      // dirPath → []string (已扫描的文件名列表)
 }
 
 // NewBGMService 创建 BGM 服务
@@ -324,12 +324,11 @@ func (s *BGMService) MixBGM(ctx context.Context, videoPath, bgmSource, outputPat
 
 // bgmShotBrief 供 AI 分析的分镜摘要
 type bgmShotBrief struct {
-	ShotID        uint    `json:"shot_id"`
-	ShotNo        int     `json:"shot_no"`
-	Description   string  `json:"description,omitempty"`
-	EmotionalTone string  `json:"emotional_tone,omitempty"`
-	Narration     string  `json:"narration,omitempty"`
-	Duration      float64 `json:"duration"`
+	ShotID      uint    `json:"shot_id"`
+	ShotNo      int     `json:"shot_no"`
+	Description string  `json:"description,omitempty"`
+	Narration   string  `json:"narration,omitempty"`
+	Duration    float64 `json:"duration"`
 }
 
 // bgmSegmentAnalysis AI 输出的单个 BGM 分段
@@ -366,17 +365,16 @@ func (s *BGMService) AnalyzeBGMForVideo(
 			desc = string([]rune(desc)[:80]) + "…"
 		}
 		// P1-7: 按 rune 截断，防止截断 UTF-8 序列中间（中文每字 3 字节）
-		narration := sh.Narration
+		narration := sh.Narration()
 		if nr := []rune(narration); len(nr) > 60 {
 			narration = string(nr[:60]) + "…"
 		}
 		briefs = append(briefs, bgmShotBrief{
-			ShotID:        sh.ID,
-			ShotNo:        sh.ShotNo,
-			Description:   desc,
-			EmotionalTone: sh.CamDir.EmotionalTone,
-			Narration:     narration,
-			Duration:      sh.Duration,
+			ShotID:      sh.ID,
+			ShotNo:      sh.ShotNo,
+			Description: desc,
+			Narration:   narration,
+			Duration:    sh.Duration,
 		})
 	}
 

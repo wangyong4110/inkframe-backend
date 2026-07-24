@@ -15,8 +15,6 @@
 {% endif %}{% if fb.SuggestedNarration %}  建议旁白（直接采用）: {{ fb.SuggestedNarration }}
 {% endif %}{% if fb.SuggestedDialogue %}  建议台词（直接采用）: {{ fb.SuggestedDialogue }}
 {% endif %}{% if fb.SuggestedDescription %}  建议描述（直接采用）: {{ fb.SuggestedDescription }}
-{% endif %}{% if fb.SuggestedTransitionOut %}  建议结尾衔接（直接采用为 transition_out）: {{ fb.SuggestedTransitionOut }}
-{% endif %}{% if fb.SuggestedTransitionIn %}  建议开场衔接（直接采用为 transition_in）: {{ fb.SuggestedTransitionIn }}
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -25,10 +23,9 @@
 ① 单镜单角色：每个 dialogue 字段只能包含一个角色的台词，多角色对话须拆分为多个镜头
 ② 角色名精确：角色名必须使用原始分镜中的完整角色名，禁止用"主角""角色A""男主""女主"等占位符
 ③ sfx_tags 格式：若修改音效字段，格式必须为 JSON 数组 [{"tag": "英文搜索词", "type": "ambient|action|emotion", "prompt": "中文音效描述15-40字"}]，禁止纯文本字符串
-④ 转场字段对称：若修改 transition_out，对应下一镜头的 transition_in 也必须同步修改（取值：cut/fade/dissolve/wipe/j-cut/l-cut/push）
-⑤ 不创造新信息：禁止在 description 中引入原始分镜未提及的人物、道具或场景元素
-⑥ 敏感词过滤：description 严禁出现暴力、血腥、伤亡、色情相关敏感词
-⑦ description 改写规则（仅在改进建议涉及视觉质量问题时才改写；description 是 AI 出图/出视频的唯一依据，改写时须谨慎）：
+④ 不创造新信息：禁止在 description 中引入原始分镜未提及的人物、道具或场景元素
+⑤ 敏感词过滤：description 严禁出现暴力、血腥、伤亡、色情相关敏感词
+⑥ description 改写规则（仅在改进建议涉及视觉质量问题时才改写；description 是 AI 出图/出视频的唯一依据，改写时须谨慎）：
    - 必须保留原有结构（[画风]→[构图]→[地面层]→[前景]→[中景]→[背景]→[光线]→[大气]→[角色区块]→[镜头参数]→[画质词]），只修改问题区块
    - 只描述可见画面内容：气味/声音/温度/触感等非视觉感官描写严禁写入，AI 出图/出视频无法渲染这些信息
    - 改写后字数不得少于原有字数的 80%
@@ -56,8 +53,6 @@
       "narration": "改进后的旁白（或空字符串清空）",
       "dialogue": "角色名：改进后台词（或空字符串清空）",
       "camera_type": "pan",
-      "transition_out": "改进后的结尾状态描述（仅在改进衔接时填写）",
-      "transition_in": "改进后的开场状态描述（仅在改进衔接时填写）",
       "description": "完整改写后的 description（仅在视觉质量问题需要改写时填写，否则省略此字段）",
       "sfx_tags": [{"tag": "forest_ambient", "type": "ambient", "prompt": "改写后的音效描述"}]
     }

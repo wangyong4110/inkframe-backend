@@ -1770,7 +1770,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxVol := sfxItem.Volume
 			if sfxVol <= 0 {
 				sfxVol = 0.4
-				if shot.GenMeta.Dialogue != "" {
+				if shot.Dialogue() != "" {
 					sfxVol = 0.2
 				}
 			}
@@ -1818,9 +1818,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		// ── 4. 字幕文字素材 ───────────────────────────────────────
 		// 文本优先级：角色台词 > 旁白文案 > 英文画面描述（仅兼容旧分镜数据）
-		subtitleText := shot.GenMeta.Dialogue
+		subtitleText := shot.Dialogue()
 		if subtitleText == "" {
-			subtitleText = shot.Narration // 旁白文案（中文，新数据首选）
+			subtitleText = shot.Narration() // 旁白文案（中文，新数据首选）
 		}
 		if subtitleText == "" {
 			subtitleText = shot.Description // 兜底：旧数据中 Description 可能是中文描述
@@ -2704,9 +2704,9 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		// ── 3. 字幕轨（底部旁白/台词） ────────────────────────────────────
-		subtitleText := shot.GenMeta.Dialogue
+		subtitleText := shot.Dialogue()
 		if subtitleText == "" {
-			subtitleText = shot.Narration
+			subtitleText = shot.Narration()
 		}
 		if subtitleText == "" {
 			subtitleText = shot.Description
@@ -3578,8 +3578,8 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		meta := shotJSONMeta{
 			ShotNo:      shot.ShotNo,
 			Description: shot.Description,
-			Dialogue:    shot.GenMeta.Dialogue,
-			Narration:   shot.Narration,
+			Dialogue:    shot.Dialogue(),
+			Narration:   shot.Narration(),
 			Duration:    shot.Duration,
 		}
 
@@ -4228,16 +4228,13 @@ func stripDialogueSpeakerPrefix(text string) string {
 }
 
 // shotSubtitleText 返回镜头的有效字幕文本。
-// 优先级：Subtitle 覆盖 > Dialogue（去角色名前缀）> Narration > Description。
+// 优先级：Dialogue（去角色名前缀）> Narration > Description。
 func shotSubtitleText(shot *model.StoryboardShot) string {
-	if shot.GenMeta.Subtitle != "" {
-		return shot.GenMeta.Subtitle
+	if dial := shot.Dialogue(); dial != "" {
+		return stripDialogueSpeakerPrefix(dial)
 	}
-	if shot.GenMeta.Dialogue != "" {
-		return stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
-	}
-	if shot.Narration != "" {
-		return shot.Narration
+	if narr := shot.Narration(); narr != "" {
+		return narr
 	}
 	return shot.Description
 }
@@ -4391,7 +4388,7 @@ func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardS
 			microsToEDLTimecode(recordOut),
 		))
 		sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", clipName))
-		comment := shot.Narration
+		comment := shot.Narration()
 		if comment == "" {
 			comment = shot.Description
 		}
@@ -4656,8 +4653,8 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 		_ = w.Write([]string{
 			strconv.Itoa(shot.ShotNo),
 			shot.Description,
-			shot.GenMeta.Dialogue,
-			shot.Narration,
+			shot.Dialogue(),
+			shot.Narration(),
 			strconv.FormatFloat(shot.Duration, 'f', 2, 64),
 			shot.CamDir.CameraType,
 			shot.ImageURL,
@@ -4699,58 +4696,17 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 	f.SetSheetName("Sheet1", sheet)
 
 	headers := []string{
-		"镜号", "画面描述", "旁白", "台词", "字幕", "时长(秒)",
+		"镜号", "画面描述", "旁白", "台词", "时长(秒)",
 		"镜头类型", "转场",
-		"角色", "道具", "场景锚点", "场景描述",
+		"场景锚点", "场景描述",
 	}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		_ = f.SetCellStr(sheet, cell, h)
 	}
 
-	type shotCharMeta struct {
-		Name string `json:"name"`
-	}
-	type shotItemMeta struct {
-		Name     string `json:"name"`
-		Holder   string `json:"holder"`
-		Location string `json:"location"`
-	}
-
 	for i, shot := range shots {
 		row := i + 2
-
-		var characters []string
-		if shot.GenMeta.Characters != "" {
-			var cs []shotCharMeta
-			if json.Unmarshal([]byte(shot.GenMeta.Characters), &cs) == nil {
-				for _, c := range cs {
-					if c.Name != "" {
-						characters = append(characters, c.Name)
-					}
-				}
-			}
-		}
-
-		var items []string
-		if shot.GenMeta.Items != "" {
-			var its []shotItemMeta
-			if json.Unmarshal([]byte(shot.GenMeta.Items), &its) == nil {
-				for _, it := range its {
-					if it.Name == "" {
-						continue
-					}
-					label := it.Name
-					switch {
-					case it.Holder != "":
-						label += "(持有:" + it.Holder + ")"
-					case it.Location != "":
-						label += "(位置:" + it.Location + ")"
-					}
-					items = append(items, label)
-				}
-			}
-		}
 
 		var anchorName, anchorDesc string
 		if shot.SceneAnchorID != nil {
@@ -4760,10 +4716,10 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 			}
 		}
 
-		narration, dialogue := shot.Narration, shot.GenMeta.Dialogue
-		// 多段配音（ink_shot_voice_segment）存在时，其内容通常比 shot.Narration/GenMeta.Dialogue
+		narration, dialogue := shot.Narration(), shot.Dialogue()
+		// 多段配音（ink_shot_voice_segment）存在时，其内容通常比 shot 级 voice_lines
 		// 更新更细（用户可在配音面板单独编辑每段）。但分段是"旁白段"和"对白段"分开存的——
-		// 一个镜头完全可能只有对白段、没有旁白段（或反之），这不代表 shot.Narration 本身已过期。
+		// 一个镜头完全可能只有对白段、没有旁白段（或反之），这不代表 shot 级旁白本身已过期。
 		// 因此只在分段确实产出了非空内容时才覆盖对应字段，避免把仍然有效的 shot 级文案误清空。
 		if s.segmentRepo != nil {
 			if segs, err := s.segmentRepo.ListByShotID(shot.ID); err == nil && len(segs) > 0 {
@@ -4792,12 +4748,9 @@ func (s *CapCutService) ExportXLSX(video *model.Video, shots []*model.Storyboard
 			shot.Description,
 			narration,
 			dialogue,
-			shot.GenMeta.Subtitle,
 			shot.Duration,
 			shot.CamDir.CameraType,
 			shot.CamDir.Transition,
-			strings.Join(characters, "、"),
-			strings.Join(items, "、"),
 			anchorName,
 			anchorDesc,
 		}
