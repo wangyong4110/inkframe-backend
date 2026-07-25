@@ -228,6 +228,9 @@ func (n *Novel) VideoConf() NovelVideoConfigData {
 		if vc.VideoType == "" {
 			vc.VideoType = "animation"
 		}
+		if vc.VideoAspectRatio == "" {
+			vc.VideoAspectRatio = "16:9"
+		}
 		return vc
 	}
 	return NovelVideoConfigData{
