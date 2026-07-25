@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -25,7 +26,7 @@ var downloadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
 
 // BatchGenerateShots 批量触发指定分镜生成（同步等待所有完成，支持并发限制）
 // 图片解说模式(Mode=="slideshow")只生成图片，不生成 Ken Burns 短片。
-func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
+func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int)) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -34,11 +35,6 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		video.RenderConfig.QualityTier = qualityTierOverride
 	}
 
-	// Resolve effective provider and aspect ratio from novel config
-	effectiveProvider := ""
-	if len(provider) > 0 {
-		effectiveProvider = provider[0]
-	}
 	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
@@ -74,14 +70,11 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 
 	// 并发数和队列键均从 DB 模型配置中统一获取
 	tenantID := s.videoTenantID(video)
-	providerType := "image"
+	providerType := commons.Image
 	if hasProvider && !isSlideshow {
-		providerType = "video"
+		providerType = commons.Video
 	}
 	concurrency := 1
-	if s.aiService != nil {
-		concurrency = s.aiService.GetProviderConcurrency(tenantID, providerType)
-	}
 	queueKey := fmt.Sprintf("%d:%s-gen", tenantID, providerType)
 
 	var taskQueue *ModelTaskQueue
@@ -127,7 +120,6 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 
 		sh := shot
 		ar := aspectRatio
-		ep := effectiveProvider
 
 		var future *TaskFuture
 		if isSlideshow {
@@ -195,7 +187,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			future = taskQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
 				var genErr error
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					genErr = s.GenerateShotVideo(sh, ar, ep)
+					genErr = s.GenerateShotVideo(sh, ar)
 					if genErr == nil {
 						break
 					}
@@ -278,9 +270,6 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 	// 并发数统一从图片提供商的 AIModel.Concurrency（DB 配置）读取
 	tenantIDImg := s.videoTenantID(video)
 	concurrency := 1
-	if s.aiService != nil {
-		concurrency = s.aiService.GetProviderConcurrency(tenantIDImg, "image")
-	}
 	queueKey := fmt.Sprintf("%d:image-gen", tenantIDImg)
 	var imageQueue *ModelTaskQueue
 	if s.aiService != nil {
@@ -638,23 +627,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// DreamO（seed3l_single_ip）是单 IP 模型，只支持一个角色的参考图。
-	// 传入多个不同角色的参考图时，模型会将它们误认为同一角色的多视角，
-	// 导致画面中同一角色出现多次（重复角色 bug）。仅在租户实际生效的图片模型为 DreamO 时
-	// 才限制为 1 张参考图（主角色走 IP-Adapter，其余角色转为文字 VP 描述注入 prompt）；
-	// 其余多图 API（jimeng4.0/4.6、doubao-seedream 等）原生支持多角色参考图，不做截断。
-	cappedPortraits := characterPortraits
-	if len(cappedPortraits) > 1 && s.aiService.activeImageModelIsSingleIP(tenantID) {
-		cappedPortraits = characterPortraits[:1]
-		// 超出部分的角色转为无参考图模式：VP 注入 noPortraitVPs，由文字约束外貌
-		for _, po := range portraitOwners[1:] {
-			noPortraitVPs = append(noPortraitVPs, po.vp)
-		}
-		logger.Printf("[CharRef] shot#%d capped references: %d→1 (moved %d extra char VPs to text injection)",
-			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
-	}
-	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
-
 	// allRefImages 组装：角色图 + 道具图 + 场景锚定图。
 	// 各 provider 按自身能力取用：
 	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
@@ -670,36 +642,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s", shot.ShotNo, qualityTier, imageAspectRatio)
-
-	// 构建负向提示词：基础解剖/物理规律排除词 + 分镜 LLM 生成的镜头专项排除词
-	// 图像生成必须有负向提示词，否则极易出现变形肢体、违反物理规律、比例失调等问题
-	// 纯环境镜头（无角色参考图时）：强制加入无人物排除词，防止 Text2ImgV3 随机生成人物
-	imgNegBase := "worst quality, low quality, jpeg artifacts, noise, blurry, " +
-		"deformed, ugly, bad anatomy, extra limbs, missing limbs, floating limbs, disconnected limbs, " +
-		"malformed hands, missing fingers, fused fingers, extra fingers, poorly drawn hands, extra arms, extra legs, " +
-		"bad proportions, gross proportions, long neck, cloned face, " +
-		"out of frame, cropped head, poorly drawn face, poorly drawn eyes, asymmetric eyes, " +
-		"text, watermark, logo, signature, " +
-		"impossible physics, floating objects, gravity defying, " +
-		"oversaturated, overexposed, underexposed"
-	// 无角色参考图且分镜中确实没有任何角色时，加无人物排除词（纯环境镜头）。
-	// 若分镜有角色（即使是没有参考图的路人），不加此约束，让模型根据 image_prompt 自行生成角色形象。
-	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0
-	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
-	if !shotHasAnyCharacter {
-		imgNegBase = noPersonNeg + ", " + imgNegBase
-	}
-	// 有角色时追加面部模糊专项负向词 + 重复角色专项负向词
-	// 重复角色负向词：防止 DreamO（seed3l_single_ip）将参考图的多视角误判为多个角色实例
-	faceNeg := "blurry face, out of focus face, soft focus face, unfocused face, " +
-		"pixelated face, low res face, motion blur on face, smeared face, smudged face, " +
-		"faceless, featureless face, undefined face, indistinct face"
-	dupCharNeg := "duplicate character, cloned character, multiple copies of same person, " +
-		"same character appearing twice, character repeated, split character, mirrored figure"
-	if shotHasAnyCharacter {
-		imgNegBase = imgNegBase + ", " + faceNeg + ", " + dupCharNeg
-	}
-	negPrompt := imgNegBase
 
 	// Prompt 前缀策略：
 	// shot.Description 已包含画风/画质词/镜头参数（见 storyboard_generate.j2 的结构化要求），
@@ -730,25 +672,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	promptText = removeConflictingQualityTokens(promptText, artStyle)
 	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
 		promptText += ", " + resolveStyleQualityTokens(artStyle)
-	}
-
-	// 有角色时追加面部锐化词——无论是否有参考图。
-	// 原仅在 cappedPortraits>0 时触发，导致无参考图的角色（如 Seedream 3.0 不支持 image 字段的情况）
-	// 缺少面部正向约束，生成面部模糊。
-	if shotHasAnyCharacter {
-		promptText += ", sharp face, detailed face, crisp facial features, high facial detail, perfect face"
-	}
-
-	// DreamO 模式（有角色参考图）：IP-Adapter 已保证角色外貌，过长的 prompt 会分散注意力。
-	// 截断至 600 字符，优先保留前段（场景/构图/动作），最多保留到最近一个逗号边界。
-	// DreamO 模式截断：去掉角色 VP 注入后，prompt 的大部分是 style+presenceTokens+LLM场景描述+质量词。
-	// 放宽至 1200 字符，保留完整 LLM 场景描述；超出才截断，优先截在逗号边界。
-	if len(cappedPortraits) > 0 && len(promptText) > 1200 {
-		truncated := promptText[:1200]
-		if idx := strings.LastIndex(truncated, ","); idx > 600 {
-			truncated = truncated[:idx]
-		}
-		promptText = truncated
 	}
 
 	// 参考图说明：在 prompt 最前面追加"参考图N对应角色/道具/场景名"的说明，
@@ -786,7 +709,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if shot.SceneAnchorID != nil {
 		sceneSeed = int64(*shot.SceneAnchorID) * 31337
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, "", sceneSeed)
+	imageURL, err := s.aiService.GenerateImage(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, "", sceneSeed)
 	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
 		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
 		// 此类错误是确定性失败，重试相同参考图无意义。
@@ -805,7 +728,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				textOnlyPrompt = strings.Join(fallbackVPs, ", ") + ", " + textOnlyPrompt
 			}
 		}
-		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, negPrompt, "", sceneSeed)
+		imageURL, err = s.aiService.GenerateImage(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, "", sceneSeed)
 	}
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
@@ -1102,25 +1025,21 @@ type shotVideoRenderConfig struct {
 
 // GenerateShotVideo 为单个分镜提交视频生成任务
 func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspectRatio string, providerOverride ...string) error {
-	preferredProvider := ""
-	if len(providerOverride) > 0 {
-		preferredProvider = providerOverride[0]
-	}
 	// Determine tenantID from associated video for DB provider lookup
 	var tenantID uint
 	if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
 		tenantID = s.videoTenantID(video)
 	}
-	provider, providerName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
+	provider, modelName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
 	if provErr != nil {
 		logger.Errorf("GenerateShotVideo: shot %d 找不到视频提供商 preferred=%s tenantID=%d: %v", shot.ShotNo, preferredProvider, tenantID, provErr)
 		return fmt.Errorf("no video provider configured")
 	}
 
 	if s.aiService != nil {
-		release, err := s.aiService.acquireProviderSlot(context.Background(), tenantID, providerName)
+		release, err := s.aiService.acquireModelSlotByName(context.Background(), tenantID, modelName)
 		if err != nil {
-			return fmt.Errorf("GenerateShotVideo: acquire slot for %s: %w", providerName, err)
+			return fmt.Errorf("GenerateShotVideo: acquire slot for %s: %w", modelName, err)
 		}
 		defer release()
 	}
@@ -1128,7 +1047,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if videoAspectRatio == "" {
 		videoAspectRatio = "16:9"
 	}
-	logger.Printf("GenerateShotVideo: shot %d provider=%s(%s) aspect=%s duration=%.2fs", shot.ShotNo, providerName, provider.GetName(), videoAspectRatio, shot.Duration)
+	logger.Printf("GenerateShotVideo: shot %d provider=%s(%s) aspect=%s duration=%.2fs", shot.ShotNo, modelName, provider.GetName(), videoAspectRatio, shot.Duration)
 
 	// 参考图策略（优先级从高到低）：
 	//   ① shot.GenMeta.ReferenceImageURL 非空（上一镜最后一帧）→ I2V 时序链接，最高优先级
@@ -1144,16 +1063,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	videoArtStyle := s.resolveArtStyle(shot.VideoID)
 	videoPrompt := s.buildShotVideoPrompt(shot, videoArtStyle)
 
-	videoTraits := ai.VideoEngineTraitsFor(providerName)
+	videoTraits := ai.VideoEngineTraitsFor(modelName)
 
 	// 动态 Kling 参数（根据摄像机类型选择最优配置）
 	klingMode, klingCFG, klingDefaultDur := cameraTypeToKlingParams(shot.CamDir.CameraType)
 	shotDuration := s.resolveShotDuration(shot, klingDefaultDur, videoTraits)
 
 	// 检查项目配置：KlingProForAction、HD、3D、Seedance 分辨率/音频
-	renderCfg := s.resolveVideoRenderConfig(shot, tenantID, providerName, videoTraits, klingMode)
-
-	videoPromptFinal, negativePrompt := buildShotCinematicPrompt(shot, videoPrompt, videoArtStyle, renderCfg)
+	renderCfg := s.resolveVideoRenderConfig(shot, tenantID, modelName, videoTraits, klingMode)
 
 	// Seedance / Kling / HappyHorse 均支持多张参考图：在主参考图之外追加角色三视图和场景锚点图
 	extraRefImages, extraRefLabels := s.collectExtraReferenceImages(shot, referenceImage, videoTraits)
@@ -1181,22 +1098,22 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	req := buildVideoGenerateRequest(shot, videoPromptFinal, negativePrompt, shotDuration, videoAspectRatio, videoResolution, absRef, absExtras, prevVideoURLs, klingCFG, renderCfg, videoTraits)
 
-	logger.Printf("GenerateShotVideo: shot %d submitting to %s(%s) (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, provider.GetName(), referenceImage != "", len(extraRefImages), renderCfg.klingMode, klingCFG, videoPromptFinal)
+	logger.Printf("GenerateShotVideo: shot %d submitting to %s(%s) (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, modelName, provider.GetName(), referenceImage != "", len(extraRefImages), renderCfg.klingMode, klingCFG, videoPromptFinal)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	task, err := provider.GenerateVideo(ctx, req)
 	if err != nil {
-		metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "error").Inc()
-		logger.Errorf("GenerateShotVideo: shot %d submit failed via %s(%s): %v", shot.ShotNo, providerName, provider.GetName(), err)
+		metrics.ShotVideoSubmissionTotal.WithLabelValues(modelName, "error").Inc()
+		logger.Errorf("GenerateShotVideo: shot %d submit failed via %s(%s): %v", shot.ShotNo, modelName, provider.GetName(), err)
 		return fmt.Errorf("shot video generation failed: %w", err)
 	}
 
-	metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "success").Inc()
+	metrics.ShotVideoSubmissionTotal.WithLabelValues(modelName, "success").Inc()
 	logger.Printf("GenerateShotVideo: shot %d submitted taskID=%s", shot.ShotNo, task.TaskID)
 	shot.TaskMeta.ShotTaskID = task.TaskID
-	shot.TaskMeta.ShotProviderName = providerName
+	shot.TaskMeta.ShotProviderName = modelName
 	shot.Status = "processing"
 	s.refreshShotUserEditableFields(shot)
 	return s.storyboardRepo.Update(shot)
@@ -1262,34 +1179,12 @@ func (s *VideoService) resolveShotReferenceImage(shot *model.StoryboardShot) (st
 	return frameURL, refLabel, nil
 }
 
-// buildContinuityPrefix 计算衔接语义前缀：截取上一镜头 Description 作粗粒度衔接引导。
-// 仅在无 I2V 末帧时调用（有末帧时视频模型已能自动感知运动延续，文字引导可能干扰）。
-func (s *VideoService) buildContinuityPrefix(shot *model.StoryboardShot) string {
-	if shot.ShotNo <= 1 || shot.GenMeta.ReferenceImageURL != "" || s.storyboardRepo == nil {
-		return ""
-	}
-	prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1)
-	if prevErr != nil || prev == nil {
-		return ""
-	}
-	desc := prev.Description
-	if len([]rune(desc)) > 80 {
-		desc = string([]rune(desc)[:80]) + "..."
-	}
-	if desc == "" {
-		return ""
-	}
-	return "continuing from previous shot (" + desc + ")"
-}
-
 // buildShotVideoPrompt 组装视频生成 prompt：衔接语义 → 场景锚点锁定词 → 画面风格前缀 → 角色动作 → 台词/音效。
 func (s *VideoService) buildShotVideoPrompt(shot *model.StoryboardShot, videoArtStyle string) string {
 	// buildMotionPrompt 把 camera_type 映射为具体的运镜速度/方式词汇，并结合 description
 	// 与昼夜氛围合成基础运动描述——description 本身是静态构图/光线描述，不含运镜信息。
-	videoPrompt := buildMotionPrompt(shot)
-	if continuityPrefix := s.buildContinuityPrefix(shot); continuityPrefix != "" {
-		videoPrompt = continuityPrefix + ", " + videoPrompt
-	}
+	videoPrompt := shot.Description
+
 	// 场景锚点：将锁定词注入视频生成 prompt
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if fragment, _, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
@@ -1297,6 +1192,9 @@ func (s *VideoService) buildShotVideoPrompt(shot *model.StoryboardShot, videoArt
 		}
 	}
 	if videoArtStyle != "" {
+		if desc := resolveStyleIllustrationDesc(videoArtStyle); desc != "" {
+			videoPrompt += desc
+		}
 		videoPrompt = resolveVideoStylePrefix(videoArtStyle) + videoPrompt
 	}
 	videoPrompt = appendNarrationDialogueSFX(videoPrompt, shot)
@@ -1412,24 +1310,6 @@ func (s *VideoService) resolveVideoRenderConfig(shot *model.StoryboardShot, tena
 		}
 	}
 	return cfg
-}
-
-// buildShotCinematicPrompt 组装电影级动态前缀（运镜词+3D风格）与负向提示词。
-func buildShotCinematicPrompt(shot *model.StoryboardShot, videoPrompt, videoArtStyle string, cfg shotVideoRenderConfig) (string, string) {
-	// 电影级动态前缀——注入运镜词，风格自适应前缀（赛博朋克等特殊风格替换 film 词汇）
-	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, videoArtStyle)
-	if cfg.threeDEnabled {
-		cinematicPrefix = resolve3DStylePrefix(cfg.threeDStyle) + ", " + cinematicPrefix
-	}
-	// 视频生成专属负向词：补充 static/still/frozen/slideshow 防止模型生成静止画面
-	negativeBase := "blurry, low quality, watermark, text overlay, deformed, ugly, " +
-		"bad anatomy, duplicate, morbid, mutilated, out of frame, extra limbs, " +
-		"gross proportions, malformed limbs, " +
-		"static image, still frame, frozen, no motion, slideshow, photo, " +
-		"flickering, temporal inconsistency, abrupt scene change, jump cut"
-
-	videoPromptFinal := cinematicPrefix + videoPrompt
-	return videoPromptFinal, negativeBase
 }
 
 // collectExtraReferenceImages 收集主参考图之外的额外参考图（I2V 场景图、角色三视图、场景锚点图），
@@ -1586,132 +1466,6 @@ func buildVideoGenerateRequest(shot *model.StoryboardShot, videoPromptFinal, neg
 		}
 	}
 	return req
-}
-
-// buildCinematicPrefix 根据摄像机类型生成动态电影级 prompt 前缀。
-// 刻意移除了 "film still"（静帧含义），改用 "cinematic sequence" 强化动态感。
-func buildCinematicPrefix(cameraType, artStyle string) string {
-	motion := cameraMotionToken(cameraType)
-
-	var base string
-	switch artStyle {
-	case "cyberpunk":
-		base = "cyberpunk cinematic sequence, neon-lit rainy cityscape, holographic display glow, synthetic digital atmosphere, high-contrast dark shadows"
-	case "steampunk":
-		base = "steampunk cinematic sequence, brass machinery atmosphere, Victorian industrial fog, warm amber gaslight"
-	case "gothic_dark":
-		base = "gothic dark cinematic sequence, dramatic chiaroscuro lighting, ominous supernatural atmosphere, deep shadow volumes"
-	case "anime", "chinese_animation":
-		base = "anime cinematic sequence, dynamic visual style, vibrant color energy, expressive motion"
-	case "ink_painting":
-		base = "Chinese ink wash cinematic sequence, flowing brush atmosphere, monochromatic elegance, misty negative space"
-	case "xianxia_style":
-		base = "xianxia fantasy cinematic sequence, ethereal spiritual mist, celestial energy visualization, flowing robes"
-	case "pixel_art":
-		base = "pixel art cinematic sequence, crisp retro aesthetic, limited palette, 16-bit visual style"
-	case "ukiyo_e":
-		base = "ukiyo-e cinematic sequence, flat bold color blocks, strong contour lines, traditional Japanese aesthetic"
-	default:
-		// 未命中上面手写的旧版风格分支（如风格库新增/管理员自定义的预设）：
-		// 回退到风格库配置的提示词，而非无视项目实际风格套用通用电影感前缀。
-		if artStyle != "" {
-			if desc := resolveStyleIllustrationDesc(artStyle); desc != "" {
-				base = desc + " cinematic sequence"
-				break
-			}
-		}
-		base = "cinematic sequence, professional cinematography, anamorphic lens, natural film grain, high dynamic range"
-	}
-
-	if motion != "" {
-		base = motion + ", " + base
-	}
-	return base + ", "
-}
-
-// resolveVideoStylePrefix 返回视频 prompt 专用的风格描述前缀（带末尾逗号+空格）。
-// 比纯粹的 "cyberpunk style, " 更精确，为视频模型提供具体的视觉场景基调。
-func resolveVideoStylePrefix(style string) string {
-	switch style {
-	case "cyberpunk":
-		return "cyberpunk neon-lit city, rain-soaked reflective streets, holographic advertisements, synthetic digital glow, dark near-future dystopia, "
-	case "steampunk":
-		return "steampunk industrial scene, brass gears and steam pipes, Victorian mechanical aesthetic, amber gaslight, "
-	case "gothic_dark":
-		return "gothic dark fantasy scene, dramatic shadows, macabre atmosphere, deep jewel tones, "
-	case "anime", "chinese_animation":
-		return "anime visual style, vibrant cel-shaded colors, clean dynamic linework, "
-	case "ink_painting":
-		return "Chinese ink wash painting style, flowing brush strokes, monochrome ink atmosphere, "
-	case "xianxia_style":
-		return "Chinese xianxia fantasy style, ethereal mist and spiritual energy, flowing silk robes, "
-	case "oil_painting":
-		return "oil painting visual style, rich painterly brushwork, impasto texture, "
-	case "watercolor":
-		return "watercolor visual style, soft translucent washes, wet-on-wet color blending, "
-	case "pixel_art":
-		return "pixel art style, crisp retro 16-bit aesthetic, limited color palette, "
-	case "ukiyo_e":
-		return "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period aesthetic, "
-	case "game_concept":
-		return "game concept art style, professional fantasy character design, detailed rendering, "
-	case "sketch":
-		return "pencil sketch style, graphite linework, monochrome drawing aesthetic, "
-	case "realistic", "real_person":
-		return "" // 写实风格：视频模型默认即为写实，无需额外前缀
-	default:
-		// 未命中上面手写的旧版风格分支（如风格库新增/管理员自定义的预设）：
-		// 回退到风格库配置的提示词（同图像生成路径），而非把 style_id 原样拼成无意义的英文词组。
-		if style == "" {
-			return ""
-		}
-		if desc := resolveStyleIllustrationDesc(style); desc != "" {
-			return desc + ", "
-		}
-		return ""
-	}
-}
-
-// cameraMotionToken 把 CameraType 映射为视频 prompt 运镜描述词。
-func cameraMotionToken(cameraType string) string {
-	switch strings.ToLower(cameraType) {
-	case "pan":
-		return "smooth camera pan"
-	case "tilt":
-		return "camera tilt movement"
-	case "zoom":
-		return "cinematic zoom"
-	case "dolly":
-		return "dolly shot, camera pushing forward"
-	case "tracking", "track":
-		return "smooth tracking shot following subject"
-	case "crane", "crane_up":
-		return "crane shot, camera rising dramatically"
-	case "crane_down":
-		return "crane shot, camera descending"
-	case "arc":
-		return "arc shot, camera orbiting subject"
-	case "handheld":
-		return "handheld camera, subtle natural shake"
-	case "whip_pan":
-		return "whip pan transition, fast swipe"
-	default: // "static" or unknown — no motion token
-		return ""
-	}
-}
-
-// resolve3DStylePrefix 返回对应 3D 风格的提示词前缀。
-func resolve3DStylePrefix(style string) string {
-	switch style {
-	case "pixar":
-		return "Pixar-style 3D animation, stylized characters, warm appealing lighting, Disney Pixar quality render"
-	case "anime3d":
-		return "3D anime style, cel-shaded 3D, vibrant colors, smooth 3D animation, Japanese anime 3D render"
-	case "realistic3d":
-		return "ultra-realistic 3D render, Unreal Engine 5, ray tracing global illumination, cinematic 3D, 8K 3D rendering"
-	default: // "cg"
-		return "3D CGI animation, ray tracing, volumetric lighting, subsurface scattering, photorealistic 3D render, high-fidelity 3D"
-	}
 }
 
 // PollShotStatus 轮询单个分镜视频生成状态

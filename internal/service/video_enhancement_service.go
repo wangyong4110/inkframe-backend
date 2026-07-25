@@ -2,18 +2,9 @@ package service
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"github.com/inkframe/inkframe-backend/internal/logger"
-	"net/http"
-	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
-	"github.com/inkframe/inkframe-backend/internal/metrics"
 )
 
 // ============================================
@@ -79,28 +70,28 @@ type ShotCharacter struct {
 
 // StoryboardShot 智能分镜
 type StoryboardShot struct {
-	VideoID        uint           `json:"video_id,omitempty"`
-	ShotNo         int            `json:"shot_no"`
-	Description    string         `json:"description"`
-	Emotion        string         `json:"emotion"` // 情感标签
-	Beat           string         `json:"beat"`    // 节奏点
-	ShotType       ShotType       `json:"shot_type"`
-	ShotSize       ShotSize       `json:"shot_size"`
-	ShotAngle      ShotAngle      `json:"shot_angle"`
-	Duration       float64        `json:"duration"` // 秒
+	VideoID        uint            `json:"video_id,omitempty"`
+	ShotNo         int             `json:"shot_no"`
+	Description    string          `json:"description"`
+	Emotion        string          `json:"emotion"` // 情感标签
+	Beat           string          `json:"beat"`    // 节奏点
+	ShotType       ShotType        `json:"shot_type"`
+	ShotSize       ShotSize        `json:"shot_size"`
+	ShotAngle      ShotAngle       `json:"shot_angle"`
+	Duration       float64         `json:"duration"` // 秒
 	Characters     []ShotCharacter `json:"characters"`
-	Location       string         `json:"location"`
-	Scene          string         `json:"scene,omitempty"`
-	TimeOfDay      string         `json:"time_of_day"`
-	Weather        string         `json:"weather"`
-	Lighting       string         `json:"lighting"`
-	Dialogue       string         `json:"dialogue,omitempty"`
-	Action         string         `json:"action,omitempty"`
-	CameraMovement string         `json:"camera_movement,omitempty"`
-	Transition     string         `json:"transition"`    // 转场方式
-	VisualNotes    string         `json:"visual_notes"`  // 视觉备注
-	Prompt         string         `json:"prompt,omitempty"`
-	NegativePrompt string         `json:"negative_prompt,omitempty"`
+	Location       string          `json:"location"`
+	Scene          string          `json:"scene,omitempty"`
+	TimeOfDay      string          `json:"time_of_day"`
+	Weather        string          `json:"weather"`
+	Lighting       string          `json:"lighting"`
+	Dialogue       string          `json:"dialogue,omitempty"`
+	Action         string          `json:"action,omitempty"`
+	CameraMovement string          `json:"camera_movement,omitempty"`
+	Transition     string          `json:"transition"`   // 转场方式
+	VisualNotes    string          `json:"visual_notes"` // 视觉备注
+	Prompt         string          `json:"prompt,omitempty"`
+	NegativePrompt string          `json:"negative_prompt,omitempty"`
 }
 
 // extractDialogues 提取对话
@@ -120,37 +111,6 @@ func (s *IntelligentStoryboardService) extractDialogues(content string) []string
 	}
 
 	return dialogues
-}
-
-// ============================================
-// Character Consistency Service - 角色一致性控制
-// ============================================
-
-type CharacterConsistencyService struct {
-	imageService *ImageService
-	aiService    *AIService
-}
-
-func NewCharacterConsistencyService(imageService *ImageService, aiService *AIService) *CharacterConsistencyService {
-	return &CharacterConsistencyService{
-		imageService: imageService,
-		aiService:    aiService,
-	}
-}
-
-// ConsistencyLevel 一致性控制层级
-type ConsistencyLevel struct {
-	// L0: 基础视觉一致性
-	Lora *LoRAConfig `json:"lora,omitempty"`
-
-	// L1: 特征层一致性
-	IPAdapter *IPAdapterConfig `json:"ip_adapter,omitempty"`
-
-	// L2: 内容层一致性
-	ControlNet *ControlNetConfig `json:"control_net,omitempty"`
-
-	// L3: 人工层
-	HumanReview *HumanReviewConfig `json:"human_review,omitempty"`
 }
 
 // LoRAConfig LoRA配置
@@ -179,99 +139,6 @@ type HumanReviewConfig struct {
 	RequireApproval      bool    `json:"require_approval"`
 }
 
-// GetDefaultConsistencyLevel 获取默认一致性配置
-func (s *CharacterConsistencyService) GetDefaultConsistencyLevel() *ConsistencyLevel {
-	return &ConsistencyLevel{
-		Lora: &LoRAConfig{
-			Weight:          0.8,
-			InjectionMethod: "LoRA",
-		},
-		IPAdapter: &IPAdapterConfig{
-			Weight:        0.7,
-			StyleTemplate: "IP-Adapter",
-		},
-		ControlNet: &ControlNetConfig{
-			Pose:  true,
-			Face:  true,
-			Depth: false,
-		},
-		HumanReview: &HumanReviewConfig{
-			AutoApproveThreshold: 0.9,
-			RequireApproval:      false,
-		},
-	}
-}
-
-// ConsistencyScore 一致性评分
-type ConsistencyScore struct {
-	OverallScore    float64 `json:"overall_score"`
-	VisualScore     float64 `json:"visual_score"`     // 视觉一致性
-	FeatureScore    float64 `json:"feature_score"`    // 特征一致性
-	ExpressionScore float64 `json:"expression_score"` // 表情一致性
-}
-
-// CalculateConsistencyScore 计算一致性评分
-// 使用 AI 视觉模型比较参考图与生成图的相似度
-func (s *CharacterConsistencyService) CalculateConsistencyScore(
-	referenceImage string,
-	generatedImages []string,
-) (*ConsistencyScore, error) {
-	if referenceImage == "" {
-		// 无参考图：返回零分并说明原因
-		return &ConsistencyScore{
-			OverallScore:    0,
-			VisualScore:     0,
-			FeatureScore:    0,
-			ExpressionScore: 0,
-		}, fmt.Errorf("no reference image provided; cannot calculate consistency score")
-	}
-	if len(generatedImages) == 0 {
-		return &ConsistencyScore{}, fmt.Errorf("no generated images to compare")
-	}
-
-	// 构建 AI 视觉比较 prompt
-	prompt := fmt.Sprintf(
-		`请比较参考图和生成图中的角色一致性，返回JSON格式评分（0.0-1.0）：
-参考图：%s
-生成图（共%d张）：%s
-
-请评估：
-1. visual_score: 外观一致性（发型/服装/体型）
-2. feature_score: 面部特征一致性（五官比例/轮廓）
-3. expression_score: 表情风格一致性
-
-返回格式：{"visual_score":0.0,"feature_score":0.0,"expression_score":0.0}`,
-		referenceImage,
-		len(generatedImages),
-		strings.Join(generatedImages, ", "),
-	)
-
-	result, err := s.aiService.Generate(0, "consistency_check", prompt)
-	if err != nil {
-		// AI 调用失败：返回零分而非假数据
-		return &ConsistencyScore{}, fmt.Errorf("AI consistency check failed: %w", err)
-	}
-
-	var parsed struct {
-		VisualScore     float64 `json:"visual_score"`
-		FeatureScore    float64 `json:"feature_score"`
-		ExpressionScore float64 `json:"expression_score"`
-	}
-	cleaned := extractJSON(result)
-	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		return &ConsistencyScore{}, fmt.Errorf("failed to parse consistency score response: %w", err)
-	}
-
-	overall := (parsed.VisualScore + parsed.FeatureScore + parsed.ExpressionScore) / 3.0
-	return &ConsistencyScore{
-		OverallScore:    overall,
-		VisualScore:     parsed.VisualScore,
-		FeatureScore:    parsed.FeatureScore,
-		ExpressionScore: parsed.ExpressionScore,
-	}, nil
-}
-
-
 // ============================================
 // Image Generation Service - 图像生成服务
 // ============================================
@@ -288,16 +155,15 @@ func NewImageService(provider AIProvider) *ImageService {
 
 // ImageGenerationRequest 图像生成请求
 type ImageGenerationRequest struct {
-	Prompt           string             `json:"prompt"`
-	NegativePrompt   string             `json:"negative_prompt,omitempty"`
-	Size             string             `json:"size"` // 512x512, 1024x1024
-	Steps            int                `json:"steps"`
-	CFGScale         float64            `json:"cfg_scale"`
-	Seed             int64              `json:"seed"`
-	Style            string             `json:"style"` // realistic, anime, cartoon
-	ReferenceImage   string             `json:"reference_image,omitempty"`
-	ConsistencyLevel *ConsistencyLevel  `json:"consistency_level,omitempty"`
-	ControlNet       *ControlNetRequest `json:"control_net,omitempty"`
+	Prompt         string             `json:"prompt"`
+	NegativePrompt string             `json:"negative_prompt,omitempty"`
+	Size           string             `json:"size"` // 512x512, 1024x1024
+	Steps          int                `json:"steps"`
+	CFGScale       float64            `json:"cfg_scale"`
+	Seed           int64              `json:"seed"`
+	Style          string             `json:"style"` // realistic, anime, cartoon
+	ReferenceImage string             `json:"reference_image,omitempty"`
+	ControlNet     *ControlNetRequest `json:"control_net,omitempty"`
 }
 
 // ControlNetRequest ControlNet请求
@@ -307,504 +173,8 @@ type ControlNetRequest struct {
 	Weight float64 `json:"weight"`
 }
 
-// GenerateCharacterImage 生成角色图像
-func (s *ImageService) GenerateCharacterImage(
-	charName string,
-	expression string,
-	pose string,
-	config *ConsistencyLevel,
-) (string, error) {
-	// 构建提示词
-
-	req := &ImageGenerationRequest{
-		NegativePrompt: "blurry, low quality, bad anatomy, distorted face",
-		Size:           "1024x1024",
-		Steps:          30,
-		CFGScale:       7.5,
-		Style:          "realistic",
-	}
-
-	// 应用一致性控制
-	if config != nil {
-		req.ConsistencyLevel = config
-	}
-
-	// 调用图像生成API
-	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
-		Model:  "stable-diffusion-xl",
-	})
-
-	if err != nil {
-		return "", err
-	}
-
-	return result.URL, nil
-}
-
-// buildCharacterPrompt 构建角色提示词
-func (s *ImageService) buildCharacterPrompt(charName, expression, pose string) string {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("portrait of %s", charName))
-	sb.WriteString(fmt.Sprintf(", expression: %s", expression))
-	sb.WriteString(fmt.Sprintf(", pose: %s", pose))
-	sb.WriteString(", high detail, professional photography, studio lighting")
-
-	return sb.String()
-}
-
-// GenerateSceneImage 生成场景图像
-func (s *ImageService) GenerateSceneImage(
-	location string,
-	timeOfDay string,
-	weather string,
-	lighting string,
-	characters []string,
-) (string, error) {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("%s", location))
-
-	if timeOfDay != "" {
-		sb.WriteString(fmt.Sprintf(", %s", timeOfDay))
-	}
-
-	if weather != "" {
-		sb.WriteString(fmt.Sprintf(", %s weather", weather))
-	}
-
-	if lighting != "" {
-		sb.WriteString(fmt.Sprintf(", %s lighting", lighting))
-	}
-
-	if len(characters) > 0 {
-		sb.WriteString(fmt.Sprintf(", with %s in the scene", strings.Join(characters, ", ")))
-	}
-
-
-	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
-		Model:  "stable-diffusion-xl",
-	})
-
-	if err != nil {
-		return "", err
-	}
-
-	return result.URL, nil
-}
-
 // AIProvider AI提供者接口
 type AIProvider interface {
 	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
 	ImageGenerate(ctx context.Context, req *ai.GenerateRequest) (*ai.ImageResponse, error)
 }
-
-// ============================================
-// Video Enhancement Service - 视频增强服务
-// ============================================
-
-type VideoEnhancementService struct {
-	imageService *ImageService
-	tmpDir       string
-	jobs         map[string]*EnhancementJob
-	mu           sync.RWMutex
-}
-
-func NewVideoEnhancementService(imageService *ImageService, tmpDir ...string) *VideoEnhancementService {
-	dir := inkframeTempDir() + "/inkframe-enhance"
-	if len(tmpDir) > 0 && tmpDir[0] != "" {
-		dir = tmpDir[0]
-	}
-	return &VideoEnhancementService{
-		imageService: imageService,
-		tmpDir:       dir,
-		jobs:         make(map[string]*EnhancementJob),
-	}
-}
-
-// downloadToTemp 将 URL 下载到临时文件，返回本地路径和 cleanup 函数
-func (s *VideoEnhancementService) downloadToTemp(url string) (string, func(), error) {
-	if strings.HasPrefix(url, "file://") {
-		path := strings.TrimPrefix(url, "file://")
-		return path, func() {}, nil
-	}
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return "", nil, fmt.Errorf("mkdir tmpDir: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(s.tmpDir, "enhance-input-*.mp4")
-	if err != nil {
-		return "", nil, fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	cleanup := func() { os.Remove(tmpPath) }
-
-	resp, err := http.Get(url) //nolint:gosec // url is from trusted internal source
-	if err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("download %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("write temp file: %w", err)
-	}
-	tmpFile.Close()
-	return tmpPath, cleanup, nil
-}
-
-// EnhancementType 增强类型
-type EnhancementType string
-
-const (
-	FrameInterpolation EnhancementType = "frame_interpolation" // 帧插值
-	SuperResolution    EnhancementType = "super_resolution"    // 超分辨率
-	VideoStabilize     EnhancementType = "video_stabilize"     // 视频稳定
-	ColorGrading       EnhancementType = "color_grading"       // 色彩增强
-	StyleTransfer      EnhancementType = "style_transfer"      // 风格迁移
-)
-
-// EnhancementConfig 增强配置
-type EnhancementConfig struct {
-	Type      EnhancementType `json:"type"`
-	Enabled   bool            `json:"enabled"`
-	Intensity float64         `json:"intensity,omitempty"`
-
-	// 帧插值配置
-	TargetFPS int `json:"target_fps,omitempty"` // 目标帧率
-
-	// 超分辨率配置
-	ScaleFactor float64 `json:"scale_factor,omitempty"` // 放大倍数 2x/4x
-
-	// 色彩增强配置
-	ColorGradePreset string `json:"color_grade_preset,omitempty"` // cinematic/vibrant/muted
-
-	// 风格迁移配置
-	StylePreset string `json:"style_preset,omitempty"` // anime/oil_painting/watercolor
-}
-
-// EnhancementJob 增强任务
-type EnhancementJob struct {
-	ID        string             `json:"id"`
-	VideoID   uint               `json:"video_id"`
-	Type      EnhancementType    `json:"type"`
-	Config    *EnhancementConfig `json:"config"`
-	Status    string             `json:"status"` // pending/processing/completed/failed
-	Progress  float64            `json:"progress"`
-	ResultURL string             `json:"result_url,omitempty"`
-	Error     string             `json:"error,omitempty"`
-	CreatedAt string             `json:"created_at"`
-}
-
-// EnhanceVideoWithConfigs 增强视频（内部方法）
-func (s *VideoEnhancementService) EnhanceVideoWithConfigs(
-	videoURL string,
-	configs []EnhancementConfig,
-) ([]*EnhancementJob, error) {
-	jobs := make([]*EnhancementJob, 0, len(configs))
-
-	for _, cfg := range configs {
-		cfg := cfg // capture loop variable
-		job := &EnhancementJob{
-			ID:        fmt.Sprintf("enhance_%d_%s", time.Now().UnixNano(), cfg.Type),
-			Type:      cfg.Type,
-			Config:    &cfg,
-			Status:    "pending",
-			Progress:  0,
-			CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
-		}
-
-		go func(j *EnhancementJob, videoURL string) {
-			s.processEnhancement(context.Background(), j, videoURL)
-		}(job, videoURL)
-
-		jobs = append(jobs, job)
-	}
-
-	return jobs, nil
-}
-
-// processEnhancement 处理增强任务（带超时控制）
-func (s *VideoEnhancementService) processEnhancement(ctx context.Context, job *EnhancementJob, videoURL string) {
-	job.Status = "processing"
-
-	var resultURL string
-	var processErr error
-
-	switch job.Type {
-	case FrameInterpolation:
-		resultURL, processErr = s.applyFrameInterpolation(ctx, videoURL, job.Config)
-	case SuperResolution:
-		resultURL, processErr = s.applySuperResolution(ctx, videoURL, job.Config)
-	case ColorGrading:
-		resultURL, processErr = s.applyColorGrading(ctx, videoURL, job.Config)
-	case VideoStabilize:
-		resultURL, processErr = s.applyStabilization(ctx, videoURL, job.Config)
-	case StyleTransfer:
-		resultURL, processErr = s.applyStyleTransfer(ctx, videoURL, job.Config)
-	default:
-		processErr = fmt.Errorf("unknown enhancement type: %s", job.Type)
-	}
-
-	if processErr != nil {
-		job.Status = "failed"
-		job.Error = processErr.Error()
-		job.Progress = 0
-		metrics.VideoEnhancementTotal.WithLabelValues(string(job.Type), "failed").Inc()
-		return
-	}
-
-	job.Status = "completed"
-	job.Progress = 100
-	job.ResultURL = resultURL
-	metrics.VideoEnhancementTotal.WithLabelValues(string(job.Type), "completed").Inc()
-}
-
-// applyFrameInterpolation 帧插值（FFmpeg minterpolate）
-func (s *VideoEnhancementService) applyFrameInterpolation(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
-	targetFPS := cfg.TargetFPS
-	if targetFPS == 0 {
-		targetFPS = 60
-	}
-
-	inputPath, cleanup, err := s.downloadToTemp(videoURL)
-	if err != nil {
-		return videoURL, fmt.Errorf("frame_interpolation: download failed: %w", err)
-	}
-	defer cleanup()
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return videoURL, err
-	}
-	outputPath := fmt.Sprintf("%s/fi-%d.mp4", s.tmpDir, time.Now().UnixNano())
-
-	if out, runErr := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", fmt.Sprintf("minterpolate=fps=%d:mi_mode=mci:mc_mode=aobmc:vsbmc=1", targetFPS),
-		"-c:v", "libx264",
-		"-preset", "fast",
-		"-crf", "18",
-		"-c:a", "copy",
-		outputPath,
-	); runErr != nil {
-		logger.Errorf("[enhancement] frame_interpolation failed: %v\n%s", runErr, string(out))
-		return videoURL, nil // 非致命：返回原始
-	}
-	return "file://" + outputPath, nil
-}
-
-// applySuperResolution 超分辨率（FFmpeg lanczos + unsharp）
-func (s *VideoEnhancementService) applySuperResolution(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
-	scale := cfg.ScaleFactor
-	if scale <= 0 {
-		scale = 2.0
-	}
-
-	inputPath, cleanup, err := s.downloadToTemp(videoURL)
-	if err != nil {
-		return videoURL, fmt.Errorf("super_resolution: download failed: %w", err)
-	}
-	defer cleanup()
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return videoURL, err
-	}
-	outputPath := fmt.Sprintf("%s/sr-%d.mp4", s.tmpDir, time.Now().UnixNano())
-
-	scaleFilter := fmt.Sprintf("scale=iw*%.0f:ih*%.0f:flags=lanczos,unsharp=5:5:1.5:5:5:0.0", scale, scale)
-	if out, runErr := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", scaleFilter,
-		"-c:v", "libx264",
-		"-crf", "16",
-		"-c:a", "copy",
-		outputPath,
-	); runErr != nil {
-		logger.Errorf("[enhancement] super_resolution failed: %v\n%s", runErr, string(out))
-		return videoURL, nil
-	}
-	return "file://" + outputPath, nil
-}
-
-// applyColorGrading 色彩增强（FFmpeg curves/colorchannelmixer）
-func (s *VideoEnhancementService) applyColorGrading(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
-	preset := cfg.ColorGradePreset
-	if preset == "" {
-		preset = "cinematic"
-	}
-
-	presetFilters := map[string]string{
-		"cinematic": "curves=preset=strong_contrast,colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
-		"warm":      "colortemperature=temperature=7000,eq=saturation=1.1:brightness=0.02",
-		"cool":      "colortemperature=temperature=4500,eq=saturation=0.95",
-		"vibrant":   "eq=saturation=1.4:contrast=1.1,curves=r='0/0 0.3/0.4 1/1'",
-		"muted":     "eq=saturation=0.7:contrast=0.95,curves=preset=lighter",
-	}
-	filter, ok := presetFilters[preset]
-	if !ok {
-		filter = presetFilters["cinematic"]
-	}
-
-	inputPath, cleanup, err := s.downloadToTemp(videoURL)
-	if err != nil {
-		return videoURL, fmt.Errorf("color_grading: download failed: %w", err)
-	}
-	defer cleanup()
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return videoURL, err
-	}
-	outputPath := fmt.Sprintf("%s/cg-%d.mp4", s.tmpDir, time.Now().UnixNano())
-
-	if out, runErr := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", filter,
-		"-c:v", "libx264",
-		"-crf", "18",
-		"-c:a", "copy",
-		outputPath,
-	); runErr != nil {
-		logger.Errorf("[enhancement] color_grading failed: %v\n%s", runErr, string(out))
-		return videoURL, nil
-	}
-	return "file://" + outputPath, nil
-}
-
-// applyStabilization 视频防抖（FFmpeg vid.stab 两遍，降级到 deshake）
-func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
-	inputPath, cleanup, err := s.downloadToTemp(videoURL)
-	if err != nil {
-		return videoURL, fmt.Errorf("stabilization: download failed: %w", err)
-	}
-	defer cleanup()
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return videoURL, err
-	}
-	trfFile := fmt.Sprintf("%s/stab-%d.trf", s.tmpDir, time.Now().UnixNano())
-	outputPath := fmt.Sprintf("%s/stab-%d.mp4", s.tmpDir, time.Now().UnixNano())
-
-	// Pass 1: detect
-	if out, pass1Err := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", fmt.Sprintf("vidstabdetect=shakiness=10:accuracy=15:result=%s", trfFile),
-		"-f", "null", "-",
-	); pass1Err != nil {
-		if strings.Contains(string(out), "No such filter") || strings.Contains(pass1Err.Error(), "No such filter") {
-			// vid.stab 不可用，降级到 deshake
-			logger.Printf("[enhancement] vid.stab unavailable, falling back to deshake")
-			if dOut, dErr := runFFmpegCtx(ctx, "-y",
-				"-i", inputPath,
-				"-vf", "deshake",
-				"-c:v", "libx264",
-				"-crf", "18",
-				"-c:a", "copy",
-				outputPath,
-			); dErr != nil {
-				logger.Errorf("[enhancement] deshake also failed: %v\n%s", dErr, string(dOut))
-				return videoURL, nil
-			}
-			return "file://" + outputPath, nil
-		}
-		logger.Errorf("[enhancement] vidstabdetect failed: %v\n%s", pass1Err, string(out))
-		return videoURL, nil
-	}
-
-	// Pass 2: transform
-	defer os.Remove(trfFile)
-	if out, pass2Err := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", fmt.Sprintf("vidstabtransform=input=%s:zoom=1:smoothing=30,unsharp=5:5:0.8", trfFile),
-		"-c:v", "libx264",
-		"-crf", "18",
-		"-c:a", "copy",
-		outputPath,
-	); pass2Err != nil {
-		logger.Errorf("[enhancement] vidstabtransform failed: %v\n%s", pass2Err, string(out))
-		return videoURL, nil
-	}
-	return "file://" + outputPath, nil
-}
-
-// applyStyleTransfer 风格迁移（FFmpeg 艺术滤镜）
-func (s *VideoEnhancementService) applyStyleTransfer(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
-	preset := cfg.StylePreset
-	if preset == "" {
-		preset = "anime"
-	}
-
-	styleFilters := map[string]string{
-		"anime":   "edgedetect=low=0.05:high=0.35,negate,hue=s=0,negate,format=yuv420p",
-		"oil":     "edgedetect=mode=colormix:high=0,curves=all='0/0 0.4/0.3 1/1'",
-		"sketch":  "edgedetect=low=0.02:high=0.2,negate,format=gray,format=yuv420p",
-		"vintage": "colorchannelmixer=.9:.1:.05:0:.1:.8:.1:0:.05:.1:.85,curves=preset=vintage",
-	}
-	filter, ok := styleFilters[preset]
-	if !ok {
-		filter = styleFilters["anime"]
-	}
-
-	inputPath, cleanup, err := s.downloadToTemp(videoURL)
-	if err != nil {
-		return videoURL, fmt.Errorf("style_transfer: download failed: %w", err)
-	}
-	defer cleanup()
-
-	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
-		return videoURL, err
-	}
-	outputPath := fmt.Sprintf("%s/st-%d.mp4", s.tmpDir, time.Now().UnixNano())
-
-	if out, runErr := runFFmpegCtx(ctx, "-y",
-		"-i", inputPath,
-		"-vf", filter,
-		"-c:v", "libx264",
-		"-crf", "18",
-		"-c:a", "copy",
-		outputPath,
-	); runErr != nil {
-		logger.Errorf("[enhancement] style_transfer failed: %v\n%s", runErr, string(out))
-		return videoURL, nil
-	}
-	return "file://" + outputPath, nil
-}
-
-// RecommendEnhancements 推荐增强方案
-func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
-	FPS        int     `json:"fps"`
-	Resolution string  `json:"resolution"`
-	Duration   float64 `json:"duration"`
-	Style      string  `json:"style"`
-}) []*EnhancementConfig {
-	configs := make([]*EnhancementConfig, 0)
-
-	// 帧率优化
-	if videoInfo.FPS < 30 {
-		configs = append(configs, &EnhancementConfig{
-			Type:      FrameInterpolation,
-			TargetFPS: 60,
-		})
-	}
-
-	// 分辨率优化
-	if videoInfo.Resolution == "720p" || videoInfo.Resolution == "1080p" {
-		configs = append(configs, &EnhancementConfig{
-			Type:        SuperResolution,
-			ScaleFactor: 2.0,
-		})
-	}
-
-	// 色彩优化
-	configs = append(configs, &EnhancementConfig{
-		Type:             ColorGrading,
-		ColorGradePreset: "cinematic",
-	})
-
-	return configs
-}
-
-// ============================================
-// Helper Functions
-// ============================================

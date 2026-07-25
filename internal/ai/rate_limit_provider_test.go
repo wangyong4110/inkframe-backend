@@ -13,9 +13,6 @@ func TestRateLimitProvider_DelegatesNameModelsHealthCheck(t *testing.T) {
 	if p.GetName() != "rl-inner" {
 		t.Errorf("GetName() = %q", p.GetName())
 	}
-	if len(p.GetModels()) != 1 {
-		t.Errorf("GetModels() = %v", p.GetModels())
-	}
 	if err := p.HealthCheck(context.Background()); err != nil {
 		t.Errorf("HealthCheck() = %v", err)
 	}

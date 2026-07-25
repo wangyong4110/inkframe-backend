@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	readability "github.com/go-shiori/go-readability"
 	"github.com/gocolly/colly/v2"
 	"github.com/gocolly/colly/v2/extensions"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -80,8 +79,8 @@ func (s *CrawlStats) recordResponse(bodyLen int64) {
 	s.BytesDownloaded += bodyLen
 	s.mu.Unlock()
 }
-func (s *CrawlStats) recordSuccess() { s.mu.Lock(); s.SuccessCount++; s.mu.Unlock() }
-func (s *CrawlStats) recordFail()    { s.mu.Lock(); s.FailCount++; s.mu.Unlock() }
+func (s *CrawlStats) recordSuccess()          { s.mu.Lock(); s.SuccessCount++; s.mu.Unlock() }
+func (s *CrawlStats) recordFail()             { s.mu.Lock(); s.FailCount++; s.mu.Unlock() }
 func (s *CrawlStats) ElapsedSeconds() float64 { return time.Since(s.StartedAt).Seconds() }
 func (s *CrawlStats) Snapshot() CrawlStats {
 	s.mu.Lock()

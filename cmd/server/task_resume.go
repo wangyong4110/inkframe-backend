@@ -44,7 +44,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				if err := svcs.SFXService.AutoGenerateSFX(ctx, shot, t.TenantID, params.Provider, true); err != nil {
+				if err := svcs.SFXService.AutoGenerateSFX(ctx, shot, t.TenantID, true); err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
 					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID}) //nolint:errcheck
@@ -61,9 +61,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			// Parse saved params
 			var params struct {
-				UserContext string `json:"user_context"`
-				Provider    string `json:"provider"`
 				Force       bool   `json:"force"`
+				UserContext string `json:"user_context"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -88,7 +87,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				overall := 50 + pct*45/100
 				svcs.TaskService.UpdateProgress(t.TaskID, overall) //nolint:errcheck
 			}
-			success, fail, failedIDs := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, params.Provider, progressFn)
+			success, fail, failedIDs := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, progressFn)
 			logger.Printf("TaskService resume sfx_gen %s done: sfx_success=%d sfx_fail=%d", t.TaskID, success, fail)
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 				"count":           len(shots),
@@ -1380,7 +1379,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// interrupted it mid-flight. Safe to re-run — see ResumePostProcessChapter's doc comment.
 	if svcs.ChapterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterPostProcess, func(ctx context.Context, t *model.AsyncTask) {
-			svcs.ChapterService.ResumePostProcessChapter(t)
+			svcs.ChapterService.ResumePostProcessChapter(ctx, t)
 		})
 	}
 

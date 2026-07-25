@@ -171,7 +171,7 @@ func (h *AssetHandler) SearchAssets(c *gin.Context) {
 		SubType: c.Query("sub_type"), Source: c.Query("source"),
 		License: c.Query("license"),
 		Sort:    c.DefaultQuery("sort", "created_at"),
-		Page: pg.Page, PageSize: pg.PageSize,
+		Page:    pg.Page, PageSize: pg.PageSize,
 		Status: c.Query("status"),
 	}
 	if tags := c.QueryArray("tags"); len(tags) > 0 {
@@ -419,16 +419,6 @@ func (h *AssetHandler) RemoveTag(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
-}
-
-// POST /assets/:id/auto-tag
-func (h *AssetHandler) TriggerAutoTag(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.TriggerAutoTag(uint(id), getUserID(c)); err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	respondOK(c, gin.H{"message": "auto-tag triggered"})
 }
 
 // ─── Public Library Interactions ──────────────────────────────────────────────

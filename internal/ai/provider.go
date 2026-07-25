@@ -43,9 +43,6 @@ type AIProvider interface {
 	// GetName 获取提供者名称
 	GetName() string
 
-	// GetModels 获取支持的模型列表
-	GetModels() []string
-
 	// HealthCheck 健康检查
 	HealthCheck(ctx context.Context) error
 }
@@ -67,7 +64,7 @@ type GenerateRequest struct {
 
 // ChatMessage 聊天消息
 type ChatMessage struct {
-	Role      string   `json:"role"`                 // system, user, assistant
+	Role      string   `json:"role"` // system, user, assistant
 	Content   string   `json:"content"`
 	Name      string   `json:"name,omitempty"`
 	ImageURLs []string `json:"image_urls,omitempty"` // Vision多模态：图片URL列表
@@ -75,59 +72,59 @@ type ChatMessage struct {
 
 // GenerateResponse 生成响应
 type GenerateResponse struct {
-	Content    string   `json:"content"`
-	Model     string   `json:"model"`
-	Tokens    int      `json:"tokens"`
-	InputTokens int   `json:"input_tokens"`
-	StopReason string  `json:"stop_reason"`
-	FinishTime int64   `json:"finish_time"` // 耗时(ms)
-	Error     string   `json:"error,omitempty"`
+	Content     string `json:"content"`
+	Model       string `json:"model"`
+	Tokens      int    `json:"tokens"`
+	InputTokens int    `json:"input_tokens"`
+	StopReason  string `json:"stop_reason"`
+	FinishTime  int64  `json:"finish_time"` // 耗时(ms)
+	Error       string `json:"error,omitempty"`
 	// Fix 4: 实际执行的模型 DB ID（fallback 时与 PrimaryModelID 不同，用于 usage log 精确记录）
 	ActualModelID uint `json:"actual_model_id,omitempty"`
 }
 
 // ImageGenerateRequest 图像生成请求
 type ImageGenerateRequest struct {
-	Model          string   `json:"model"`
-	Prompt         string   `json:"prompt"`
-	NegativePrompt string   `json:"negative_prompt,omitempty"`
-	Size           string   `json:"size"`  // 512x512, 1024x1024, 2K, 4K 等
-	Steps          int      `json:"steps"`
-	CFGScale       float64  `json:"cfg_scale"`
-	Seed           int64    `json:"seed"`
-	Style          string   `json:"style"` // realistic, anime, cartoon, etc.
-	ReferenceImage  string   `json:"reference_image,omitempty"`  // 单张参考图 base64（向后兼容）
-	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图 base64（最多14张，优先级高于 ReferenceImage）
-	ReferenceURL    string   `json:"reference_url,omitempty"`    // 单张参考图原始 HTTP URL（支持 URL 的接口优先使用）
-	ReferenceURLs   []string `json:"reference_urls,omitempty"`   // 多张参考图原始 HTTP URL
-	ControlNets     []ControlNet `json:"control_nets,omitempty"`
+	Model           string                 `json:"model"`
+	Prompt          string                 `json:"prompt"`
+	NegativePrompt  string                 `json:"negative_prompt,omitempty"`
+	Size            string                 `json:"size"` // 512x512, 1024x1024, 2K, 4K 等
+	Steps           int                    `json:"steps"`
+	CFGScale        float64                `json:"cfg_scale"`
+	Seed            int64                  `json:"seed"`
+	Style           string                 `json:"style"`                      // realistic, anime, cartoon, etc.
+	ReferenceImage  string                 `json:"reference_image,omitempty"`  // 单张参考图 base64（向后兼容）
+	ReferenceImages []string               `json:"reference_images,omitempty"` // 多张参考图 base64（最多14张，优先级高于 ReferenceImage）
+	ReferenceURL    string                 `json:"reference_url,omitempty"`    // 单张参考图原始 HTTP URL（支持 URL 的接口优先使用）
+	ReferenceURLs   []string               `json:"reference_urls,omitempty"`   // 多张参考图原始 HTTP URL
+	ControlNets     []ControlNet           `json:"control_nets,omitempty"`
 	Extra           map[string]interface{} `json:"extra,omitempty"` // 提供者特定扩展参数
 
 	// Seedream 5.0/4.5/4.0 扩展参数
 	// SequentialImageGeneration：组图模式，"auto"=模型自动判断，"disabled"=只生单张（默认）
-	SequentialImageGeneration        string `json:"sequential_image_generation,omitempty"`
+	SequentialImageGeneration string `json:"sequential_image_generation,omitempty"`
 	// SequentialImageGenerationMaxImages：组图最多生成张数，范围 [1,15]，默认 15
-	SequentialImageGenerationMaxImages int    `json:"sequential_image_generation_max_images,omitempty"`
+	SequentialImageGenerationMaxImages int `json:"sequential_image_generation_max_images,omitempty"`
 	// OutputFormat：生成图片格式，"jpeg"（默认）或 "png"，仅 Seedream 5.0 lite 支持
-	OutputFormat   string `json:"output_format,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 	// Watermark：是否添加水印，nil=使用 provider 默认值（false），false=不加水印，true=加水印
-	Watermark      *bool  `json:"watermark,omitempty"`
+	Watermark *bool `json:"watermark,omitempty"`
 	// ResponseFormat：返回格式，"url"（默认）或 "b64_json"
 	ResponseFormat string `json:"response_format,omitempty"`
 }
 
 // ControlNet 控制网
 type ControlNet struct {
-	Type    string `json:"type"`    // canny, depth, pose, etc.
-	Image   string `json:"image"`   // 图像URL或base64
-	Weight  float64 `json:"weight"`
+	Type   string  `json:"type"`  // canny, depth, pose, etc.
+	Image  string  `json:"image"` // 图像URL或base64
+	Weight float64 `json:"weight"`
 }
 
 // ImageResponse 图像响应
 type ImageResponse struct {
-	URL       string   `json:"url"`        // 主图 URL（第一张）
-	URLs      []string `json:"urls,omitempty"`  // 组图 URL 列表（Seedream 5.0/4.5/4.0 auto 模式）
-	Sizes     []string `json:"sizes,omitempty"` // 各图片宽高像素值，如 ["2048x2048", ...]
+	URL       string   `json:"url"`                // 主图 URL（第一张）
+	URLs      []string `json:"urls,omitempty"`     // 组图 URL 列表（Seedream 5.0/4.5/4.0 auto 模式）
+	Sizes     []string `json:"sizes,omitempty"`    // 各图片宽高像素值，如 ["2048x2048", ...]
 	B64JSON   string   `json:"b64_json,omitempty"` // base64 格式（response_format=b64_json）
 	Width     int      `json:"width"`
 	Height    int      `json:"height"`
@@ -155,11 +152,11 @@ type AudioGenerateRequest struct {
 	Lyrics          string  `json:"lyrics"`           // 歌词（文生音乐 API 使用，如 MiniMax Music；用 \n 分隔每行）
 	Instrumental    bool    `json:"instrumental"`     // 是否生成纯音乐（无人声），MiniMax Music 使用
 	// 腾讯云 TTS 扩展参数
-	FastVoiceType  string `json:"fast_voice_type,omitempty"`  // 一句话复刻音色ID（VoiceType=200000000 时填入）
-	EnableSubtitle bool   `json:"enable_subtitle,omitempty"`  // 是否返回字/词级时间戳
-	Codec          string `json:"codec,omitempty"`            // 音频格式：mp3（默认）/ wav / pcm
-	SampleRate     int    `json:"sample_rate,omitempty"`      // 采样率：8000 / 16000（默认）/ 24000
-	SegmentRate    int    `json:"segment_rate,omitempty"`     // 断句敏感阈值 [0,1,2]，越大越不断句
+	FastVoiceType  string `json:"fast_voice_type,omitempty"` // 一句话复刻音色ID（VoiceType=200000000 时填入）
+	EnableSubtitle bool   `json:"enable_subtitle,omitempty"` // 是否返回字/词级时间戳
+	Codec          string `json:"codec,omitempty"`           // 音频格式：mp3（默认）/ wav / pcm
+	SampleRate     int    `json:"sample_rate,omitempty"`     // 采样率：8000 / 16000（默认）/ 24000
+	SegmentRate    int    `json:"segment_rate,omitempty"`    // 断句敏感阈值 [0,1,2]，越大越不断句
 }
 
 // TTSSubtitle 语音合成时间戳（字/词级）
@@ -175,8 +172,8 @@ type TTSSubtitle struct {
 // AudioResponse 音频响应
 type AudioResponse struct {
 	URL       string        `json:"url"`
-	Duration  float64       `json:"duration"`            // 秒
-	Format    string        `json:"format"`              // mp3, wav, etc.
+	Duration  float64       `json:"duration"` // 秒
+	Format    string        `json:"format"`   // mp3, wav, etc.
 	LatencyMs int64         `json:"latency_ms"`
 	Subtitles []TTSSubtitle `json:"subtitles,omitempty"` // 时间戳（EnableSubtitle=true 时填充）
 	Error     string        `json:"error,omitempty"`
@@ -210,10 +207,10 @@ type MultimodalMultiEmbeddingConfig struct {
 
 // MultimodalEmbedRequest 多模态 Embedding 请求
 type MultimodalEmbedRequest struct {
-	Model          string                          `json:"model"`
-	Input          []MultimodalEmbedItem           `json:"input"`
-	Dimensions     *int                            `json:"dimensions,omitempty"`    // 1024 或 2048，仅 vision-250615+ 支持
-	Instructions   string                          `json:"instructions,omitempty"`  // 推理提示词
+	Model           string                           `json:"model"`
+	Input           []MultimodalEmbedItem            `json:"input"`
+	Dimensions      *int                             `json:"dimensions,omitempty"`       // 1024 或 2048，仅 vision-250615+ 支持
+	Instructions    string                           `json:"instructions,omitempty"`     // 推理提示词
 	SparseEmbedding *MultimodalSparseEmbeddingConfig `json:"sparse_embedding,omitempty"` // 稀疏向量开关
 	MultiEmbedding  *MultimodalMultiEmbeddingConfig  `json:"multi_embedding,omitempty"`  // 多向量输出配置
 }
@@ -408,10 +405,10 @@ func NewCostEstimator() *CostEstimator {
 	return &CostEstimator{
 		tokenCosts: map[string]map[string]float64{
 			"openai": {
-				"gpt-4":           0.03,  // 输入
-				"gpt-4-output":    0.06,  // 输出
-				"gpt-4-turbo":     0.01,
-				"gpt-3.5-turbo":   0.0005,
+				"gpt-4":         0.03, // 输入
+				"gpt-4-output":  0.06, // 输出
+				"gpt-4-turbo":   0.01,
+				"gpt-3.5-turbo": 0.0005,
 			},
 			"anthropic": {
 				"claude-3-opus":   0.015,
@@ -439,16 +436,16 @@ type UsageLogger struct {
 }
 
 type UsageLogEntry struct {
-	Provider    string    `json:"provider"`
-	Model       string    `json:"model"`
-	TaskType    string    `json:"task_type"`
-	InputTokens int       `json:"input_tokens"`
-	OutputTokens int      `json:"output_tokens"`
-	LatencyMs   int64     `json:"latency_ms"`
-	Cost        float64   `json:"cost"`
-	Success     bool      `json:"success"`
-	Error       string    `json:"error,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
+	Provider     string    `json:"provider"`
+	Model        string    `json:"model"`
+	TaskType     string    `json:"task_type"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	LatencyMs    int64     `json:"latency_ms"`
+	Cost         float64   `json:"cost"`
+	Success      bool      `json:"success"`
+	Error        string    `json:"error,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // Log 记录使用
@@ -488,14 +485,14 @@ func (l *UsageLogger) GetStats(provider, model string) *UsageStats {
 
 // UsageStats 使用统计
 type UsageStats struct {
-	TotalRequests   int     `json:"total_requests"`
-	SuccessCount    int     `json:"success_count"`
-	TotalInputTokens  int    `json:"total_input_tokens"`
-	TotalOutputTokens int   `json:"total_output_tokens"`
-	TotalCost       float64 `json:"total_cost"`
-	TotalLatency    int64   `json:"total_latency"`
-	AverageLatency  int64   `json:"average_latency"`
-	SuccessRate     float64 `json:"success_rate"`
+	TotalRequests     int     `json:"total_requests"`
+	SuccessCount      int     `json:"success_count"`
+	TotalInputTokens  int     `json:"total_input_tokens"`
+	TotalOutputTokens int     `json:"total_output_tokens"`
+	TotalCost         float64 `json:"total_cost"`
+	TotalLatency      int64   `json:"total_latency"`
+	AverageLatency    int64   `json:"average_latency"`
+	SuccessRate       float64 `json:"success_rate"`
 }
 
 // ModelHealthChecker 模型健康检查器
@@ -515,9 +512,9 @@ type HealthStatus struct {
 
 func NewModelHealthChecker() *ModelHealthChecker {
 	return &ModelHealthChecker{
-		providers:  make(map[string]AIProvider),
+		providers:     make(map[string]AIProvider),
 		checkInterval: 5 * time.Minute,
-		lastCheck:    make(map[string]*HealthStatus),
+		lastCheck:     make(map[string]*HealthStatus),
 	}
 }
 
@@ -934,8 +931,7 @@ func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateReq
 	return nil, fmt.Errorf("RetryProvider.AudioGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
-func (p *RetryProvider) GetName() string      { return p.provider.GetName() }
-func (p *RetryProvider) GetModels() []string  { return p.provider.GetModels() }
+func (p *RetryProvider) GetName() string                       { return p.provider.GetName() }
 func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provider.HealthCheck(ctx) }
 
 // ResetCircuit force-closes the circuit breaker. Call after a successful health check to

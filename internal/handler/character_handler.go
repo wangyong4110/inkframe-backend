@@ -33,24 +33,24 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 // handlers do (e.g. char_reanalyze), instead of a differently-shaped ad hoc map.
 func CharacterResponse(c *model.Character) gin.H {
 	return gin.H{
-		"id":               c.ID,
-		"novel_id":         c.NovelID,
-		"uuid":             c.UUID,
-		"name":             c.Name,
-		"role":             c.Role,
-		"gender":           c.Meta.Gender,
-		"age":              c.Meta.Age,
-		"description":        c.Description,
+		"id":              c.ID,
+		"novel_id":        c.NovelID,
+		"uuid":            c.UUID,
+		"name":            c.Name,
+		"role":            c.Role,
+		"gender":          c.Meta.Gender,
+		"age":             c.Meta.Age,
+		"description":     c.Description,
 		"default_look_id": c.DefaultLookID,
 		"default_look":    c.DefaultLook,
-		"voice_id":         c.VoiceConfig.VoiceID,
-		"voice_speed":      c.VoiceConfig.VoiceSpeed,
-		"voice_style":      c.VoiceConfig.VoiceStyle,
-		"voice_language":   c.VoiceConfig.VoiceLanguage,
-		"voice_sample":     c.VoiceConfig.VoiceSample,
-		"status":           c.Status,
-		"created_at":       c.CreatedAt,
-		"updated_at":       c.UpdatedAt,
+		"voice_id":        c.VoiceConfig.VoiceID,
+		"voice_speed":     c.VoiceConfig.VoiceSpeed,
+		"voice_style":     c.VoiceConfig.VoiceStyle,
+		"voice_language":  c.VoiceConfig.VoiceLanguage,
+		"voice_sample":    c.VoiceConfig.VoiceSample,
+		"status":          c.Status,
+		"created_at":      c.CreatedAt,
+		"updated_at":      c.UpdatedAt,
 	}
 }
 
@@ -652,30 +652,6 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 	respondOK(c, arc)
 }
 
-// AnalyzeCharacterConsistency 分析角色一致性
-// POST /api/v1/characters/:id/analyze-consistency
-func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var req struct {
-		Images []string `json:"images" binding:"required,min=1"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	result, err := h.characterService.AnalyzeConsistency(getTenantID(c), uint(id), req.Images)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, result)
-}
-
 // ListEffectiveCharacters GET /novels/:id/chapters/:chapter_no/characters
 func (h *CharacterHandler) ListEffectiveCharacters(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
@@ -1247,4 +1223,3 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	}
 	respondAccepted(c, task.TaskID, "形象图片生成任务已提交")
 }
-

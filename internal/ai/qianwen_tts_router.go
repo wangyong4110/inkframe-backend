@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	aliyun2 "github.com/inkframe/inkframe-backend/internal/ai/aliyun"
 )
 
 // QianwenTTSRouter dispatches AudioGenerate to AliyunTTSProvider or QwenTTSProvider
 // based on the voice ID.  Aliyun CosyVoice IDs start with "long" / "loong"; everything
 // else is routed to the Qwen TTS service.  Both services share the same DashScope API key.
 type QianwenTTSRouter struct {
-	aliyun *AliyunTTSProvider
+	aliyun *aliyun2.AliyunTTSProvider
 	qwen   *QwenTTSProvider
 }
 
@@ -31,7 +33,7 @@ func ttsBaseURL(endpoint string) string {
 func NewQianwenTTSRouter(apiKey, endpoint string) *QianwenTTSRouter {
 	base := ttsBaseURL(endpoint)
 	return &QianwenTTSRouter{
-		aliyun: NewAliyunTTSProvider(apiKey, base),
+		aliyun: aliyun2.NewAliyunTTSProvider(apiKey, base),
 		qwen:   NewQwenTTSProvider(apiKey, base),
 	}
 }
@@ -56,7 +58,7 @@ func (r *QianwenTTSRouter) Embed(ctx context.Context, text string) ([]float32, e
 func (r *QianwenTTSRouter) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
 	return nil, fmt.Errorf("QianwenTTSRouter: ImageGenerate not supported")
 }
-func (r *QianwenTTSRouter) GetName() string   { return "qianwen-tts-router" }
+func (r *QianwenTTSRouter) GetName() string     { return "qianwen-tts-router" }
 func (r *QianwenTTSRouter) GetModels() []string { return nil }
 func (r *QianwenTTSRouter) HealthCheck(ctx context.Context) error {
 	return r.qwen.HealthCheck(ctx)

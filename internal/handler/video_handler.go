@@ -17,20 +17,16 @@ func timeNow() time.Time { return time.Now() }
 
 // VideoHandler 视频处理器
 type VideoHandler struct {
-	videoService       *service.VideoService
-	storyboardService  *service.StoryboardService
-	enhancementService *service.VideoEnhancementService
-	consistencyService *service.CharacterConsistencyService
-	capcutService      *service.CapCutService
-	taskSvc            *service.TaskService
-	sfxSvc             *service.SFXService
-	sfxItemRepo        *repository.ShotSFXItemRepository
-	bgmSvc             *service.BGMService
-	bgmRepo            *repository.VideoBGMSegmentRepository
-	subtitleSvc        *service.SubtitleService
-	storageSvc         storage.Service
-	assetRepo          *repository.AssetRepository
-	auditSvc           *service.AuditService
+	videoService      *service.VideoService
+	storyboardService *service.StoryboardService
+	taskSvc           *service.TaskService
+	sfxSvc            *service.SFXService
+	sfxItemRepo       *repository.ShotSFXItemRepository
+	bgmRepo           *repository.VideoBGMSegmentRepository
+	subtitleSvc       *service.SubtitleService
+	storageSvc        storage.Service
+	assetRepo         *repository.AssetRepository
+	auditSvc          *service.AuditService
 }
 
 func (h *VideoHandler) WithAuditService(svc *service.AuditService) *VideoHandler {
@@ -43,37 +39,8 @@ func (h *VideoHandler) WithStorage(svc storage.Service) *VideoHandler {
 	return h
 }
 
-// WithServerBaseURL 将服务器自身 base URL 注入 CapCutService，用于解析本地存储/DB 存储的相对路径媒体 URL。
-func (h *VideoHandler) WithServerBaseURL(u string) *VideoHandler {
-	h.capcutService.WithServerBaseURL(u)
-	return h
-}
-
 func (h *VideoHandler) WithAssetRepo(r *repository.AssetRepository) *VideoHandler {
 	h.assetRepo = r
-	return h
-}
-
-// WithCapCutSegmentRepo 将 VoiceSegment 仓库注入 CapCutService，使导出包含多段配音音频（P1-2）。
-func (h *VideoHandler) WithCapCutSegmentRepo(r *repository.ShotVoiceSegmentRepository) *VideoHandler {
-	h.capcutService.WithSegmentRepo(r)
-	return h
-}
-
-// WithCapCutSceneAnchorRepo 将场景锚点仓库注入 CapCutService，使 Excel 分镜脚本导出能带出场景锚点名称/描述。
-func (h *VideoHandler) WithCapCutSceneAnchorRepo(r *repository.SceneAnchorRepository) *VideoHandler {
-	h.capcutService.WithSceneAnchorRepo(r)
-	return h
-}
-
-func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
-	h.sfxItemRepo = r
-	h.capcutService.WithSFXItemRepo(r) // 同时注入 CapCut 导出服务，使多条 SFX item 能正确导出
-	return h
-}
-
-func (h *VideoHandler) WithBGMService(svc *service.BGMService) *VideoHandler {
-	h.bgmSvc = svc
 	return h
 }
 
@@ -131,15 +98,10 @@ func (h *VideoHandler) ExportSubtitles(c *gin.Context) {
 func NewVideoHandler(
 	videoService *service.VideoService,
 	storyboardService *service.StoryboardService,
-	enhancementService *service.VideoEnhancementService,
-	consistencyService *service.CharacterConsistencyService,
 ) *VideoHandler {
 	return &VideoHandler{
-		videoService:       videoService,
-		storyboardService:  storyboardService,
-		enhancementService: enhancementService,
-		consistencyService: consistencyService,
-		capcutService:      service.NewCapCutService(),
+		videoService:      videoService,
+		storyboardService: storyboardService,
 	}
 }
 

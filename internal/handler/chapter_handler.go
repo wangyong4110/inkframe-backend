@@ -15,13 +15,12 @@ import (
 
 // ChapterHandler 章节处理器
 type ChapterHandler struct {
-	chapterService    *service.ChapterService
-	versionService    *service.ChapterVersionService
-	qualityService    *service.QualityControlService
-	taskSvc           *service.TaskService
-	novelService      *service.NovelService
-	continuityService *service.ContinuityService
-	auditSvc          *service.AuditService
+	chapterService *service.ChapterService
+	versionService *service.ChapterVersionService
+	qualityService *service.QualityControlService
+	taskSvc        *service.TaskService
+	novelService   *service.NovelService
+	auditSvc       *service.AuditService
 }
 
 func (h *ChapterHandler) WithAuditService(svc *service.AuditService) *ChapterHandler {
@@ -41,12 +40,6 @@ func NewChapterHandler(
 		qualityService: qualityService,
 		taskSvc:        taskSvc,
 	}
-}
-
-// WithContinuityService injects the ContinuityService for report listing.
-func (h *ChapterHandler) WithContinuityService(cs *service.ContinuityService) *ChapterHandler {
-	h.continuityService = cs
-	return h
 }
 
 // WithNovelService injects the NovelService for novel ownership checks.
@@ -1036,27 +1029,6 @@ func (h *ChapterHandler) UnignoreChapterIssue(c *gin.Context) {
 	respondOK(c, nil)
 }
 
-// ListContinuityReports 获取章节的连续性检查记录列表
-// GET /api/v1/chapters/:id/continuity-reports
-func (h *ChapterHandler) ListContinuityReports(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	if h.continuityService == nil {
-		respondErr(c, http.StatusServiceUnavailable, "continuity service not available")
-		return
-	}
-
-	records, err := h.continuityService.ListReports(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, records)
-}
-
 // BatchDeleteChapters 批量删除章节
 // DELETE /api/v1/novels/:id/chapters
 // Body: {"chapter_ids": [1,2,3]}
@@ -1291,4 +1263,3 @@ func extractChapterModifiedContent(text string) string {
 	}
 	return strings.TrimSpace(text[s+len(startMark) : e])
 }
-

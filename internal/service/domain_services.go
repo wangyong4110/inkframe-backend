@@ -90,21 +90,21 @@ type CapableProvider struct {
 
 // providerDisplayNames maps well-known provider names to human-readable labels.
 var providerDisplayNames = map[string]string{
-	"openai":            "OpenAI",
-	"claude":            "Claude (Anthropic)",
-	"anthropic":         "Claude (Anthropic)",
-	"deepseek":          "DeepSeek",
-	"doubao":            "豆包 (Doubao)",
-	"qianwen":           "通义千问 (Qianwen)",
-	"gemini":            "Gemini (Google)",
-	"google":            "Gemini (Google)",
-	"kling":             "可灵 (Kling)",
-	"seedance":          "Seedance",
-	"happyhorse":        "HappyHorse（阿里云百炼）",
-	"aliyun-tts":        "阿里云 CosyVoice",
-	"qwen-tts":          "千问 TTS（阿里云百炼）",
-	ai.ProviderNameVolcengineVisual:  "火山引擎图像",
-	ai.ProviderNameJimengVideo:       "即梦视频3.0（火山引擎）",
+	"openai":                        "OpenAI",
+	"claude":                        "Claude (Anthropic)",
+	"anthropic":                     "Claude (Anthropic)",
+	"deepseek":                      "DeepSeek",
+	"doubao":                        "豆包 (Doubao)",
+	"qianwen":                       "通义千问 (Qianwen)",
+	"gemini":                        "Gemini (Google)",
+	"google":                        "Gemini (Google)",
+	"kling":                         "可灵 (Kling)",
+	"seedance":                      "Seedance",
+	"happyhorse":                    "HappyHorse（阿里云百炼）",
+	"aliyun-tts":                    "阿里云 CosyVoice",
+	"qwen-tts":                      "千问 TTS（阿里云百炼）",
+	ai.ProviderNameVolcengineVisual: "火山引擎图像",
+	ai.ProviderNameJimengVideo:      "即梦视频3.0（火山引擎）",
 }
 
 // providerHasCredentials reports whether p has all required credentials.
@@ -188,29 +188,6 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 // FindProviderByName 按名称查找指定租户的提供商，用于重名冲突提示。
 func (s *ModelService) FindProviderByName(name string, tenantID uint) (*model.ModelProvider, error) {
 	return s.providerRepo.GetByNameAndTenant(name, tenantID)
-}
-
-
-// typeForProviderType returns the model type string for a provider type.
-func typeForProviderType(providerType string) string {
-	switch strings.ToLower(providerType) {
-	case "image":
-		return "image"
-	case "img2img":
-		return "img2img"
-	case "video":
-		return "video"
-	case "embedding":
-		return "embedding"
-	case "voice", "tts":
-		return "voice"
-	case "sfx":
-		return "sfx"
-	case "music":
-		return "music"
-	default: // "llm" and anything unrecognised
-		return "llm"
-	}
 }
 
 // seedProviderModel upserts a default AIModel row for the given provider if api_version is set.
@@ -297,21 +274,20 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 
 func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, tenantID uint) (*model.ModelProvider, error) {
 	provider := &model.ModelProvider{
-		TenantID:    tenantID,
-		Name:        req.Name,
-		DisplayName: req.DisplayName,
-		APIEndpoint: req.APIEndpoint,
-		APIKey:      req.APIKey,
+		TenantID:     tenantID,
+		Name:         req.Name,
+		DisplayName:  req.DisplayName,
+		APIEndpoint:  req.APIEndpoint,
+		APIKey:       req.APIKey,
 		APISecretKey: req.APISecretKey,
-		APIVersion:  req.APIVersion,
-		IsActive:    req.IsActive,
+		APIVersion:   req.APIVersion,
+		IsActive:     req.IsActive,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
 	}
 	return provider, nil
 }
-
 
 func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateModelProviderRequest) (*model.ModelProvider, error) {
 	provider, err := s.providerRepo.GetByIDAndTenant(id, tenantID)
@@ -343,10 +319,6 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 		return nil, err
 	}
 	s.seedProviderModel(provider)
-	// 清除缓存，使下次调用重新从 DB 加载最新凭据
-	if s.aiService != nil {
-		s.aiService.InvalidateProviderCache(provider.Name)
-	}
 	return provider, nil
 }
 
@@ -366,13 +338,8 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 	if err := s.providerRepo.Delete(id); err != nil {
 		return err
 	}
-	// 清除缓存，防止已删除的提供商被继续使用
-	if s.aiService != nil {
-		s.aiService.InvalidateProviderCache(provider.Name)
-	}
 	return nil
 }
-
 
 func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error) {
 	provider, err := s.providerRepo.GetByIDAndTenant(id, tenantID)
@@ -590,7 +557,6 @@ func (s *ModelService) DeleteModel(id uint, tenantID uint) error {
 	return nil
 }
 
-
 // TestModel verifies the model is accessible within the given tenant context.
 // Fix 10: Accepts tenantID so the provider lookup uses the correct tenant credentials.
 func (s *ModelService) TestModel(id uint, tenantID uint) (interface{}, error) {
@@ -678,7 +644,7 @@ func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, pr
 	if lookupErr != nil {
 		return "", 0, fmt.Errorf("provider not found: %w", lookupErr)
 	}
-	content, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, 0, "chapter", prompt, provider.Name)
+	content, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter", prompt)
 	return content, 0, err
 }
 
@@ -897,7 +863,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
   "glossary": "世界专属术语表（每行一条，格式：词语 — 含义）：重要专有名词、境界名称、地名缩写等"
 }`
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "worldview", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, "worldview", prompt)
 	if err != nil {
 		return nil, err
 	}

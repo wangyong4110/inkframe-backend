@@ -62,17 +62,6 @@ func renderPrompt(name string, ctx map[string]interface{}) (string, error) {
 	return out, nil
 }
 
-// splitImagePrompt splits a rendered image prompt template into positive and negative parts.
-// Templates use "---NEGATIVE---" as separator between positive and negative prompts.
-func splitImagePrompt(s string) (positive, negative string) {
-	parts := strings.SplitN(s, "---NEGATIVE---", 2)
-	positive = strings.TrimSpace(parts[0])
-	if len(parts) > 1 {
-		negative = strings.TrimSpace(parts[1])
-	}
-	return
-}
-
 // LoadRawPrompt reads a prompt file by name (without extension) from the embedded FS.
 // It returns the raw text without any template rendering.
 func LoadRawPrompt(name string) (string, error) {
@@ -82,4 +71,3 @@ func LoadRawPrompt(name string) (string, error) {
 	}
 	return strings.TrimSpace(string(data)), nil
 }
-

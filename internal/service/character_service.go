@@ -81,7 +81,7 @@ type charNameEntry struct {
 // existingNamesJSON：已知角色的 JSON 数组字符串，传入后 AI 会复用已有名称而非产生别名
 func (s *CharacterService) extractCharNamesFromContent(
 	ctx context.Context,
-	tenantID, novelID uint,
+	tenantID uint,
 	novelTitle, genre, content, existingNamesJSON string,
 ) ([]charNameEntry, error) {
 	prompt, err := renderPrompt("extract_character_names", map[string]interface{}{
@@ -94,7 +94,7 @@ func (s *CharacterService) extractCharNamesFromContent(
 		return nil, fmt.Errorf("render extract_character_names: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_character_names", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_character_names", prompt)
 	if err != nil {
 		logger.Errorf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
 		return nil, err
@@ -178,7 +178,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 			if content == "" {
 				content = c.Summary
 			}
-			entries, err := s.extractCharNamesFromContent(ctx, tenantID, novelID, novelTitle, genre, content, existingNamesJSON)
+			entries, err := s.extractCharNamesFromContent(ctx, tenantID, novelTitle, genre, content, existingNamesJSON)
 			results[idx] = chResult{entries, err}
 		}(i, ch)
 	}
@@ -202,7 +202,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 
 	// 合并后若仍有多条记录，用 AI 做一次别名整合（消除跨章产生的同一角色不同名）
 	if len(merged) > 1 {
-		if consolidated, err := s.consolidateCharacterNames(ctx, tenantID, novelID, novelTitle, merged); err == nil && len(consolidated) > 0 {
+		if consolidated, err := s.consolidateCharacterNames(ctx, tenantID, novelTitle, merged); err == nil && len(consolidated) > 0 {
 			logger.Printf("[CharacterService] consolidateCharacterNames: %d → %d entries", len(merged), len(consolidated))
 			merged = consolidated
 		} else if err != nil {
@@ -215,7 +215,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 // consolidateCharacterNames 用 AI 合并别名，消除跨章节提取产生的同一角色多名问题
 func (s *CharacterService) consolidateCharacterNames(
 	ctx context.Context,
-	tenantID, novelID uint,
+	tenantID uint,
 	novelTitle string,
 	entries []charNameEntry,
 ) ([]charNameEntry, error) {
@@ -230,7 +230,7 @@ func (s *CharacterService) consolidateCharacterNames(
 	if err != nil {
 		return nil, fmt.Errorf("render consolidate_character_names: %w", err)
 	}
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "consolidate_character_names", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "consolidate_character_names", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI call: %w", err)
 	}
@@ -250,7 +250,7 @@ func (s *CharacterService) consolidateCharacterNames(
 
 // extractCharacterNameList 阶段一：从小说摘要中提取角色名单（输出极短，避免截断）
 func (s *CharacterService) extractCharacterNameList(
-	tenantID, novelID uint,
+	tenantID uint,
 	novelTitle, genre, summariesText string,
 	existing []*model.Character,
 ) ([]charNameEntry, error) {
@@ -271,7 +271,7 @@ func (s *CharacterService) extractCharacterNameList(
 		return nil, fmt.Errorf("render extract_character_names: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, "extract_character_names", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI call failed: %w", err)
 	}
@@ -303,7 +303,7 @@ func (s *CharacterService) extractCharacterNameList(
 // generateOneCharacterProfile 阶段二：为单个角色生成完整档案
 func (s *CharacterService) generateOneCharacterProfile(
 	ctx context.Context,
-	tenantID, novelID uint,
+	tenantID uint,
 	novelTitle, genre, worldviewContext string,
 	entry charNameEntry,
 	shortSummaries string,
@@ -322,8 +322,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "generate_character_profile", prompt, "",
-		StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "generate_character_profile", prompt)
 	if err != nil {
 		logger.Errorf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
@@ -377,7 +376,7 @@ func (s *CharacterService) GenerateCharacterInfo(tenantID, novelID uint, name, r
 		return "", fmt.Errorf("render generate_character_info: %w", tplErr)
 	}
 
-	result, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_info", rendered, "")
+	result, genErr := s.aiService.GenerateWithProvider(tenantID, "generate_character_info", rendered)
 	if genErr != nil {
 		return "", fmt.Errorf("AI generate character info: %w", genErr)
 	}
@@ -1298,7 +1297,7 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 		Brief: char.Description,
 	}
 
-	profile, err := s.generateOneCharacterProfile(ctx, tenantID, char.NovelID, novelTitle, novelGenre, worldviewContext, entry, shortSummaries)
+	profile, err := s.generateOneCharacterProfile(ctx, tenantID, novelTitle, novelGenre, worldviewContext, entry, shortSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("AI reanalyze: %w", err)
 	}
@@ -1417,8 +1416,7 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
-		StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_minor_characters", minorCharsPrompt)
 	if err != nil {
 		logger.Errorf("[CharacterService] AIExtractMinorChars: AI call failed: %v", err)
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
@@ -1762,74 +1760,6 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	return succeeded, failed, nil
 }
 
-func (s *CharacterService) AnalyzeConsistency(tenantID, id uint, images []string) (interface{}, error) {
-	if len(images) == 0 {
-		return map[string]interface{}{
-			"character_id":      id,
-			"consistency_score": 0.0,
-			"images_analyzed":   0,
-			"message":           "no images provided",
-		}, nil
-	}
-	if s.aiService == nil || len(images) == 1 {
-		return map[string]interface{}{
-			"character_id":      id,
-			"consistency_score": 1.0,
-			"images_analyzed":   len(images),
-			"message":           "single image, consistency assumed",
-		}, nil
-	}
-
-	char, err := s.characterRepo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("character not found: %w", err)
-	}
-
-	prompt := fmt.Sprintf(`You are a visual consistency analyst. Compare the following %d images of the character "%s" and assess their visual consistency.
-
-Rate consistency from 0.0 (completely inconsistent) to 1.0 (perfectly consistent), focusing on:
-- Facial features (face shape, eyes, nose, mouth)
-- Hair color and style
-- Overall art style and proportions
-
-Respond with ONLY a JSON object in this exact format:
-{"score": 0.85, "notes": "brief explanation"}`, len(images), char.Name)
-
-	response, err := s.aiService.GenerateWithVision(tenantID, prompt, images)
-	if err != nil {
-		logger.Errorf("[CharacterService] AnalyzeConsistency: vision call failed for char %d: %v", id, err)
-		return map[string]interface{}{
-			"character_id":      id,
-			"consistency_score": 0.0,
-			"images_analyzed":   len(images),
-			"error":             "vision analysis unavailable",
-		}, nil
-	}
-
-	// Parse the score from the JSON response
-	score := 0.0
-	notes := ""
-	start := strings.Index(response, "{")
-	end := strings.LastIndex(response, "}")
-	if start >= 0 && end > start {
-		var parsed struct {
-			Score float64 `json:"score"`
-			Notes string  `json:"notes"`
-		}
-		if jsonErr := json.Unmarshal([]byte(response[start:end+1]), &parsed); jsonErr == nil {
-			score = parsed.Score
-			notes = parsed.Notes
-		}
-	}
-
-	return map[string]interface{}{
-		"character_id":      id,
-		"consistency_score": score,
-		"images_analyzed":   len(images),
-		"notes":             notes,
-	}, nil
-}
-
 // ============================================
 // ImageGenerationService 图像生成服务
 // ============================================
@@ -1849,12 +1779,12 @@ type GeneratedCharacterImage struct {
 
 func (s *ImageGenerationService) GenerateCharacterImage(ctx context.Context, tenantID uint, req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
-		Prompt:   fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
+		Prompt:   req.Description,
 		Size:     "1024x1024",
 		Steps:    50,
 		CFGScale: 7.5,
 	}
-	image, err := s.aiService.GenerateImage(ctx, tenantID, options.Prompt, options)
+	image, err := s.aiService.GenerateImage(ctx, tenantID, options)
 	if err != nil {
 		return nil, err
 	}
@@ -2129,14 +2059,14 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetCanvasHeight)
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, "", size, 0)
+	image, err := s.aiService.GenerateImage(ctx, tenantID, provider, prompt, refs, style, "", size, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	return &GeneratedCharacterSheet{
-		SheetURL:    url,
-		Description: name + " character sheet (portrait + front/three-quarter/back)",
+		SheetURL:    image.URL,
+		Description: name,
 	}, nil
 }
 
@@ -2210,9 +2140,6 @@ func (s *CharacterService) GetDefaultLook(characterID uint) (*model.CharacterLoo
 func (s *CharacterService) upsertDefaultLookVisualPrompt(charID, novelID uint, visualPrompt string) {
 	if s.lookRepo == nil || visualPrompt == "" {
 		return
-	}
-	if s.aiService != nil {
-		visualPrompt = s.aiService.FilterPrompt(visualPrompt)
 	}
 	defaultLook, err := s.GetDefaultLook(charID)
 	if err != nil {
@@ -2390,8 +2317,7 @@ func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantI
 	if err != nil {
 		return nil, fmt.Errorf("render character_visual_prompt: %w", err)
 	}
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, char.NovelID, "character_profile", sysPrompt, "",
-		StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "character_profile", sysPrompt)
 	if err != nil {
 		return nil, err
 	}

@@ -101,6 +101,5 @@ func (p *RateLimitProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 	return p.inner.AudioGenerate(ctx, req)
 }
 
-func (p *RateLimitProvider) GetName() string    { return p.inner.GetName() }
-func (p *RateLimitProvider) GetModels() []string { return p.inner.GetModels() }
+func (p *RateLimitProvider) GetName() string                       { return p.inner.GetName() }
 func (p *RateLimitProvider) HealthCheck(ctx context.Context) error { return p.inner.HealthCheck(ctx) }

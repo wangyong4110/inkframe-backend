@@ -39,17 +39,17 @@ type AssetService struct {
 	shareLinkRepo  *repository.AssetShareLinkRepository
 	searchLogRepo  *repository.SearchLogRepository
 	quotaRepo      *repository.AssetStorageQuotaRepository
-	storageSvc    storage.Service
-	taskSvc       *TaskService
-	aiSvc         *AIService
-	crawlProxyURL string
-	unsplashKey   string
-	freesoundKey  string
-	pixabayKey    string
-	pexelsKey     string
+	storageSvc     storage.Service
+	taskSvc        *TaskService
+	aiSvc          *AIService
+	crawlProxyURL  string
+	unsplashKey    string
+	freesoundKey   string
+	pixabayKey     string
+	pexelsKey      string
 	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets (local fallback)
 	crawlMu         sync.Map
-	cache           *redis.Client // optional: cross-instance crawl dedup lock
+	cache           *redis.Client         // optional: cross-instance crawl dedup lock
 	onDeleteSFXHook func(tag string)      // fired when an SFX audio asset is deleted
 	onDeleteBGMHook func(filename string) // fired when a BGM audio asset is deleted
 }
@@ -108,7 +108,7 @@ func NewAssetService(
 	return &AssetService{
 		assetRepo: assetRepo, tagRepo: tagRepo,
 		publishReqRepo: publishReqRepo,
-		usageRepo: usageRepo, likeRepo: likeRepo, commentRepo: commentRepo,
+		usageRepo:      usageRepo, likeRepo: likeRepo, commentRepo: commentRepo,
 		crawlRepo: crawlRepo, shareLinkRepo: shareLinkRepo,
 		searchLogRepo: searchLogRepo, quotaRepo: quotaRepo,
 		taskSvc: taskSvc,
@@ -233,13 +233,6 @@ func (s *AssetService) Upload(ctx context.Context, r io.Reader, size int64, p Up
 
 	// Update quota
 	_ = s.quotaRepo.AddStorage(p.TenantID, size)
-
-	// Async pipeline
-	go func() {
-		bgCtx := context.Background()
-		_ = s.processNewAsset(bgCtx, asset)
-	}()
-
 	return asset, nil
 }
 
@@ -831,7 +824,6 @@ func (s *AssetService) runCrawlJob(ctx context.Context, job *model.CrawlJob) {
 	}
 }
 
-
 // crawlBBCSFX fetches audio assets from BBC Sound Effects and saves them to the public library.
 // API: https://sound-effects.bbcrewind.co.uk/api/sfx/search?q=<query>&limit=<n>&from=<offset>
 // License: BBC RemArc Licence (free for personal, educational, and research use).
@@ -1199,14 +1191,26 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 				Total     int `json:"total"`
 				TotalHits int `json:"totalHits"`
 				Hits      []struct {
-					ID       int     `json:"id"`
-					Tags     string  `json:"tags"`
-					PageURL  string  `json:"pageURL"`
-					Duration int     `json:"duration"`
+					ID       int    `json:"id"`
+					Tags     string `json:"tags"`
+					PageURL  string `json:"pageURL"`
+					Duration int    `json:"duration"`
 					Videos   struct {
-						Large  struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"large"`
-						Medium struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"medium"`
-						Small  struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"small"`
+						Large struct {
+							URL    string `json:"url"`
+							Width  int    `json:"width"`
+							Height int    `json:"height"`
+						} `json:"large"`
+						Medium struct {
+							URL    string `json:"url"`
+							Width  int    `json:"width"`
+							Height int    `json:"height"`
+						} `json:"medium"`
+						Small struct {
+							URL    string `json:"url"`
+							Width  int    `json:"width"`
+							Height int    `json:"height"`
+						} `json:"small"`
 					} `json:"videos"`
 				} `json:"hits"`
 			}
@@ -1325,14 +1329,14 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 				Total     int `json:"total"`
 				TotalHits int `json:"totalHits"`
 				Hits      []struct {
-					ID             int    `json:"id"`
-					Tags           string `json:"tags"`
-					PageURL        string `json:"pageURL"`
-					PreviewURL     string `json:"previewURL"`
-					WebformatURL   string `json:"webformatURL"`
-					LargeImageURL  string `json:"largeImageURL"`
-					ImageWidth     int    `json:"imageWidth"`
-					ImageHeight    int    `json:"imageHeight"`
+					ID            int    `json:"id"`
+					Tags          string `json:"tags"`
+					PageURL       string `json:"pageURL"`
+					PreviewURL    string `json:"previewURL"`
+					WebformatURL  string `json:"webformatURL"`
+					LargeImageURL string `json:"largeImageURL"`
+					ImageWidth    int    `json:"imageWidth"`
+					ImageHeight   int    `json:"imageHeight"`
 				} `json:"hits"`
 			}
 			if err := json.Unmarshal(b, &result); err != nil {
@@ -1452,13 +1456,15 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 					PageID    int    `json:"pageid"`
 					Title     string `json:"title"`
 					ImageInfo []struct {
-						URL      string `json:"url"`
-						ThumbURL string `json:"thumburl"`
-						Mime     string `json:"mime"`
-						Width    int    `json:"width"`
-						Height   int    `json:"height"`
+						URL         string `json:"url"`
+						ThumbURL    string `json:"thumburl"`
+						Mime        string `json:"mime"`
+						Width       int    `json:"width"`
+						Height      int    `json:"height"`
 						Extmetadata *struct {
-							LicenseShortName *struct{ Value string `json:"value"` } `json:"LicenseShortName"`
+							LicenseShortName *struct {
+								Value string `json:"value"`
+							} `json:"LicenseShortName"`
 						} `json:"extmetadata"`
 					} `json:"imageinfo"`
 				} `json:"pages"`
@@ -2160,14 +2166,6 @@ func (s *AssetService) ListCrawlJobs(page, size int) ([]*model.CrawlJob, int64, 
 }
 
 // ─── Asset Processing Pipeline ───────────────────────────────────────────────
-
-func (s *AssetService) processNewAsset(ctx context.Context, asset *model.Asset) error {
-	if s.aiSvc == nil {
-		return nil
-	}
-	return s.autoTagAsset(ctx, asset)
-}
-
 // autoTagResult holds the structured tag output from the AI.
 type autoTagResult struct {
 	Style   []string `json:"style"`
@@ -2177,82 +2175,6 @@ type autoTagResult struct {
 	Angle   []string `json:"angle"`
 	Genre   []string `json:"genre"`
 	Custom  []string `json:"custom"`
-}
-
-// autoTagAsset calls the AI to generate tags for the asset and persists them.
-func (s *AssetService) autoTagAsset(ctx context.Context, asset *model.Asset) error {
-	_ = ctx
-	var rawJSON string
-	var err error
-
-	if asset.Type == "image" && asset.MediaMeta.StorageURL != "" {
-		var prompt string
-		prompt, err = renderPrompt("asset_auto_tag", nil)
-		if err == nil {
-			rawJSON, err = s.aiSvc.GenerateWithVision(asset.TenantID, prompt, []string{asset.MediaMeta.StorageURL})
-		}
-	} else {
-		// Non-image: text-based tag generation from title + type
-		var prompt string
-		prompt, err = renderPrompt("asset_text_tag", map[string]interface{}{
-			"Type":    asset.Type,
-			"Title":   asset.Title,
-			"SubType": asset.SubType,
-		})
-		if err == nil {
-			rawJSON, err = s.aiSvc.Generate(0, "asset_tag", prompt)
-		}
-	}
-	if err != nil {
-		return nil // non-fatal: AI unavailable, skip tagging
-	}
-
-	return s.saveAutoTags(asset.ID, rawJSON)
-}
-
-// saveAutoTags parses the AI JSON response and persists tags to the database.
-func (s *AssetService) saveAutoTags(assetID uint, rawJSON string) error {
-	cleaned := extractJSON(strings.TrimSpace(rawJSON))
-	var result autoTagResult
-	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		return nil // non-fatal: malformed JSON from AI
-	}
-
-	categoryTags := map[string][]string{
-		"style": result.Style, "mood": result.Mood, "subject": result.Subject,
-		"color": result.Color, "angle": result.Angle, "genre": result.Genre,
-		"custom": result.Custom,
-	}
-	for category, names := range categoryTags {
-		for _, name := range names {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-			tag, err := s.tagRepo.FindOrCreate(name, category)
-			if err != nil {
-				continue
-			}
-			_ = s.tagRepo.AddToAsset(assetID, tag.ID, "ai", 0.9)
-			_ = s.tagRepo.IncrUseCount(tag.ID)
-		}
-	}
-	return nil
-}
-
-// TriggerAutoTag re-runs AI tagging on demand (for owners).
-func (s *AssetService) TriggerAutoTag(assetID, callerID uint) error {
-	a, err := s.assetRepo.GetByID(assetID)
-	if err != nil || a.CreatorID != callerID {
-		return errors.New("not found or permission denied")
-	}
-	if s.aiSvc == nil {
-		return errors.New("AI service not available")
-	}
-	go func() {
-		_ = s.autoTagAsset(context.Background(), a)
-	}()
-	return nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

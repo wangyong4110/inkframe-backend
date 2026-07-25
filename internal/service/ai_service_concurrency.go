@@ -3,36 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
-
-// GetProviderConcurrency 从 DB 中查找指定类型（"image"/"video"/"voice"/"sfx"）的第一个活跃提供商，
-// 返回其关联 AIModel 的 Concurrency 配置值（默认 1，表示串行执行）。
-// 调用方无需关心具体模型名称，统一由此方法从 DB 配置中解析。
-func (s *AIService) GetProviderConcurrency(tenantID uint, providerType string) int {
-	if s.providerRepo == nil || s.modelRepo == nil {
-		return 1
-	}
-	providers, err := s.eligibleProviders(tenantID, providerType)
-	if err != nil || len(providers) == 0 {
-		return 1
-	}
-	for _, p := range providers {
-		modelName := s.activeModelNameFor(p, tenantID, providerType)
-		if modelName == "" {
-			continue
-		}
-		if m, err := s.modelRepo.GetByName(modelName); err == nil && m.Concurrency > 0 {
-			return m.Concurrency
-		}
-		return 1 // 找到提供商但未配置并发度 → 保守默认值
-	}
-	return 1
-}
 
 // modelCallLimiter 为 (tenantID, modelName) 提供共享的并发控制和速率限制。
 // 与 ConcurrentProvider / RateLimitProvider 不同，这里的状态是跨调用共享的：
@@ -77,7 +52,7 @@ func newModelCallLimiter(concurrency, ratePerMin int) *modelCallLimiter {
 // 并发槽等待阶段：使用独立的 maxQueueWait 计时器，不受调用方执行超时影响。
 // 这样可以确保"队满时排队等待"而不是"执行超时到期时直接报错"，
 // 调用方应在获取槽后再创建执行超时 ctx（参见 callAIWithProviderSys）。
-func (l *modelCallLimiter) Acquire(ctx context.Context) error {
+func (l *modelCallLimiter) acquire(ctx context.Context) error {
 	// 1. 速率限制（token bucket）：受 ctx 控制
 	if l.rlRefNs > 0 {
 		for {
@@ -166,56 +141,8 @@ func (s *AIService) acquireModelSlotByName(ctx context.Context, tenantID uint, m
 	if lim == nil {
 		return func() {}, nil
 	}
-	if err := lim.Acquire(ctx); err != nil {
+	if err := lim.acquire(ctx); err != nil {
 		return func() {}, fmt.Errorf("model %s: %w", modelName, err)
-	}
-	return lim.Release, nil
-}
-
-// acquireProviderSlot 按提供商名查找并发/限速配置（适用于 TTS/SFX 等按 provider 而非 model 调度的场景）。
-// 从 DB 中找出该 provider 下第一个配置了并发/限速的 AIModel 记录；未配置时返回 no-op release。
-func (s *AIService) acquireProviderSlot(ctx context.Context, tenantID uint, providerName string) (func(), error) {
-	if s.modelRepo == nil || s.providerRepo == nil || providerName == "" {
-		return func() {}, nil
-	}
-	// 找到 provider 的 DB ID
-	providers, err := s.providerRepo.ListByTenant(tenantID)
-	if err != nil {
-		return func() {}, nil
-	}
-	var providerID uint
-	for _, p := range providers {
-		if p.IsActive && strings.EqualFold(p.Name, providerName) {
-			providerID = p.ID
-			break
-		}
-	}
-	if providerID == 0 {
-		return func() {}, nil
-	}
-	// 找到该 provider 下有限流配置的 AIModel
-	pid := providerID
-	models, err := s.modelRepo.List(&pid, tenantID)
-	if err != nil || len(models) == 0 {
-		return func() {}, nil
-	}
-	var concurrency, rateLimit int
-	for _, mm := range models {
-		if mm.Concurrency > 0 || mm.RateLimit > 0 {
-			concurrency = mm.Concurrency
-			rateLimit = mm.RateLimit
-			break
-		}
-	}
-	if concurrency <= 0 && rateLimit <= 0 {
-		return func() {}, nil
-	}
-	lim := s.getModelLimiter(tenantID, "provider:"+providerName, concurrency, rateLimit)
-	if lim == nil {
-		return func() {}, nil
-	}
-	if err := lim.Acquire(ctx); err != nil {
-		return func() {}, fmt.Errorf("provider %s: %w", providerName, err)
 	}
 	return lim.Release, nil
 }

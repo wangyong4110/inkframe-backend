@@ -718,36 +718,6 @@ func (h *VideoHandler) ListBGMSegments(c *gin.Context) {
 	respondOK(c, segs)
 }
 
-// JamendoSearchBGM GET /videos/:id/bgm/search
-// 代理搜索 Jamendo 音乐库（避免跨域），返回器乐曲目列表供前端选择。
-// 查询参数：q（模糊搜索词）、tags（精确标签，空格分隔）、speed（slow/medium/fast）、
-//
-//	bpm_min、bpm_max（BPM范围，0=不限）、limit（默认10，最多50）。
-func (h *VideoHandler) JamendoSearchBGM(c *gin.Context) {
-	if h.bgmSvc == nil {
-		respondErr(c, http.StatusNotImplemented, "BGM service not configured")
-		return
-	}
-	tenantID := getTenantID(c)
-	bpmMin, _ := strconv.Atoi(c.DefaultQuery("bpm_min", "0"))
-	bpmMax, _ := strconv.Atoi(c.DefaultQuery("bpm_max", "0"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	tracks, err := h.bgmSvc.JamendoSearch(c.Request.Context(), tenantID, service.JamendoSearchParams{
-		Query:  c.Query("q"),
-		Tags:   c.Query("tags"),
-		Speed:  c.Query("speed"),
-		BpmMin: bpmMin,
-		BpmMax: bpmMax,
-		Limit:  limit,
-	})
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, tracks)
-}
-
 // ApplyBGMTrack PATCH /videos/:id/bgm/segments/:seg_id/track
 // 将手动选中的 Jamendo 曲目应用到指定 BGM 分段，更新 URL/track_name/track_artist/source。
 func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
@@ -865,57 +835,6 @@ func (h *VideoHandler) ToggleBGMSegment(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"id": segID, "disabled": req.Disabled})
-}
-
-// ProxyBGMAudio GET /videos/:id/bgm/proxy?url=<encoded>
-// 代理播放 BGM 音频（Jamendo CDN / OSS），解决前端跨域限制。
-// 支持 Range 请求（音频 seek）；仅允许 https:// 地址，禁止内网 IP。
-func (h *VideoHandler) ProxyBGMAudio(c *gin.Context) {
-	rawURL := c.Query("url")
-	if rawURL == "" {
-		respondBadRequest(c, "url parameter required")
-		return
-	}
-	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
-		respondBadRequest(c, "only http/https URLs are allowed")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid url")
-		return
-	}
-	// 透传 Range 头，支持音频 seek
-	if rng := c.GetHeader("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-	req.Header.Set("User-Agent", "InkFrame-BGMProxy/1.0")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		reqLogger(c).Errorf("[BGMProxy] fetch %s failed: %v", rawURL, err)
-		respondErr(c, http.StatusBadGateway, "failed to fetch audio")
-		return
-	}
-	defer resp.Body.Close()
-
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "audio/mpeg"
-	}
-	// 透传必要的响应头
-	for _, h2 := range []string{"Content-Length", "Content-Range", "Accept-Ranges"} {
-		if v := resp.Header.Get(h2); v != "" {
-			c.Header(h2, v)
-		}
-	}
-	c.Header("Cache-Control", "public, max-age=3600")
-	c.DataFromReader(resp.StatusCode, resp.ContentLength, ct, resp.Body, nil)
 }
 
 // AnalyzeBGMSegments POST /videos/:id/bgm/analyze

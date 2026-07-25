@@ -15,57 +15,57 @@ import (
 
 // Config 路由配置
 type Config struct {
-	JWTSecret        string
-	AllowedOrigins   []string      // CORS 允许的来源列表；留空表示允许所有（开发模式）
-	TrustedProxies   []string      // 受信任的反向代理 IP；留空时默认 ["127.0.0.1", "::1"]
-	RedisClient      *redis.Client  // 可选，用于 JWT 黑名单检查
-	DB               *gorm.DB       // 可选，用于 health check 和邮箱验证中间件
-	AIService        *service.AIService // 可选，用于 /health AI 健康状态
-	NovelHandler     *handler.NovelHandler
-	ChapterHandler   *handler.ChapterHandler
-	CharacterHandler *handler.CharacterHandler
-	VideoHandler     *handler.VideoHandler
-	ModelHandler     *handler.ModelHandler
-	McpHandler       *handler.McpHandler
-	StyleHandler     *handler.StyleHandler
-	ContextHandler   *handler.ContextHandler
-	AuthHandler      *handler.AuthHandler
-	ImportHandler    *handler.ImportHandler
-	WorldviewHandler *handler.WorldviewHandler
-	TenantHandler    *handler.TenantHandler
-	ItemHandler      *handler.ItemHandler
-	SkillHandler     *handler.SkillHandler
-	UploadHandler    *handler.UploadHandler
-	PlotPointHandler *handler.PlotPointHandler
-	TaskHandler        *handler.TaskHandler
-	MediaHandler       *handler.MediaHandler
-	SceneAnchorHandler *handler.SceneAnchorHandler
-	ScreenplayHandler  *handler.ScreenplayHandler
-	SystemHandler      *handler.SystemHandler
-	FsHandler          *handler.FsHandler
-	RewriteHandler     *handler.RewriteHandler
-	PlatformHandler    *handler.PlatformHandler
-	AssetHandler       *handler.AssetHandler
-	ImageHandler       *handler.ImageHandler
-	WebSearchHandler       *handler.WebSearchHandler
-	WikiSearchHandler      *handler.WikiSearchHandler
-	StoryPatternHandler    *handler.StoryPatternHandler
-	ImageRefSearchHandler  *handler.ImageRefSearchHandler
-	NotificationHandler    *handler.NotificationHandler
-	KnowledgeHandler       *handler.KnowledgeHandler
-	KnowledgeToolHandler   *handler.KnowledgeToolHandler
-	CharacterLookupHandler *handler.CharacterLookupHandler
-	DramaticHandler        *handler.DramaticHandler
-	DashboardHandler       *handler.DashboardHandler
-	ForeshadowHandler      *handler.ForeshadowHandler
-	WebhookHandler         *handler.WebhookHandler
-	AuditHandler           *handler.AuditHandler
-	OutlineReviewHandler   *handler.OutlineReviewHandler
-	CollabHandler          *handler.CollabHandler
-	SysAdminHandler        *handler.SysAdminHandler
-	SensitiveWordHandler   *handler.SensitiveWordHandler
-	FeedbackHandler        *handler.FeedbackHandler
-	DramaTemplateHandler   *handler.DramaTemplateHandler
+	JWTSecret               string
+	AllowedOrigins          []string           // CORS 允许的来源列表；留空表示允许所有（开发模式）
+	TrustedProxies          []string           // 受信任的反向代理 IP；留空时默认 ["127.0.0.1", "::1"]
+	RedisClient             *redis.Client      // 可选，用于 JWT 黑名单检查
+	DB                      *gorm.DB           // 可选，用于 health check 和邮箱验证中间件
+	AIService               *service.AIService // 可选，用于 /health AI 健康状态
+	NovelHandler            *handler.NovelHandler
+	ChapterHandler          *handler.ChapterHandler
+	CharacterHandler        *handler.CharacterHandler
+	VideoHandler            *handler.VideoHandler
+	ModelHandler            *handler.ModelHandler
+	McpHandler              *handler.McpHandler
+	StyleHandler            *handler.StyleHandler
+	ContextHandler          *handler.ContextHandler
+	AuthHandler             *handler.AuthHandler
+	ImportHandler           *handler.ImportHandler
+	WorldviewHandler        *handler.WorldviewHandler
+	TenantHandler           *handler.TenantHandler
+	ItemHandler             *handler.ItemHandler
+	SkillHandler            *handler.SkillHandler
+	UploadHandler           *handler.UploadHandler
+	PlotPointHandler        *handler.PlotPointHandler
+	TaskHandler             *handler.TaskHandler
+	MediaHandler            *handler.MediaHandler
+	SceneAnchorHandler      *handler.SceneAnchorHandler
+	ScreenplayHandler       *handler.ScreenplayHandler
+	SystemHandler           *handler.SystemHandler
+	FsHandler               *handler.FsHandler
+	RewriteHandler          *handler.RewriteHandler
+	PlatformHandler         *handler.PlatformHandler
+	AssetHandler            *handler.AssetHandler
+	ImageHandler            *handler.ImageHandler
+	WebSearchHandler        *handler.WebSearchHandler
+	WikiSearchHandler       *handler.WikiSearchHandler
+	StoryPatternHandler     *handler.StoryPatternHandler
+	ImageRefSearchHandler   *handler.ImageRefSearchHandler
+	NotificationHandler     *handler.NotificationHandler
+	KnowledgeHandler        *handler.KnowledgeHandler
+	KnowledgeToolHandler    *handler.KnowledgeToolHandler
+	CharacterLookupHandler  *handler.CharacterLookupHandler
+	DramaticHandler         *handler.DramaticHandler
+	DashboardHandler        *handler.DashboardHandler
+	ForeshadowHandler       *handler.ForeshadowHandler
+	WebhookHandler          *handler.WebhookHandler
+	AuditHandler            *handler.AuditHandler
+	OutlineReviewHandler    *handler.OutlineReviewHandler
+	CollabHandler           *handler.CollabHandler
+	SysAdminHandler         *handler.SysAdminHandler
+	SensitiveWordHandler    *handler.SensitiveWordHandler
+	FeedbackHandler         *handler.FeedbackHandler
+	DramaTemplateHandler    *handler.DramaTemplateHandler
 	ImageStylePresetHandler *handler.ImageStylePresetHandler
 }
 
@@ -88,7 +88,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r.Use(middleware.PrometheusMiddleware()) // 最前注册，覆盖所有路由
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
-	r.Use(middleware.RequestID())       // 读取/生成 X-Request-ID，注入 gin.Context 及 Go context
+	r.Use(middleware.RequestID())        // 读取/生成 X-Request-ID，注入 gin.Context 及 Go context
 	r.Use(middleware.ResponseEnricher()) // 向所有 JSON 响应体注入 request_id
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
@@ -369,7 +369,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/plot-points/ai-extract", cfg.PlotPointHandler.AIExtractFromNovel)
 			}
 
-	
 			// 知识库
 			if cfg.KnowledgeHandler != nil {
 				novels.GET("/:id/knowledge/search", cfg.KnowledgeHandler.SearchKnowledge)
@@ -482,9 +481,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				chapters.GET("/:id/outline-review", cfg.OutlineReviewHandler.GetChapterReview)
 			}
 
-			// 连续性检查记录
-			chapters.GET("/:id/continuity-reports", cfg.ChapterHandler.ListContinuityReports)
-
 			// 剧情点（章节级）
 			if cfg.PlotPointHandler != nil {
 				chapters.GET("/:id/plot-points", cfg.PlotPointHandler.ListByChapter)
@@ -549,7 +545,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				sceneAnchors.POST("/:id/ref-image/upload", cfg.SceneAnchorHandler.UploadRefImage)
 				sceneAnchors.POST("/:id/generate-ref-image", cfg.SceneAnchorHandler.GenerateRefImage)
 				sceneAnchors.POST("/:id/ai-analyze", cfg.SceneAnchorHandler.AIAnalyzeSceneAnchor)
-				sceneAnchors.POST("/:id/edit-ref-image", cfg.SceneAnchorHandler.EditRefImage)
 				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
 			}
 
@@ -564,7 +559,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 		}
 
-
 		// 角色相关
 		characters := v1.Group("/characters")
 		{
@@ -574,7 +568,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/images", cfg.CharacterHandler.GenerateCharacterImage)
 			characters.POST("/:id/three-view", cfg.CharacterHandler.GenerateThreeView)
 			characters.POST("/:id/image/upload", cfg.CharacterHandler.UploadCharacterImage)
-			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
 			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
 			characters.POST("/:id/reanalyze", cfg.CharacterHandler.ReanalyzeCharacter)
@@ -635,8 +628,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/sync-manifest", cfg.VideoHandler.GetSyncManifest)
 			// BGM 背景音乐
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
-			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)
-			videos.GET("/:id/bgm/proxy", cfg.VideoHandler.ProxyBGMAudio)
 			videos.PUT("/:id/bgm/segments/:seg_id", cfg.VideoHandler.UpdateBGMSegment)
 			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
 			videos.PATCH("/:id/bgm/segments/:seg_id/disabled", cfg.VideoHandler.ToggleBGMSegment)
@@ -954,7 +945,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// Tags on asset
 			v1.POST("/assets/:id/tags", ah.AddTags)
 			v1.DELETE("/assets/:id/tags/:tag_id", ah.RemoveTag)
-			v1.POST("/assets/:id/auto-tag", ah.TriggerAutoTag)
 
 			// Public interactions
 			v1.POST("/assets/:id/like", ah.ToggleLike)

@@ -3,6 +3,7 @@ package repository
 import (
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
@@ -66,7 +67,6 @@ func (r *ModelProviderRepository) GetByIDAndTenant(id uint, tenantID uint) (*mod
 	return &provider, nil
 }
 
-
 // ListByModelType 获取拥有指定类型模型的提供商列表（含系统级 tenant_id=0）
 func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType string) ([]*model.ModelProvider, error) {
 	var providers []*model.ModelProvider
@@ -79,13 +79,12 @@ func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType strin
 		).Find(&providers).Error
 	} else {
 		err = r.db.Where(
-			"(tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL AND id IN (SELECT DISTINCT provider_id FROM ink_ai_model WHERE type = ? AND is_active = 1 AND deleted_at IS NULL)",
+			"tenant_id = ? AND deleted_at IS NULL AND id IN (SELECT DISTINCT provider_id FROM ink_ai_model WHERE type = ? AND is_active = 1 AND deleted_at IS NULL)",
 			tenantID, modelType,
 		).Find(&providers).Error
 	}
 	return providers, err
 }
-
 
 // GetByNameAndTenant 按名称和租户查找提供商（含软删除过滤）
 func (r *ModelProviderRepository) GetByNameAndTenant(name string, tenantID uint) (*model.ModelProvider, error) {
@@ -137,57 +136,6 @@ type AIModelRepository struct {
 
 func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 	return &AIModelRepository{db: db}
-}
-
-// taskTypeToModelType maps the caller-facing task type string to ink_ai_model.type values.
-func taskTypeToModelType(taskType string) string {
-	switch taskType {
-	case "voice_gen":
-		return "voice"
-	case "image_gen":
-		return "image"
-	case "img2img_gen":
-		return "img2img"
-	case "video_gen":
-		return "video"
-	case "music_gen":
-		return "music"
-	case "sfx_gen", "sfx":
-		return "sfx"
-	case "embedding":
-		return "embedding"
-	default:
-		return "llm"
-	}
-}
-
-// GetAvailableByTaskType 获取任务可用的模型。
-// voice_gen 任务类型从内置音色表（model.BuiltinVoices）构造虚拟 AIModel 列表，其余任务类型从 ink_ai_model 查询。
-// tenantID > 0 时只返回该租户自己的模型 + 系统模型（tenant_id=0）；
-// tenantID = 0 时仅返回系统模型。
-func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uint) ([]*model.AIModel, error) {
-	modelType := taskTypeToModelType(taskType)
-	if modelType == "voice" {
-		return r.getVoicesFromProviders(tenantID)
-	}
-
-	var models []*model.AIModel
-	credCond := "(CASE WHEN p.needs_secret_key = 1 " +
-		"THEN (p.api_key != '' AND p.api_secret_key != '') " +
-		"ELSE p.api_key != '' END)"
-	query := r.db.Preload("Provider").
-		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
-		Where("ink_ai_model.is_active = ? AND ink_ai_model.type = ?"+
-			" AND "+credCond, true, modelType)
-	if tenantID > 0 {
-		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
-	} else {
-		query = query.Where("p.tenant_id = 0")
-	}
-	if err := query.Find(&models).Error; err != nil {
-		return nil, err
-	}
-	return models, nil
 }
 
 func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
@@ -300,6 +248,28 @@ func (r *AIModelRepository) LogUsage(log *model.ModelUsageLog) error {
 	return err
 }
 
+// ListByTenantAndType 按租户和模型类型查询模型列表。
+// targetType 为调用方任务类型（如 image_gen / video_gen / voice_gen 等），会映射为 ink_ai_model.type 存储值。
+// tenantID > 0 时返回该租户自己的模型 + 系统级模型（tenant_id=0）；tenantID = 0 时仅返回系统级模型。
+// 不过滤 is_active，便于管理页展示全部模型。
+func (r *AIModelRepository) ListByTenantAndType(tenantID uint, targetType commons.ModelType) ([]*model.AIModel, error) {
+	var models []*model.AIModel
+	query := r.db.Preload("Provider").
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
+		Where("ink_ai_model.type = ?", targetType)
+
+	if tenantID > 0 {
+		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
+	} else {
+		query = query.Where("p.tenant_id = 0")
+	}
+
+	if err := query.Order("ink_ai_model.created_at ASC").Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
 // ModelComparisonRepository 模型对比仓库
 type ModelComparisonRepository struct {
 	db *gorm.DB
@@ -345,4 +315,3 @@ func (r *ModelComparisonRepository) List(limit int, tenantID uint) ([]*model.Mod
 func (r *ModelComparisonRepository) AddResult(result *model.ExperimentResult) error {
 	return r.db.Create(result).Error
 }
-

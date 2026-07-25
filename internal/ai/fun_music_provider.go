@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/ai/aliyun"
 )
 
 // FunMusicProvider 阿里云百炼 Fun-Music 音乐生成提供者
@@ -37,7 +39,7 @@ func NewFunMusicProvider(apiKey string) *FunMusicProvider {
 	}
 }
 
-func (p *FunMusicProvider) GetName() string    { return "fun-music" }
+func (p *FunMusicProvider) GetName() string     { return "fun-music" }
 func (p *FunMusicProvider) GetModels() []string { return []string{funMusicDefaultModel} }
 
 func (p *FunMusicProvider) HealthCheck(ctx context.Context) error {
@@ -117,7 +119,7 @@ func (p *FunMusicProvider) AudioGenerate(ctx context.Context, req *AudioGenerate
 		return nil, fmt.Errorf("fun-music: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fun-music: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+		return nil, fmt.Errorf("fun-music: HTTP %d: %s", resp.StatusCode, aliyun.truncate(string(respBody), 300))
 	}
 
 	var result struct {

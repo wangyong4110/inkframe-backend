@@ -1201,7 +1201,7 @@ func (s *VideoService) generateStoryboardSegment(
 			logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint) shotTarget=%d", segIdx+1, totalSegments, attempt, attemptShotCount)
 		}
 		aiStart := time.Now()
-		aiResult, aiErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, video.NovelID, "storyboard", p, provider, segOverrides)
+		aiResult, aiErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "storyboard", p)
 		aiElapsed := time.Since(aiStart)
 		metrics.StoryboardSegmentDuration.Observe(aiElapsed.Seconds())
 		if aiErr != nil {
@@ -1648,7 +1648,7 @@ func (s *VideoService) generateBeatSheet(
 		logger.Errorf("[Storyboard] generateBeatSheet renderPrompt: %v", err)
 		return nil
 	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_beat", prompt, provider)
+	result, err := s.aiService.GenerateWithProvider(tenantID, "storyboard_beat", prompt)
 	if err != nil {
 		logger.Errorf("[Storyboard] generateBeatSheet AI call failed: %v", err)
 		return nil
@@ -2044,63 +2044,6 @@ func validTransition(t string) string {
 	return "cut"
 }
 
-// buildMotionPrompt 根据分镜信息（camera_type + description + 昼夜氛围）合成视频生成的运动提示词。
-func buildMotionPrompt(shot *model.StoryboardShot) string {
-	motionMap := map[string]string{
-		"static":     "固定机位，带自然微稳定，几乎不可察觉的±0.3像素呼吸抖动，无主动镜头运动",
-		"push":       "缓慢电影感推轨镜头，0.2倍速推进，整个镜头时长内与主体距离缩短约30%，地平线保持稳定",
-		"pull":       "稳定拉轨镜头，0.15倍速后退，随着距离增加环境从画面中心向外扩展",
-		"pan":        "平滑水平横摇镜头，每秒12度，全程地平线保持水平，主体从左到右平滑追踪",
-		"track":      "平滑跟踪镜头，与主要主体保持恒定距离跟随，主体移动时镜头保持构图",
-		"crane_up":   "缓慢垂直升降臂上升，每秒0.1米，画面中地平线逐渐下降，下方环境逐渐进入画面",
-		"crane_down": "缓慢垂直升降臂下降，每秒0.1米，镜头向地面靠近，画面中地平线上升",
-		"follow":     "手持跟随镜头，带轻微自然稳定追踪主体，镜头有轻微自然浮动，保持近景构图",
-		"arc":        "平滑环绕镜头，以恒定半径绕主体旋转，背景环境在身后旋转而主体保持居中",
-		"tilt":       "平滑垂直俯仰镜头，以稳定节奏由上至下展现场景，全程保持水平",
-		"whip_pan":   "快速甩镜转场，0.3秒内从左到右扫过画面，扫动过程中可见运动模糊拖影，随后稳定至静止画面",
-		"zoom":       "平滑光学变焦推近主体，镜头时长内焦距逐渐增大，可见背景压缩效果",
-	}
-	motion := motionMap[shot.CamDir.CameraType]
-	if motion == "" {
-		motion = "平滑镜头运动，带自然微稳定，几乎不可察觉的呼吸抖动"
-	}
-
-	atmos := "环境尘埃粒子在可见光柱中缓慢漂浮，速度约每秒0.3厘米"
-
-	desc := shot.Description
-	if len([]rune(desc)) > 150 {
-		runes := []rune(desc)
-		desc = string(runes[:150])
-	}
-
-	return fmt.Sprintf("电影感镜头，专业摄影，%s——场景：%s——氛围：%s——"+
-		"光线全程保持稳定并带有自然的细微变化，阴影方向保持一致，"+
-		"无突兀的场景切换，从首帧到末帧保持平滑的时序一致性",
-		motion, desc, atmos)
-}
-
-// qualityTierImageParams 返回图片生成质量档位对应的参数（宽度、步数）
-func qualityTierImageParams(tier string) (width, steps int) {
-	switch tier {
-	case "draft":
-		// 1280px 长边 → 16:9 = 1280×720，9:16 = 720×1280。
-		return 1280, 20
-	case "preview":
-		return 1280, 25
-	case "production":
-		// 1920px 长边 → 16:9 = 1920×1080，9:16 = 1080×1920，1:1 = 1920×1920。
-		// 与 generateKenBurnsPureGo/generateStillFrameClip 的输出分辨率一致，
-		// 避免静止帧 1.5× 上采样 + Ken Burns zoom 时最高 2.25× 上采样导致的画面模糊。
-		return 1920, 35
-	case "master":
-		return 2560, 50
-	case "ultra": // alias for master; reserved for future upscaling pipeline
-		return 2560, 50
-	default:
-		return 1920, 30
-	}
-}
-
 // validCameraType 验证摄像机类型，无效时返回默认值 static
 func validCameraType(t string) string {
 	valid := map[string]bool{
@@ -2489,7 +2432,7 @@ func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, video
 		return nil, fmt.Errorf("render regenerate_shot_prompt: %w", tplErr)
 	}
 
-	result, genErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, video.NovelID, "regenerate_shot_prompt", rendered, "")
+	result, genErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "regenerate_shot_prompt", rendered)
 	if genErr != nil {
 		return nil, fmt.Errorf("AI regenerate shot prompt: %w", genErr)
 	}
@@ -2736,7 +2679,7 @@ func (s *VideoService) ReviewStoryboard(ctx context.Context, tenantID, videoID u
 
 	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems, videoMode)
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "storyboard_review", prompt, provider)
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "storyboard_review", prompt)
 	if err != nil {
 		return nil, 0, fmt.Errorf("AI审查失败: %w", err)
 	}
@@ -3082,7 +3025,7 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 
 	prompt := buildStoryboardOptimizePrompt(shots, review, videoMode)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_optimize", prompt, provider)
+	result, err := s.aiService.GenerateWithProvider(tenantID, "storyboard_optimize", prompt)
 	if err != nil {
 		return 0, fmt.Errorf("AI优化失败: %w", err)
 	}
@@ -3406,7 +3349,7 @@ func (s *VideoService) generateStoryboardArc(content string, characters []*model
 		logger.Errorf("[Storyboard] generateStoryboardArc renderPrompt: %v", err)
 		return ""
 	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_arc", prompt, provider)
+	result, err := s.aiService.GenerateWithProvider(tenantID, "storyboard_arc", prompt)
 	if err != nil {
 		logger.Errorf("[Storyboard] generateStoryboardArc AI call failed: %v", err)
 		return ""

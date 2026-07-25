@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -130,54 +129,6 @@ func parseWAVDuration(path string) float64 {
 		return 0
 	}
 	return float64(dataSize) / float64(byteRate)
-}
-
-// searchLocalLib 在本地目录中查找首个匹配短语的音效文件。
-// 找到后自动上传至 OSS（首次），返回可公开访问的 URL 和音效时长（秒）。
-// file:// 协议 URL 无法在浏览器端访问，因此必须通过存储服务转换。
-func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase string) (string, float64) {
-	if s.sfxDir == "" {
-		return "", 0
-	}
-	filename, ok := matchLocalLibKey(s.localLib, phrase)
-	if !ok {
-		return "", 0
-	}
-	localPath := filepath.Join(s.sfxDir, filename)
-	if _, err := os.Stat(localPath); err != nil {
-		return "", 0
-	}
-
-	// 解析本地 WAV 时长
-	dur := parseWAVDuration(localPath)
-
-	// 命中进程内缓存
-	if cached, ok := s.localUploadCache.Load(localPath); ok {
-		return cached.(string), dur
-	}
-
-	// 上传至 OSS（首次使用时）
-	if s.storageSvc != nil {
-		f, err := os.Open(localPath)
-		if err == nil {
-			defer f.Close()
-			fi, _ := f.Stat()
-			ossKey := fmt.Sprintf("sfx/local/%s", filepath.Base(localPath))
-			ext := strings.ToLower(filepath.Ext(localPath))
-			mime := "audio/wav"
-			if ext == ".mp3" {
-				mime = "audio/mpeg"
-			}
-			if u, err := s.storageSvc.Upload(ctx, ossKey, f, fi.Size(), mime); err == nil {
-				s.localUploadCache.Store(localPath, u)
-				return u, dur
-			} else {
-				logger.Errorf("[SFXService] local OSS upload failed (%s): %v", filename, err)
-			}
-		}
-	}
-	// storageSvc 未配置或上传失败：跳过本地文件，继续搜索外部 API
-	return "", 0
 }
 
 // sfxCategoryVolume 根据音效类型返回建议混音音量（0.1–0.6）。
@@ -441,66 +392,6 @@ func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
 		prompt = string(runes[:200])
 	}
 	return prompt
-}
-
-// generateElevenLabsForTag 对单个结构化标签调用 ElevenLabs Sound Generation API。
-// 每个 tag 独立生成，避免多标签混成一条不可分离的音频。
-// 优先使用 DB 中配置的 elevenlabs-sfx 提供商（模型管理页面），其次使用环境变量 ELEVENLABS_API_KEY。
-func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
-	prompt := buildElevenLabsPrompt(item, shot)
-
-	// 时长：ambient 用镜头全长（循环），action/emotion 最多 5s
-	dur := shot.Duration
-	if item.SFXType != "ambient" && dur > 5 {
-		dur = 5
-	}
-	if dur <= 0 {
-		dur = 3
-	}
-	if dur > 22 {
-		dur = 22
-	}
-
-	ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
-
-	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
-	// 使用信号量限制并发，避免触发 ElevenLabs 429（免费版最多 4 路）
-	if s.aiSvc != nil {
-		select {
-		case s.elevenLabsSem <- struct{}{}:
-		case <-ctx.Done():
-			return "", 0, ctx.Err()
-		}
-		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
-		<-s.elevenLabsSem
-		if dbErr != nil {
-			if strings.Contains(dbErr.Error(), "no credentials") {
-				logger.Printf("[SFXService] generateElevenLabsForTag: elevenlabs-sfx not configured for tenant=%d, skipping", tenantID)
-			} else {
-				logger.Warnf("[SFXService] generateElevenLabsForTag: tenant=%d: %v", tenantID, dbErr)
-			}
-		}
-		if dbErr == nil && rawURL != "" {
-			// ElevenLabsSFXProvider 返回 file:// 临时路径，必须上传到 OSS 才能公开访问
-			if strings.HasPrefix(rawURL, "file://") {
-				if s.storageSvc != nil {
-					localPath := strings.TrimPrefix(rawURL, "file://")
-					if u, err2 := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); err2 == nil {
-						return u, d, nil
-					} else {
-						logger.Errorf("[SFXService] generateElevenLabsForTag: OSS upload failed: %v", err2)
-					}
-				} else {
-					logger.Errorf("[SFXService] generateElevenLabsForTag: storageSvc nil, cannot upload local file %s", rawURL)
-				}
-				// storageSvc 未配置或上传失败：丢弃临时路径，不返回不可访问的 file:// URL
-				return "", 0, fmt.Errorf("elevenlabs-sfx: local file generated but OSS not configured or upload failed")
-			}
-			return rawURL, d, nil
-		}
-	}
-
-	return "", 0, fmt.Errorf("elevenlabs-sfx: no DB credentials configured for tenant %d", tenantID)
 }
 
 // downloadURLAndUploadToOSS 从远端 URL 下载音频并上传到 OSS，返回 OSS 永久 URL。

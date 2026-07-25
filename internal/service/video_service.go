@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -28,9 +29,6 @@ type VideoService struct {
 	novelRepo             *repository.NovelRepository
 	tenantRepo            *repository.TenantRepository
 	aiService             *AIService
-	videoProviders        map[string]ai.VideoProvider
-	consistencyService    *CharacterConsistencyService
-	bgmService            *BGMService
 	bgmRepo               *repository.VideoBGMSegmentRepository
 	sfxService            *SFXService
 	storageSvc            storage.Service
@@ -231,7 +229,6 @@ func NewVideoService(
 		novelRepo:      novelRepo,
 		tenantRepo:     tenantRepo,
 		aiService:      aiService,
-		videoProviders: videoProviders,
 		stopCh:         make(chan struct{}),
 	}
 	svc.startCharListCacheCleanup()
@@ -241,18 +238,6 @@ func NewVideoService(
 // Shutdown 停止所有后台 goroutine（优雅关闭时调用）。
 func (s *VideoService) Shutdown() {
 	close(s.stopCh)
-}
-
-// WithConsistencyService 设置一致性服务（选填）
-func (s *VideoService) WithConsistencyService(cs *CharacterConsistencyService) *VideoService {
-	s.consistencyService = cs
-	return s
-}
-
-// WithBGMService 设置BGM服务（选填）
-func (s *VideoService) WithBGMService(bgm *BGMService) *VideoService {
-	s.bgmService = bgm
-	return s
 }
 
 // WithBGMSegmentRepo 注入 BGM 分段仓库（选填；用于合成前覆盖率校验）
@@ -945,75 +930,19 @@ type VideoProvider struct {
 	DisplayName string `json:"display_name"`
 }
 
-// ListVideoProviders returns configured video providers with display names.
-// Falls back to DB lookup for tenant 1 when static map is empty.
-func (s *VideoService) ListVideoProviders() []VideoProvider {
-	if len(s.videoProviders) > 0 {
-		result := make([]VideoProvider, 0, len(s.videoProviders))
-		for name := range s.videoProviders {
-			result = append(result, VideoProvider{Name: name, DisplayName: capableProviderDisplayName(name, "")})
-		}
-		return result
-	}
-	if s.aiService != nil {
-		for _, name := range []string{"jimeng-video", "kling", "seedance", "happyhorse"} {
-			if _, err := s.aiService.GetTenantVideoProvider(1, name); err == nil {
-				return []VideoProvider{{Name: name, DisplayName: capableProviderDisplayName(name, "")}}
-			}
-		}
-	}
-	return nil
-}
-
 // resolveVideoProvider 选择视频生成提供商：优先静态 map，其次 DB 租户配置。
 // preferredName 为空时按 jimeng-video→kling→seedance 顺序尝试。
-func (s *VideoService) resolveVideoProvider(tenantID uint, preferredName string) (ai.VideoProvider, string, error) {
-	// 完整别名顺序，与 GetTenantVideoProvider 的 preferOrder 保持一致
-	allNames := []string{"volcengine-visual", "jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
+func (s *VideoService) resolveVideoProvider(tenantID uint, modelName string) (ai.VideoProvider, string, error) {
 
-	// 先查静态 map（preferred 优先）
-	if preferredName != "" {
-		if p, ok := s.videoProviders[preferredName]; ok {
-			return p, preferredName, nil
-		}
+	if p, err := s.aiService.GetTenantVideoProvider(tenantID, modelName); err == nil {
+		return p, modelName, nil
 	}
-	for _, name := range allNames {
-		if name == preferredName {
-			continue
-		}
-		if p, ok := s.videoProviders[name]; ok {
-			return p, name, nil
-		}
-	}
-
-	if s.aiService == nil {
-		return nil, "", fmt.Errorf("no video provider configured")
-	}
-
-	// 再查 DB：先试 preferred，再按 allNames 顺序兜底
-	if preferredName != "" {
-		if p, err := s.aiService.GetTenantVideoProvider(tenantID, preferredName); err == nil {
-			return p, preferredName, nil
-		}
-	}
-	for _, name := range allNames {
-		if name == preferredName {
-			continue
-		}
-		if p, err := s.aiService.GetTenantVideoProvider(tenantID, name); err == nil {
-			return p, name, nil
-		}
-	}
-	return nil, "", fmt.Errorf("no video provider configured")
 }
 
 // hasVideoProvider 判断当前租户是否存在可用的视频生成提供商（静态或 DB）。
 func (s *VideoService) hasVideoProvider(tenantID uint) bool {
-	if len(s.videoProviders) > 0 {
-		return true
-	}
 	if s.aiService != nil {
-		_, err := s.aiService.GetTenantVideoProvider(tenantID, "")
+		_, _, err := s.aiService.getTenantProvider(tenantID, commons.Video, "")
 		return err == nil
 	}
 	return false

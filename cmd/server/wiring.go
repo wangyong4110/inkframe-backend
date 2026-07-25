@@ -211,11 +211,8 @@ type Services struct {
 	GenerationContextService    *service.GenerationContextService
 	ImageGenerationService      *service.ImageGenerationService
 	StoryboardService           *service.StoryboardService
-	VideoEnhancementService     *service.VideoEnhancementService
-	CharacterConsistencyService *service.CharacterConsistencyService
 	FrameGeneratorService       *service.FrameGeneratorService
 	ConsistencyValidatorService *service.ConsistencyValidatorService
-	BGMService                  *service.BGMService
 	SFXService                  *service.SFXService
 	CrawlerService              *crawler.NovelCrawler
 	NovelImportService          *service.NovelImportService
@@ -307,9 +304,6 @@ type contentSvcs struct {
 type videoSvcs struct {
 	Video                *service.VideoService
 	Storyboard           *service.StoryboardService
-	Enhancement          *service.VideoEnhancementService
-	CharConsistency      *service.CharacterConsistencyService
-	BGM                  *service.BGMService
 	FrameGenerator       *service.FrameGeneratorService
 	ConsistencyValidator *service.ConsistencyValidatorService
 	NovelToVideo         *service.NovelToVideoService
@@ -321,15 +315,7 @@ type videoSvcs struct {
 // ──────────────────────────────────────────────────────────────
 
 func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config, redisClient *redis.Client) *coreSvcs {
-	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
-	// WithTaskRouting: configure via config.yaml ai.tasks section (no AI.Tasks config key exists yet).
-	promptFilter := service.NewPromptFilter(repos.SensitiveWordRepo)
-
-	aiSvc := service.NewAIService(repos.AIModelRepo, aiManager, repos.ModelProviderRepo).
-		WithNovelRepo(repos.NovelRepo).
-		WithEncryptionKey(cfg.Server.EncryptionKey).
-		WithRedis(redisClient). // Fix: cross-instance provider cache invalidation
-		WithPromptFilter(promptFilter)
+	aiSvc := service.NewAIService(repos.AIModelRepo, aiManager, repos.ModelProviderRepo)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.ModelComparisonRepo, aiSvc)
@@ -501,17 +487,8 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	// 分镜 / 视频增强 / BGM / 角色一致性
 	intelligentStoryboardSvc := service.NewIntelligentStoryboardService(aiSvc, imageSvc)
 	storyboardSvc := service.NewStoryboardService(videoSvc, aiSvc)
-	enhancementSvc := service.NewVideoEnhancementService(imageSvc, "/tmp/inkframe-enhance")
-	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", "")).
-		WithAIService(aiSvc).
-		WithAssetRepo(repos.AssetRepo, repos.TagRepo).
-		WithRedis(redisClient) // Fix: cross-instance BGM URL cache
-
-	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, aiSvc)
 
 	// 将依赖注回 videoService
-	videoSvc.WithConsistencyService(charConsistencySvc)
-	videoSvc.WithBGMService(bgmSvc)
 	videoSvc.WithBGMSegmentRepo(repos.VideoBGMSegmentRepo)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
@@ -523,13 +500,10 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 
 	// 帧生成 / 一致性验证 / 小说转视频
 	frameGenSvc := service.NewFrameGeneratorService(aiSvc)
-	consistencyValidatorSvc := service.NewConsistencyValidatorService(aiSvc)
 	novelToVideoSvc := service.NewNovelToVideoService(
 		content.NovelImport,
 		intelligentStoryboardSvc,
 		frameGenSvc,
-		enhancementSvc,
-		consistencyValidatorSvc,
 		repos.NovelRepo,
 		repos.ChapterRepo,
 		repos.VideoRepo,
@@ -540,10 +514,9 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithSceneConsistencyService(sceneConsistencySvc)
 
 	return &videoSvcs{
-		Video: videoSvc, Storyboard: storyboardSvc, Enhancement: enhancementSvc,
-		CharConsistency: charConsistencySvc, BGM: bgmSvc, FrameGenerator: frameGenSvc,
-		ConsistencyValidator: consistencyValidatorSvc,
-		NovelToVideo:         novelToVideoSvc, SceneConsistency: sceneConsistencySvc,
+		Video: videoSvc, Storyboard: storyboardSvc,
+		FrameGenerator: frameGenSvc,
+		NovelToVideo:   novelToVideoSvc, SceneConsistency: sceneConsistencySvc,
 	}
 }
 
@@ -657,15 +630,11 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		CrawlerService:           content.Crawler,
 		NarrativeMemoryService:   content.NarrativeMemory,
 		// ── Video ──
-		VideoService:                video.Video,
-		StoryboardService:           video.Storyboard,
-		VideoEnhancementService:     video.Enhancement,
-		CharacterConsistencyService: video.CharConsistency,
-		BGMService:                  video.BGM,
-		FrameGeneratorService:       video.FrameGenerator,
-		ConsistencyValidatorService: video.ConsistencyValidator,
-		NovelToVideoService:         video.NovelToVideo,
-		SceneConsistencyService:     video.SceneConsistency,
+		VideoService:            video.Video,
+		StoryboardService:       video.Storyboard,
+		FrameGeneratorService:   video.FrameGenerator,
+		NovelToVideoService:     video.NovelToVideo,
+		SceneConsistencyService: video.SceneConsistency,
 		// ── Auth / platform ──
 		AuthService:   authSvc,
 		TenantService: tenantSvc,
@@ -745,14 +714,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		})
 	}
 
-	// 素材删除后清理 BGM 本地上传缓存（防止 stale OSS URL）
-	if result.BGMService != nil {
-		bgmSvcRef := result.BGMService
-		result.AssetService.OnDeleteBGM(func(filename string) {
-			bgmSvcRef.InvalidateCacheByFile(filename)
-		})
-	}
-
 	// 角色删除后清理 VideoService 的角色列表缓存（防止脏数据用于配音生成）
 	if result.VideoService != nil {
 		videoSvcRef := result.VideoService
@@ -774,51 +735,51 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 
 // Handlers 处理器
 type Handlers struct {
-	NovelHandler           *handler.NovelHandler
-	ChapterHandler         *handler.ChapterHandler
-	CharacterHandler       *handler.CharacterHandler
-	VideoHandler           *handler.VideoHandler
-	ModelHandler           *handler.ModelHandler
-	McpHandler             *handler.McpHandler
-	StyleHandler           *handler.StyleHandler
-	ContextHandler         *handler.ContextHandler
-	AuthHandler            *handler.AuthHandler
-	ImportHandler          *handler.ImportHandler
-	WorldviewHandler       *handler.WorldviewHandler
-	TenantHandler          *handler.TenantHandler
-	ItemHandler            *handler.ItemHandler
-	SkillHandler           *handler.SkillHandler
-	UploadHandler          *handler.UploadHandler
-	PlotPointHandler       *handler.PlotPointHandler
-	TaskHandler            *handler.TaskHandler
-	MediaHandler           *handler.MediaHandler
-	SceneAnchorHandler     *handler.SceneAnchorHandler
-	ScreenplayHandler      *handler.ScreenplayHandler
-	SystemHandler          *handler.SystemHandler
-	FsHandler              *handler.FsHandler
-	RewriteHandler         *handler.RewriteHandler
-	PlatformHandler        *handler.PlatformHandler
-	AssetHandler           *handler.AssetHandler
-	ImageHandler           *handler.ImageHandler
-	WebSearchHandler       *handler.WebSearchHandler
-	WikiSearchHandler      *handler.WikiSearchHandler
-	StoryPatternHandler    *handler.StoryPatternHandler
-	ImageRefSearchHandler  *handler.ImageRefSearchHandler
-	NotificationHandler    *handler.NotificationHandler
-	KnowledgeHandler       *handler.KnowledgeHandler
-	KnowledgeToolHandler   *handler.KnowledgeToolHandler
-	CharacterLookupHandler *handler.CharacterLookupHandler
-	DramaticHandler        *handler.DramaticHandler
-	DashboardHandler       *handler.DashboardHandler
-	ForeshadowHandler      *handler.ForeshadowHandler
-	WebhookHandler         *handler.WebhookHandler
-	AuditHandler           *handler.AuditHandler
-	OutlineReviewHandler   *handler.OutlineReviewHandler
-	CollabHandler          *handler.CollabHandler
-	SysAdminHandler        *handler.SysAdminHandler
-	SensitiveWordHandler   *handler.SensitiveWordHandler
-	FeedbackHandler        *handler.FeedbackHandler
-	DramaTemplateHandler   *handler.DramaTemplateHandler
+	NovelHandler            *handler.NovelHandler
+	ChapterHandler          *handler.ChapterHandler
+	CharacterHandler        *handler.CharacterHandler
+	VideoHandler            *handler.VideoHandler
+	ModelHandler            *handler.ModelHandler
+	McpHandler              *handler.McpHandler
+	StyleHandler            *handler.StyleHandler
+	ContextHandler          *handler.ContextHandler
+	AuthHandler             *handler.AuthHandler
+	ImportHandler           *handler.ImportHandler
+	WorldviewHandler        *handler.WorldviewHandler
+	TenantHandler           *handler.TenantHandler
+	ItemHandler             *handler.ItemHandler
+	SkillHandler            *handler.SkillHandler
+	UploadHandler           *handler.UploadHandler
+	PlotPointHandler        *handler.PlotPointHandler
+	TaskHandler             *handler.TaskHandler
+	MediaHandler            *handler.MediaHandler
+	SceneAnchorHandler      *handler.SceneAnchorHandler
+	ScreenplayHandler       *handler.ScreenplayHandler
+	SystemHandler           *handler.SystemHandler
+	FsHandler               *handler.FsHandler
+	RewriteHandler          *handler.RewriteHandler
+	PlatformHandler         *handler.PlatformHandler
+	AssetHandler            *handler.AssetHandler
+	ImageHandler            *handler.ImageHandler
+	WebSearchHandler        *handler.WebSearchHandler
+	WikiSearchHandler       *handler.WikiSearchHandler
+	StoryPatternHandler     *handler.StoryPatternHandler
+	ImageRefSearchHandler   *handler.ImageRefSearchHandler
+	NotificationHandler     *handler.NotificationHandler
+	KnowledgeHandler        *handler.KnowledgeHandler
+	KnowledgeToolHandler    *handler.KnowledgeToolHandler
+	CharacterLookupHandler  *handler.CharacterLookupHandler
+	DramaticHandler         *handler.DramaticHandler
+	DashboardHandler        *handler.DashboardHandler
+	ForeshadowHandler       *handler.ForeshadowHandler
+	WebhookHandler          *handler.WebhookHandler
+	AuditHandler            *handler.AuditHandler
+	OutlineReviewHandler    *handler.OutlineReviewHandler
+	CollabHandler           *handler.CollabHandler
+	SysAdminHandler         *handler.SysAdminHandler
+	SensitiveWordHandler    *handler.SensitiveWordHandler
+	FeedbackHandler         *handler.FeedbackHandler
+	DramaTemplateHandler    *handler.DramaTemplateHandler
 	ImageStylePresetHandler *handler.ImageStylePresetHandler
 }
 
@@ -867,14 +828,10 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
-			services.VideoEnhancementService,
-			services.CharacterConsistencyService,
 		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
-			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
 			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
-			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
-			WithCapCutSceneAnchorRepo(repos.SceneAnchorRepo).  // Excel 分镜脚本导出：场景锚点名称/描述
-			WithServerBaseURL(buildServerBaseURL(cfg)).        // 本地/DB 存储媒体 URL 解析
+			WithCapCutSceneAnchorRepo(repos.SceneAnchorRepo). // Excel 分镜脚本导出：场景锚点名称/描述
+			WithServerBaseURL(buildServerBaseURL(cfg)).       // 本地/DB 存储媒体 URL 解析
 			WithAuditService(services.AuditService),
 		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService).WithAIService(services.AIService).WithTaskService(services.TaskService),
 		McpHandler:     handler.NewMcpHandler(services.McpService).WithAuditService(services.AuditService),
@@ -903,9 +860,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		ScreenplayHandler: handler.NewScreenplayHandler(services.ScreenplayService, services.ChapterService, services.NovelService).
 			WithVideoService(services.VideoService).
 			WithTaskService(services.TaskService),
-		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
-		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
-		RewriteHandler:     handler.NewRewriteHandler(services.RewriteService),
+		SystemHandler:  handler.NewSystemHandler(repos.SystemSettingRepo),
+		FsHandler:      handler.NewFsHandler(getEnv("BGM_DIR", "")),
+		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
 		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
@@ -920,14 +877,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				getEnv("TENCENT_WSA_SECRET_KEY", cfg.WebSearch.SecretKey),
 			),
 		),
-		WikiSearchHandler:   handler.NewWikiSearchHandler(service.NewWikiSearcher()),
-		StoryPatternHandler: handler.NewStoryPatternHandler(service.NewStoryPatternService()),
-		ImageRefSearchHandler: handler.NewImageRefSearchHandler(
-			service.NewImageRefSearcher(
-				"pixabay",
-				getEnv("PIXABAY_API_KEY", ""),
-			),
-		),
+		WikiSearchHandler:    handler.NewWikiSearchHandler(service.NewWikiSearcher()),
+		StoryPatternHandler:  handler.NewStoryPatternHandler(service.NewStoryPatternService()),
 		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
 		KnowledgeHandler:     handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
 		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),
@@ -949,8 +900,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
 		).WithAuditService(services.AuditService).
 			WithMcpService(services.McpService),
-		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
-		FeedbackHandler:      handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
+		SensitiveWordHandler:    handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
+		FeedbackHandler:         handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
 		DramaTemplateHandler:    handler.NewDramaTemplateHandler(services.DramaTemplateService),
 		ImageStylePresetHandler: handler.NewImageStylePresetHandler(services.ImageStylePresetService),
 	}

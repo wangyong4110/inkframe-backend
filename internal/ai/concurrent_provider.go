@@ -29,8 +29,7 @@ func (p *ConcurrentProvider) acquire(ctx context.Context) error {
 
 func (p *ConcurrentProvider) release() { <-p.sem }
 
-func (p *ConcurrentProvider) GetName() string      { return p.inner.GetName() }
-func (p *ConcurrentProvider) GetModels() []string  { return p.inner.GetModels() }
+func (p *ConcurrentProvider) GetName() string { return p.inner.GetName() }
 
 func (p *ConcurrentProvider) HealthCheck(ctx context.Context) error {
 	return p.inner.HealthCheck(ctx)

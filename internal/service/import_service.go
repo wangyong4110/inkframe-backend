@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -1495,15 +1496,13 @@ type NovelToVideoResult struct {
 
 // NovelToVideoService 小说转视频服务
 type NovelToVideoService struct {
-	importService        *NovelImportService
-	storyboardService    *IntelligentStoryboardService
-	frameGenerator       *FrameGeneratorService
-	videoEnhancement     *VideoEnhancementService
-	consistencyValidator *ConsistencyValidatorService
-	novelRepo            *repository.NovelRepository
-	chapterRepo          *repository.ChapterRepository
-	videoRepo            *repository.VideoRepository
-	storyboardRepo       *repository.StoryboardRepository
+	importService     *NovelImportService
+	storyboardService *IntelligentStoryboardService
+	frameGenerator    *FrameGeneratorService
+	novelRepo         *repository.NovelRepository
+	chapterRepo       *repository.ChapterRepository
+	videoRepo         *repository.VideoRepository
+	storyboardRepo    *repository.StoryboardRepository
 }
 
 // NewNovelToVideoService 创建小说转视频服务
@@ -1511,23 +1510,19 @@ func NewNovelToVideoService(
 	importService *NovelImportService,
 	storyboardService *IntelligentStoryboardService,
 	frameGenerator *FrameGeneratorService,
-	videoEnhancement *VideoEnhancementService,
-	consistencyValidator *ConsistencyValidatorService,
 	novelRepo *repository.NovelRepository,
 	chapterRepo *repository.ChapterRepository,
 	videoRepo *repository.VideoRepository,
 	storyboardRepo *repository.StoryboardRepository,
 ) *NovelToVideoService {
 	return &NovelToVideoService{
-		importService:        importService,
-		storyboardService:    storyboardService,
-		frameGenerator:       frameGenerator,
-		videoEnhancement:     videoEnhancement,
-		consistencyValidator: consistencyValidator,
-		novelRepo:            novelRepo,
-		chapterRepo:          chapterRepo,
-		videoRepo:            videoRepo,
-		storyboardRepo:       storyboardRepo,
+		importService:     importService,
+		storyboardService: storyboardService,
+		frameGenerator:    frameGenerator,
+		novelRepo:         novelRepo,
+		chapterRepo:       chapterRepo,
+		videoRepo:         videoRepo,
+		storyboardRepo:    storyboardRepo,
 	}
 }
 
@@ -1673,14 +1668,6 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 
 	result.ShotsGenerated = totalShots
 	result.Status = "storyboard_completed"
-
-	// 5. 应用视频增强
-	enhancements := s.videoEnhancement.GetDefaultEnhancements()
-	for _, enh := range enhancements {
-		if enh.Enabled {
-			logger.Printf("Applying enhancement: %s", enh.Type)
-		}
-	}
 
 	result.Status = model.StatusCompleted
 

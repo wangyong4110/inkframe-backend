@@ -1,13 +1,18 @@
 package ai
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/inkframe/inkframe-backend/internal/ai/doubao"
+	"github.com/inkframe/inkframe-backend/internal/ai/kling"
+)
 
 // TestVideoProvider_InterfaceSatisfiedByAllImplementations pins the
 // VideoProvider interface's implementors at compile time. If any of these
 // providers drift from the interface shape, this file fails to compile.
 var (
-	_ VideoProvider = (*KlingProvider)(nil)
-	_ VideoProvider = (*DoubaoVideoProvider)(nil)
+	_ VideoProvider = (*kling.KlingProvider)(nil)
+	_ VideoProvider = (*doubao.DoubaoVideoProvider)(nil)
 	_ VideoProvider = (*JimengVideoProvider)(nil)
 	_ VideoProvider = (*HappyHorseProvider)(nil)
 )

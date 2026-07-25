@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/ai/aliyun"
 )
 
 // MinimaxMusicProvider MiniMax 文生音乐提供者
@@ -138,7 +140,7 @@ func (p *MinimaxMusicProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		return nil, fmt.Errorf("minimax-music: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("minimax-music: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+		return nil, fmt.Errorf("minimax-music: HTTP %d: %s", resp.StatusCode, aliyun.truncate(string(respBody), 300))
 	}
 
 	var result struct {

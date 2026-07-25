@@ -183,7 +183,7 @@ func (s *ScreenplayService) GenerateScreenplayScenesCtx(ctx context.Context, ten
 		return nil, fmt.Errorf("render screenplay_generate: %w", tplErr)
 	}
 
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "screenplay_generate", rendered, providerName)
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "screenplay_generate", rendered)
 	if err != nil {
 		return nil, fmt.Errorf("AI generate screenplay: %w", err)
 	}

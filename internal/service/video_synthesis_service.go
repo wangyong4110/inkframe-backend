@@ -231,13 +231,13 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		os.RemoveAll(tmpDir)
 	}()
 
-// shotDownloadResult 记录一个分镜的下载结果（保序）
+	// shotDownloadResult 记录一个分镜的下载结果（保序）
 	type shotDownloadResult struct {
-		index     int
-		shot      *model.StoryboardShot
-		clipFile  string // 下载后的本地路径（空 = 跳过 / 仅图片）
-		imgFile   string // image-only 镜头的本地图片路径
-		isLocal   bool   // clipFile 是 file:// 已存在的本地文件
+		index       int
+		shot        *model.StoryboardShot
+		clipFile    string // 下载后的本地路径（空 = 跳过 / 仅图片）
+		imgFile     string // image-only 镜头的本地图片路径
+		isLocal     bool   // clipFile 是 file:// 已存在的本地文件
 		downloadErr error
 	}
 
@@ -263,14 +263,17 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			wg.Add(1)
 			go func(idx int, sh *model.StoryboardShot) {
 				defer wg.Done()
-				sem <- struct{}{}; defer func() { <-sem }()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 				tmp, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
 				results[idx].imgFile = tmp
 				results[idx].downloadErr = dlErr
 				if totalShots > 0 {
 					n := int(atomic.AddInt32(&doneDownloads, 1))
 					pct := 10 + n*60/totalShots
-					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil { logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e) }
+					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil {
+						logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e)
+					}
 				}
 			}(i, shot)
 
@@ -289,7 +292,8 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			wg.Add(1)
 			go func(idx int, sh *model.StoryboardShot, url, dest string) {
 				defer wg.Done()
-				sem <- struct{}{}; defer func() { <-sem }()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 				dlStart := time.Now()
 				logger.Printf("[StitchVideo] shot %d: downloading from %s", sh.ShotNo, url)
 				dlCtx, dlCancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -327,7 +331,9 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				if totalShots > 0 {
 					n := int(atomic.AddInt32(&doneDownloads, 1))
 					pct := 10 + n*60/totalShots
-					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil { logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e) }
+					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil {
+						logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e)
+					}
 				}
 			}(i, shot, remoteURL, clipFile)
 		}
@@ -488,26 +494,6 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 	// BGM 混音（非致命：失败时使用无BGM版本）
 	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
-	if s.bgmService != nil {
-		bgmURL := s.bgmService.SelectBGM("")
-		if bgmURL != "" {
-			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
-			if mixErr := s.bgmService.MixBGM(ctx, stitchedPath, bgmURL, outputPath); mixErr != nil {
-				logger.Errorf("[StitchVideo] videoID=%d: BGM mix failed: %v — using stitched without BGM", videoID, mixErr)
-				outputPath = stitchedPath
-			} else {
-				logger.Printf("[StitchVideo] videoID=%d: BGM mix done", videoID)
-				// P2-2: stitchedPath is the pre-BGM intermediate; outputPath is now the final.
-				// Remove the intermediate to avoid disk accumulation on long-running servers.
-				os.Remove(stitchedPath) //nolint:errcheck
-			}
-		} else {
-			logger.Printf("[StitchVideo] videoID=%d: no BGM selected", videoID)
-			outputPath = stitchedPath
-		}
-	} else {
-		outputPath = stitchedPath
-	}
 
 	// Update video record — must succeed for status to be reflected in DB
 	video, err := s.videoRepo.GetByID(videoID)
@@ -712,7 +698,9 @@ func (s *VideoService) PollAndStitchVideo(parentCtx context.Context, videoID uin
 			if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil && vid.Status == "generating" {
 				vid.Status = "failed"
 				vid.TaskMeta.ErrorMessage = fmt.Sprintf("video generation stalled: no progress for %.0f minutes", heartbeatStallDuration.Minutes())
-				if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
+				if e := s.videoRepo.Update(vid); e != nil {
+					logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e)
+				}
 			}
 			return
 		}
@@ -784,7 +772,9 @@ func (s *VideoService) PollAndStitchVideo(parentCtx context.Context, videoID uin
 				if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid.Status == "generating" {
 					vid.Status = "failed"
 					vid.TaskMeta.ErrorMessage = "generation stalled (no progress)"
-					if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
+					if e := s.videoRepo.Update(vid); e != nil {
+						logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e)
+					}
 				}
 				return
 			}
@@ -873,20 +863,6 @@ func (s *VideoService) RunSynthesisPipelineCtx(ctx context.Context, taskID strin
 			_ = s.taskSvc.Fail(taskID, "video not found on pipeline start")
 		}
 		return
-	}
-
-	// 0. BGM 覆盖率预检（可选；bgmService + bgmRepo 均配置时才检查）
-	// 覆盖率不完整时：自动修复 gap（延伸前段 EndShotNo）并继续合成，不阻断流程。
-	if s.bgmService != nil && s.bgmRepo != nil {
-		allShots, shotsErr := s.storyboardRepo.ListByVideo(videoID)
-		if shotsErr == nil && len(allShots) > 0 {
-			if coverErr := s.bgmService.ValidateCoverageBeforeSynthesis(synthCtx, videoID, allShots, s.bgmRepo); coverErr != nil {
-				logger.Errorf("[SynthesizeVideo] videoID=%d: BGM coverage gap detected, auto-repairing and continuing: %v", videoID, coverErr)
-				if repairErr := s.bgmService.RepairCoverageGaps(synthCtx, videoID, allShots, s.bgmRepo); repairErr != nil {
-					logger.Errorf("[SynthesizeVideo] videoID=%d: BGM gap repair failed, proceeding without full BGM coverage: %v", videoID, repairErr)
-				}
-			}
-		}
 	}
 
 	// 1. 拼接视频

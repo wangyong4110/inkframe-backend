@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -203,29 +204,9 @@ func (s *SceneAnchorService) Delete(id uint) error {
 	return s.repo.Delete(id)
 }
 
-// SetRefImage 锁定参考图（强制覆盖）。
-// 使用 UpdateFields 只写 ref_image_url/ref_image_locked_at，避免全量 Save 覆盖其他字段（如 description）。
-// 若传入的 imageURL 是临时签名 URL（如 Volcengine TOS），自动转存到永久存储（OSS）后再写库。
-func (s *SceneAnchorService) SetRefImage(ctx context.Context, tenantID uint, id uint, imageURL string, shotID *uint) error {
-	imageURL, err := s.persistIfEphemeral(ctx, tenantID, imageURL)
-	if err != nil {
-		logger.Errorf("[SceneAnchorService] SetRefImage: id=%d: %v", id, err)
-		return err
-	}
-	now := time.Now()
-	if err := s.repo.UpdateFields(id, map[string]interface{}{
-		"ref_image_url":       imageURL,
-		"ref_image_locked_at": now,
-	}); err != nil {
-		logger.Errorf("[SceneAnchorService] SetRefImage: update id=%d: %v", id, err)
-		return err
-	}
-	return nil
-}
-
 // AutoSetRefImage 首次自动锁定参考图（仅当 RefImageURL 为空时更新）。
 // 同 SetRefImage，若 imageURL 是临时签名 URL 则先转存 OSS。
-func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint, id uint, imageURL string) error {
+func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, id uint, imageURL string) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] AutoSetRefImage: getByID id=%d: %v", id, err)
@@ -234,7 +215,7 @@ func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint,
 	if anchor.RefImageURL != "" {
 		return nil // already locked
 	}
-	imageURL, err = s.persistIfEphemeral(ctx, tenantID, imageURL)
+	imageURL, err = s.persistIfEphemeral(ctx, imageURL)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] AutoSetRefImage: id=%d: %v", id, err)
 		return err
@@ -256,13 +237,13 @@ func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint,
 // 转存失败时必须返回 error 而不是静默回退到原始临时 URL：ref_image_url 会被长期锁定复用，
 // 若在此处放行一个仍带 X-Tos-Expires 的签名 URL，几小时后签名过期，后续所有引用该锚点的分镜生成
 // 都会以 403 Download Url Error 失败——比在写入前直接报错更难排查、影响面也更大。
-func (s *SceneAnchorService) persistIfEphemeral(ctx context.Context, tenantID uint, imageURL string) (string, error) {
+func (s *SceneAnchorService) persistIfEphemeral(ctx context.Context, imageURL string) (string, error) {
 	if s.aiSvc == nil || imageURL == "" {
 		return imageURL, nil
 	}
 	// Volcengine TOS 签名 URL 特征：包含 X-Tos-Algorithm 或 X-Tos-Expires 查询参数
 	if strings.Contains(imageURL, "X-Tos-Algorithm") || strings.Contains(imageURL, "X-Tos-Expires") {
-		persisted := s.aiSvc.PersistExternalImage(ctx, tenantID, imageURL)
+		persisted := s.aiSvc.PersistExternalImage(ctx, imageURL)
 		if persisted == imageURL || strings.Contains(persisted, "X-Tos-Algorithm") || strings.Contains(persisted, "X-Tos-Expires") {
 			return "", fmt.Errorf("转存参考图到永久存储失败，图片链接为临时签名 URL，过期后将无法访问：%s", imageURL)
 		}
@@ -406,7 +387,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	}
 
 	// 调用 LLM（带租户 ID + ctx，确保使用正确的 provider 且可被超时/取消）
-	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, novelID, "scene_anchor_extract", anchorPrompt, 2)
+	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_extract", anchorPrompt, "")
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: LLM call failed: %v", err)
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
@@ -527,38 +508,34 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 	novelTitle := ""
 	novelDesc := ""
 	novelGenre := ""
-	if s.novelRepo != nil {
-		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
-			novelTitle = novel.Title
-			novelDesc = novel.Meta.Description
-			novelGenre = novel.Meta.Genre // 与 NovelDesc 合并传给模板
-		}
+	if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
+		novelTitle = novel.Title
+		novelDesc = novel.Meta.Description
+		novelGenre = novel.Meta.Genre // 与 NovelDesc 合并传给模板
 	}
 	_ = novelGenre // 合入 NovelDesc 字段，避免 unused 警告
 
 	// 搜索提到该场景名称的章节片段（最多取 3 章，每章截取前后 500 字）
 	var excerpts []string
-	if s.chapterRepo != nil {
-		if chapters, cErr := s.chapterRepo.ListByNovelWithContent(anchor.NovelID); cErr == nil {
-			for _, ch := range chapters {
-				if ch.Content == "" || !strings.Contains(ch.Content, anchor.Name) {
-					continue
+	if chapters, cErr := s.chapterRepo.ListByNovelWithContent(anchor.NovelID); cErr == nil {
+		for _, ch := range chapters {
+			if ch.Content == "" || !strings.Contains(ch.Content, anchor.Name) {
+				continue
+			}
+			content := ch.Content
+			if idx := strings.Index(content, anchor.Name); idx >= 0 {
+				lo := idx - 500
+				if lo < 0 {
+					lo = 0
 				}
-				content := ch.Content
-				if idx := strings.Index(content, anchor.Name); idx >= 0 {
-					lo := idx - 500
-					if lo < 0 {
-						lo = 0
-					}
-					hi := idx + 500
-					if hi > len(content) {
-						hi = len(content)
-					}
-					excerpts = append(excerpts, fmt.Sprintf("（第%d章节选）…%s…", ch.ChapterNo, content[lo:hi]))
+				hi := idx + 500
+				if hi > len(content) {
+					hi = len(content)
 				}
-				if len(excerpts) >= 3 {
-					break
-				}
+				excerpts = append(excerpts, fmt.Sprintf("（第%d章节选）…%s…", ch.ChapterNo, content[lo:hi]))
+			}
+			if len(excerpts) >= 3 {
+				break
 			}
 		}
 	}
@@ -575,7 +552,7 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		return nil, fmt.Errorf("render scene_anchor_analyze: %w", err)
 	}
 
-	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, anchor.NovelID, "scene_anchor_analyze", prompt, 2)
+	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_analyze", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI analyze: %w", err)
 	}
@@ -596,8 +573,8 @@ const sceneRefFormatRules = "格式：场景概念设计稿%s，横版16:9，多
 
 // GenerateRefImage 使用 AI 图像生成为锚点生成参考图并锁定
 // descriptionOverride 非空时优先于数据库中的 anchor.Description（用于编辑框尚未保存的最新内容），为空则回退查库。
-func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, providerName, descriptionOverride string) (*model.SceneAnchor, error) {
-	logger.Printf("[SceneAnchorService] GenerateRefImage: tenantID=%d anchorID=%d provider=%s", tenantID, id, providerName)
+func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, descriptionOverride string) (*model.SceneAnchor, error) {
+	logger.Printf("[SceneAnchorService] GenerateRefImage: tenantID=%d anchorID=%d", tenantID, id)
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: getByID id=%d: %v", id, err)
@@ -619,9 +596,6 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 			if novel.VideoConfig != nil && novel.VideoConfig.Config.VideoAspectRatio != "" {
 				sizeOverride = novel.VideoConfig.Config.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
 			}
-			if novel.Title != "" {
-				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
-			}
 		}
 	}
 
@@ -632,6 +606,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		titleNote = fmt.Sprintf("，居中显示加粗场景标题\"%s\"", anchor.Name)
 	}
 	formatRules := fmt.Sprintf(sceneRefFormatRules, nameQuoted, titleNote)
+	// TODO 补充画风提示词
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
 		"Description": description,
 		"FormatRules": formatRules,
@@ -639,121 +614,50 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	if tplErr != nil {
 		return nil, fmt.Errorf("render image_scene_ref: %w", tplErr)
 	}
-	prompt, sceneNegative := splitImagePrompt(rendered)
 
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
+	resp, err := s.aiSvc.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
+		Prompt:          rendered,
+		NegativePrompt:  "",
+		Size:            sizeOverride,
+		LoraModels:      nil,
+		ReferenceImages: []string{anchor.RefImageURL},
+		//ReferenceWeight: 0,
+	})
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("generate ref image: %w", err)
 	}
 
-	if err := s.SetRefImage(ctx, tenantID, id, imageURL, nil); err != nil {
+	if err := s.AutoSetRefImage(ctx, id, resp.URL); err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: save ref image anchorID=%d url=%s: %v", id, imageURL, err)
 		return nil, fmt.Errorf("save ref image: %w", err)
 	}
 
-	logger.Printf("[SceneAnchorService] GenerateRefImage: done anchorID=%d url=%s", id, imageURL)
-	return s.repo.GetByID(id)
-}
-
-// EditRefImageWithInstruction 以文生图模型（DreamO）重新生成参考图，原图作为参考保持风格一致性。
-// instruction 为自然语言提示词，如"让场景更暗，增加烟雾"
-func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, tenantID, id uint, instruction string) (*model.SceneAnchor, error) {
-	logger.Printf("[SceneAnchorService] EditRefImageWithInstruction: tenantID=%d anchorID=%d instruction=%.100s", tenantID, id, instruction)
-	anchor, err := s.repo.GetByID(id)
-	if err != nil {
-		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: getByID id=%d: %v", id, err)
-		return nil, fmt.Errorf("anchor not found: %w", err)
-	}
-	if anchor.RefImageURL == "" {
-		return nil, fmt.Errorf("no ref image to edit; generate one first")
-	}
-
-	// 读取小说画面风格，保持风格一致
-	imageStyle := ""
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(anchor.NovelID); e == nil {
-			imageStyle = novel.AIConfig.ImageStyle
-		}
-	}
-
-	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
-		ctx, tenantID, "", instruction,
-		[]string{anchor.RefImageURL},
-		imageStyle, "", "", 0,
-	)
-	if err != nil {
-		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: AI generate failed anchorID=%d: %v", id, err)
-		return nil, fmt.Errorf("edit ref image: %w", err)
-	}
-
-	if err := s.SetRefImage(ctx, tenantID, id, imageURL, nil); err != nil {
-		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: save edited ref image anchorID=%d: %v", id, err)
-		return nil, fmt.Errorf("save edited ref image: %w", err)
-	}
-	logger.Printf("[SceneAnchorService] EditRefImageWithInstruction: anchor %d edited, url=%s", id, imageURL)
+	logger.Printf("[SceneAnchorService] GenerateRefImage: done anchorID=%d url=%s", id, resp.URL)
 	return s.repo.GetByID(id)
 }
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
 // force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
 // 外层并发度固定为 3（避免大批量时无限创建 goroutine），内层 imageSem 进一步限流。
-func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	anchors, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list anchors: %w", err)
 	}
 
-	var todo []*model.SceneAnchor
+	var todo []uint
 	for _, a := range anchors {
 		if force || a.RefImageURL == "" {
-			todo = append(todo, a)
+			todo = append(todo, a.ID)
 		}
 	}
-	total := len(todo)
-
-	const outerConcurrency = 3
-	sem := make(chan struct{}, outerConcurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var done int
-
-	for _, anchor := range todo {
-		anchor := anchor
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider, ""); genErr != nil {
-				logger.Errorf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
-				mu.Lock()
-				failed++
-				done++
-				cur := done
-				mu.Unlock()
-				if progressFn != nil && total > 0 {
-					progressFn(cur * 99 / total)
-				}
-				return
-			}
-			mu.Lock()
-			succeeded++
-			done++
-			cur := done
-			mu.Unlock()
-			if progressFn != nil && total > 0 {
-				progressFn(cur * 99 / total)
-			}
-		}()
-	}
-	wg.Wait()
-	logger.Printf("[SceneAnchorService] BatchGenerateRefImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
-	return succeeded, failed, nil
+	return s.GenerateChapterRefImages(ctx, tenantID, novelID, todo, progressFn)
 }
 
 // GenerateChapterRefImages 仅为本章绑定的选定场景锚点生成参考图，不影响该小说的其他场景。
 // anchorIDs 与 novelID 做交集校验，避免跨小说/租户的越权生成。
-func (s *SceneAnchorService) GenerateChapterRefImages(ctx context.Context, tenantID, novelID uint, anchorIDs []uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *SceneAnchorService) GenerateChapterRefImages(ctx context.Context, tenantID, novelID uint, anchorIDs []uint, progressFn func(int)) (succeeded, failed int, err error) {
 	all, e := s.repo.ListByNovel(novelID)
 	if e != nil {
 		return 0, 0, fmt.Errorf("list anchors: %w", e)
@@ -785,7 +689,7 @@ func (s *SceneAnchorService) GenerateChapterRefImages(ctx context.Context, tenan
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider, ""); genErr != nil {
+			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, ""); genErr != nil {
 				logger.Errorf("[SceneAnchorService] GenerateChapterRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++

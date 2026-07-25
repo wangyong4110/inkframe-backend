@@ -58,7 +58,6 @@ type ChapterService struct {
 	aiService            *AIService
 	contextSvc           *GenerationContextService
 	narrativeSvc         *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
-	continuitySvc        *ContinuityService      // 可选：章节连贯性检查
 	hookSvc              *HookChainService
 	spSvc                *SatisfactionPointService
 	arcSvc               *ConflictArcService
@@ -103,12 +102,6 @@ func (s *ChapterService) WithRedis(c *redis.Client) *ChapterService {
 // WithVersionRepo 注入章节版本仓库（可选，注入后手动编辑内容时自动存版本）
 func (s *ChapterService) WithVersionRepo(repo *repository.ChapterVersionRepository) *ChapterService {
 	s.versionRepo = repo
-	return s
-}
-
-// WithContinuityService 注入连贯性检查服务（可选，注入后章节生成完成后自动异步检查）
-func (s *ChapterService) WithContinuityService(svc *ContinuityService) *ChapterService {
-	s.continuitySvc = svc
 	return s
 }
 
@@ -213,11 +206,6 @@ func (s *ChapterService) chapterBelongsToTenant(chapter *model.Chapter, tenantID
 		return false
 	}
 	return novel.TenantID == 0 || novel.TenantID == tenantID
-}
-
-// GetDefaultProviderName 返回默认 AI provider 名称
-func (s *ChapterService) GetDefaultProviderName() string {
-	return s.aiService.GetDefaultProviderName()
 }
 
 // syncNovelStats refreshes chapter_count and total_words on the novel (best-effort).
@@ -519,17 +507,10 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		)
 	}
 
-	// 从项目配置读取参数默认值
-	chOutlineOverrides := StoryboardOverrides{
-		MaxTokens:      novel.AIConfig.MaxTokens,
-		Temperature:    novel.AIConfig.Temperature,
-		TimeoutSeconds: novel.AIConfig.TimeoutSeconds,
-	}
-
 	const minOutlineLen = 200
 	var outline string
 	for attempt := 0; attempt < 2; attempt++ {
-		raw, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "", chOutlineOverrides)
+		raw, genErr := s.aiService.GenerateWithProvider(tenantID, "chapter_outline", prompt)
 		if genErr != nil {
 			return nil, genErr
 		}
@@ -1039,7 +1020,7 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 	}
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
-	s.runPostProcessChapter(tenantID, chapter, novel)
+	s.runPostProcessChapter(ctx, tenantID, chapter, novel)
 
 	recordChapterGen("success")
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
@@ -1252,7 +1233,7 @@ role只能是：protagonist / antagonist / supporting
 注意：必须有且仅有一个protagonist`,
 		novel.Title, novel.Meta.Genre, truncateForPrompt(desc, 800))
 
-	result, aiErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "character_extract_mini", prompt, "")
+	result, aiErr := s.aiService.GenerateWithProvider(tenantID, "character_extract_mini", prompt)
 	if aiErr != nil {
 		logger.Errorf("[ChapterService] ensureProtagonistExtracted: AI error: %v", aiErr)
 		return
@@ -1538,7 +1519,7 @@ func (s *ChapterService) generateSceneOutline(
 		return "", "", fmt.Errorf("generateSceneOutline: render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+	resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "scene_outline", outlinePrompt)
 	if err != nil {
 		logger.Errorf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
@@ -1624,7 +1605,7 @@ func (s *ChapterService) generateSceneOutline(
 				"UserPrompt":            req.Prompt,
 			})
 			if renderErr == nil {
-				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "scene_outline", retryPrompt)
 				if retryErr == nil {
 					retryResp = extractJSONObject(strings.TrimSpace(retryResp))
 					var retryResult struct {
@@ -2087,7 +2068,7 @@ func (s *ChapterService) generateFromSceneOutline(
 			// 原实现的 retryOverrides 是块级局部变量，continue 后下一轮仍用原始 sceneOverrides。
 			currentOverrides := sceneOverrides
 			for attempt := 0; attempt < 2; attempt++ {
-				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
+				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter", scenePrompt)
 				if sceneErr == nil {
 					// 字数不足检测：生成成功但内容过短时，提高温度重试（最多1次）
 					if attempt == 0 && len([]rune(cleanChapterOutput(sceneRaw))) < minWordsScene {
@@ -2210,7 +2191,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, genErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+		raw, genErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter", chapterPrompt)
 		if genErr == nil {
 			break
 		}
@@ -2252,7 +2233,7 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 	if req.Prompt != "" {
 		prompt += "\n\n创作要求：" + req.Prompt
 	}
-	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", prompt, req.ModelOverride, buildChapterOverrides(req, novel))
+	raw, err := s.aiService.GenerateWithProvider(tenantID, "chapter", prompt)
 	if err != nil {
 		return "", err
 	}
@@ -2263,7 +2244,7 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 // 每一步失败仍遵循"记录日志、继续下一步"的既有设计（不因单步失败中断整条流水线）；
 // 返回值收集哪些步骤最终未能产出预期结果，供调用方通过 CompletePartial 让用户看到
 // "后处理部分完成"，而不是像过去一样完全静默。空字符串表示全部步骤正常完成。
-func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) (warning string) {
+func (s *ChapterService) postProcessChapter(ctx context.Context, tenantID uint, chapter *model.Chapter, novel *model.Novel) (warning string) {
 	var warnings []string
 	defer func() {
 		if r := recover(); r != nil {
@@ -2398,52 +2379,6 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				logger.Errorf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
 			}
 		}
-	}
-
-	// 4. 连贯性检查（不阻塞主流程；结果持久化到 continuity_report 表供 UI 查询）
-	// 若发现 high/critical 级别问题，在章节上打标记 continuity_blocked=true，
-	// 前端据此提示用户审查，但不阻断生成流程。
-	if s.continuitySvc != nil && chapter.Content != "" {
-		go func(ch *model.Chapter) {
-			report, err := s.continuitySvc.ValidateChapter(novel.ID, ch.ID, tenantID, ch.ChapterNo, ch.Content)
-			if err != nil {
-				logger.Errorf("[ChapterService] continuity check ch%d: %v", ch.ChapterNo, err)
-				return
-			}
-			// 检测是否存在高危/严重问题
-			blocked := false
-			for _, issue := range report.CharacterIssues {
-				if issue.Severity == "high" || issue.Severity == "critical" {
-					blocked = true
-					break
-				}
-			}
-			if !blocked {
-				for _, issue := range report.WorldviewIssues {
-					if issue.Severity == "high" || issue.Severity == "critical" {
-						blocked = true
-						break
-					}
-				}
-			}
-			if !blocked {
-				for _, issue := range report.PlotIssues {
-					if issue.Severity == "high" || issue.Severity == "critical" {
-						blocked = true
-						break
-					}
-				}
-			}
-			if blocked {
-				// P0-2: 使用原子性单列更新，避免与 postProcessChapter 主 goroutine
-				// 的并发写入（steps 4c/4d/4e）产生写入竞争，导致 continuity_blocked=true 被覆盖。
-				if updateErr := s.chapterRepo.UpdateContinuityBlocked(ch.ID, novel.ID, true); updateErr != nil {
-					logger.Errorf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
-				} else {
-					logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
-				}
-			}
-		}(chapter)
 	}
 
 	// 4b. 自动审查：章节生成后执行 N 轮 AI 深度审查 + 自动应用修改
@@ -2653,7 +2588,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				logger.Errorf("[ChapterService] updateNextChapterPreview panic: %v", r)
 			}
 		}()
-		s.updateNextChapterPreview(tenantID, &chSnapForPreview, &novelSnapForPreview)
+		s.updateNextChapterPreview(ctx, tenantID, &chSnapForPreview, &novelSnapForPreview)
 	}()
 
 	logger.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
@@ -2663,14 +2598,14 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 // runPostProcessChapter 通过 TaskService 持久化 chapter_post_process 任务（安静型任务：不进任务
 // 面板），交由任务引擎调度执行（executor 见 cmd/server/task_resume.go 里注册的
 // ResumePostProcessChapter）。未注入 taskSvc 时（例如部分测试场景）退回原来的裸 goroutine，行为不变。
-func (s *ChapterService) runPostProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+func (s *ChapterService) runPostProcessChapter(ctx context.Context, tenantID uint, chapter *model.Chapter, novel *model.Novel) {
 	if s.taskSvc == nil {
-		go s.postProcessChapter(tenantID, chapter, novel)
+		go s.postProcessChapter(ctx, tenantID, chapter, novel)
 		return
 	}
 	if _, err := s.taskSvc.Create(tenantID, TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID); err != nil {
 		logger.Errorf("[ChapterService] failed to create chapter_post_process task for chapter %d: %v", chapter.ID, err)
-		go s.postProcessChapter(tenantID, chapter, novel) // 建任务失败也不能把这段工作直接丢掉
+		go s.postProcessChapter(ctx, tenantID, chapter, novel) // 建任务失败也不能把这段工作直接丢掉
 	}
 }
 
@@ -2678,7 +2613,7 @@ func (s *ChapterService) runPostProcessChapter(tenantID uint, chapter *model.Cha
 // （由 cmd/server 通过 TaskService.RegisterResumeHandler 注册后触发）。postProcessChapter
 // 各步骤本身按"已存在就跳过"（标题/读者预期）或"总是基于最新内容重新生成"（精修/摘要/章末状态）
 // 设计，重复执行是安全的，代价只是多花一次 AI 调用，不会产生内容不一致。
-func (s *ChapterService) ResumePostProcessChapter(t *model.AsyncTask) {
+func (s *ChapterService) ResumePostProcessChapter(ctx context.Context, t *model.AsyncTask) {
 	chapter, err := s.chapterRepo.GetByID(t.EntityID)
 	if err != nil {
 		if s.taskSvc != nil {
@@ -2696,7 +2631,7 @@ func (s *ChapterService) ResumePostProcessChapter(t *model.AsyncTask) {
 	if s.taskSvc != nil {
 		_ = s.taskSvc.SetRunning(t.TaskID)
 	}
-	warning := s.postProcessChapter(t.TenantID, chapter, novel)
+	warning := s.postProcessChapter(ctx, t.TenantID, chapter, novel)
 	if s.taskSvc == nil {
 		return
 	}
@@ -2753,7 +2688,7 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 	sb.WriteString("\n只返回在本章中明确解决的序号，以JSON格式：{\"resolved_indices\":[1,3]}\n")
 	sb.WriteString("若全部未解决则返回 {\"resolved_indices\":[]}")
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_resolution_check", sb.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, "plot_resolution_check", sb.String())
 	if err != nil {
 		logger.Errorf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
 		return
@@ -3442,7 +3377,7 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 // 条件：下一章必须已存在（大纲占位章节）且尚无正文；
 //
 //	下一章已有真实摘要时跳过（避免覆盖）。
-func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+func (s *ChapterService) updateNextChapterPreview(ctx context.Context, tenantID uint, chapter *model.Chapter, novel *model.Novel) {
 	nextNo := chapter.ChapterNo + 1
 	next, err := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, nextNo)
 	if err != nil || next == nil {
@@ -3478,8 +3413,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 		return
 	}
 
-	preview, aiErr := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID,
-		"next_chapter_preview", prompt, "", StoryboardOverrides{})
+	preview, aiErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "next_chapter_preview", prompt)
 	if aiErr != nil {
 		logger.Errorf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
 		return
@@ -3520,7 +3454,7 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 		logger.Errorf("[ChapterService] generateReaderExpectations: render template: %v", err)
 		return ""
 	}
-	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, "reader_expectation", prompt)
 	if err != nil {
 		logger.Errorf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3567,7 +3501,7 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 		logger.Errorf("[generateChapterEndState] render prompt error: %v", err)
 		return ""
 	}
-	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, "chapter_end_state", prompt)
 	if err != nil {
 		logger.Errorf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3621,7 +3555,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return false
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, "chapter_plot_compliance", prompt)
 	if err != nil {
 		logger.Errorf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
 		return false

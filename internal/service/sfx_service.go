@@ -245,9 +245,9 @@ func sfxItemConfig(item sfxTagItem, hasSpeech bool, hasNarration bool) (vol floa
 // 每次调用都会先清除旧音效条目再写入新结果，确保重新生成时能替换旧音效。
 // provider 非空时强制使用指定提供商（如 "elevenlabs-sfx"），为空则走默认降级链。
 // force=true 跳过 24h tag 结果缓存，强制重新调用 AI/搜索接口（用于用户主动重新生成）。
-func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, provider string, force bool) error {
-	logger.Printf("[SFXService] shot %d AutoGenerateSFX start tenantID=%d provider=%q force=%v shotNo=%d",
-		shot.ID, tenantID, provider, force, shot.ShotNo)
+func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, force bool) error {
+	logger.Printf("[SFXService] shot %d AutoGenerateSFX start tenantID=%d force=%v shotNo=%d",
+		shot.ID, tenantID, force, shot.ShotNo)
 
 	// 清除旧音效条目（先删后建，保证重新生成时能替换）
 	if s.sfxItemRepo != nil {
@@ -303,7 +303,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	var results []sfxResult
 
 	for _, item := range tagItems {
-		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot, provider, force)
+		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot, force)
 		if hit.url == "" {
 			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, item.Tag)
 			continue
@@ -401,19 +401,13 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
 // force=true 跳过内存/Redis 缓存且跳过素材库（步骤 0），强制重新生成全新音效文件。
-func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
-	if force {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, true)
-	}
-	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
-	return s.cachedQuery(cacheKey, func() sfxHit {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, false)
-	})
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, force bool) sfxHit {
+	return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, force)
 }
 
 // searchOneTagUncached 是 searchOneTag 的无缓存实现。
 // force=true 时跳过步骤 0（素材库），确保重新生成而非复用旧资产链接。
-func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
+func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, force bool) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
 		sfxDur = 5
@@ -549,11 +543,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Warnf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
 	}
-	// 3. 本地音效库
-	if u, dur := s.searchLocalLib(ctx, tenantID, item.Tag); u != "" {
-		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-		return sfxHit{url: u, source: "local", durationSecs: dur}
-	}
+
 	// 4. AudioLDM（本地部署模型，免费、无速率限制）
 	if u, dur, err := s.generateAudioLDMForTag(ctx, tenantID, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
@@ -592,15 +582,13 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
 	shots []*model.StoryboardShot,
 	tenantID uint,
-	userContext string,
-	provider string,
 	progressFn func(int),
 ) (success, fail int, failedShotIDs []uint) {
 	total := len(shots)
 	if total == 0 {
 		return
 	}
-	logger.Printf("[SFXService] BatchAutoGenerateSFX start tenantID=%d provider=%q total=%d", tenantID, provider, total)
+	logger.Printf("[SFXService] BatchAutoGenerateSFX start tenantID=%d total=%d", tenantID, total)
 	const maxConcurrency = 10
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
@@ -617,7 +605,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		go func(s2 *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.AutoGenerateSFX(ctx, s2, tenantID, provider, false)
+			err := s.AutoGenerateSFX(ctx, s2, tenantID, false)
 			if err != nil {
 				logger.Errorf("[SFXService] shot %d: %v", s2.ID, err)
 				failCount.Add(1)
@@ -819,47 +807,6 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 		tags = []string{"room indoor ambience subtle"}
 	}
 	return tags
-}
-
-// cachedQuery 用 Redis（共享）+ 进程内 sync.Map（二级）缓存包装一次 API 搜索，TTL = sfxCacheTTL。
-// cacheKey 格式建议："source:query"。
-func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
-	const redisPrefix = "sfx:qcache:"
-
-	// 1. 检查 Redis 共享缓存（跨实例命中）
-	if s.cache != nil {
-		if val, err := s.cache.Get(context.Background(), redisPrefix+cacheKey).Result(); err == nil {
-			var j sfxCacheEntryJSON
-			if json.Unmarshal([]byte(val), &j) == nil && time.Now().Before(j.ExpiresAt) {
-				return sfxHit{url: j.URL, source: j.Source, durationSecs: j.DurationSecs}
-			}
-		}
-	}
-
-	// 2. 检查进程内缓存（同实例二次命中，无网络开销）
-	if v, ok := s.queryCache.Load(cacheKey); ok {
-		entry := v.(sfxCacheEntry)
-		if time.Now().Before(entry.expiresAt) {
-			return sfxHit{url: entry.url, source: entry.source, durationSecs: entry.durationSecs}
-		}
-		s.queryCache.Delete(cacheKey)
-	}
-
-	hit := fn()
-	if hit.url != "" && !hit.noCache {
-		expiresAt := time.Now().Add(sfxCacheTTL)
-		s.queryCache.Store(cacheKey, sfxCacheEntry{
-			url: hit.url, source: hit.source, durationSecs: hit.durationSecs,
-			expiresAt: expiresAt,
-		})
-		if s.cache != nil {
-			j := sfxCacheEntryJSON{URL: hit.url, Source: hit.source, DurationSecs: hit.durationSecs, ExpiresAt: expiresAt}
-			if b, err := json.Marshal(j); err == nil {
-				s.cache.Set(context.Background(), redisPrefix+cacheKey, string(b), sfxCacheTTL) //nolint:errcheck
-			}
-		}
-	}
-	return hit
 }
 
 // InvalidateCacheByTag 清除指定 tag 在进程内缓存和 Redis 中的所有条目。

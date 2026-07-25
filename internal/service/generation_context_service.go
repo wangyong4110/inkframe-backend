@@ -7,7 +7,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
-
 // ============================================
 // StoryboardService 分镜服务（handler-facing）
 // ============================================
@@ -17,26 +16,6 @@ type StoryboardOverrides struct {
 	MaxTokens      int     // 输出 token 上限，0=系统默认（≥4096）
 	Temperature    float64 // 生成温度，0=系统默认（0.1）
 	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（300s）
-}
-
-// buildChapterOverrides 从请求参数和小说项目配置构建 AI 参数覆盖。
-// 优先级：请求参数 > 项目配置 > 系统默认。
-func buildChapterOverrides(req *model.GenerateChapterRequest, novel *model.Novel) StoryboardOverrides {
-	o := StoryboardOverrides{
-		MaxTokens:      req.MaxTokens,
-		Temperature:    req.Temperature,
-		TimeoutSeconds: req.TimeoutSeconds,
-	}
-	if o.MaxTokens == 0 {
-		o.MaxTokens = novel.AIConfig.MaxTokens
-	}
-	if o.Temperature == 0 {
-		o.Temperature = novel.AIConfig.Temperature
-	}
-	if o.TimeoutSeconds == 0 {
-		o.TimeoutSeconds = novel.AIConfig.TimeoutSeconds
-	}
-	return o
 }
 
 type StoryboardService struct {
@@ -232,4 +211,3 @@ func (s *GenerationContextService) GetContextPreview(novelID uint) (interface{},
 		"summary":       ctx.GlobalSummary,
 	}, nil
 }
-
