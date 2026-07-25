@@ -1603,11 +1603,15 @@ func (s *VideoService) generateBeatSheet(
 	if s.aiService == nil {
 		return nil
 	}
-	// 节拍数范围：每镜约 1.5 个节拍（偏保守，避免 AI 过度拆分）
-	minBeats := expectedShots
-	maxBeats := expectedShots * 2
+	// 节拍数范围：专业/忠于原文模式下游按"一拍一镜、禁止合并"生成分镜，节拍数即约等于最终镜头数，
+	// 故此处目标须直接贴近 expectedShots（±20%），而非放任节拍数膨胀到 2 倍再指望下游压缩。
+	minBeats := expectedShots * 8 / 10
+	maxBeats := expectedShots * 12 / 10
 	if minBeats < 5 {
 		minBeats = 5
+	}
+	if maxBeats < minBeats {
+		maxBeats = minBeats
 	}
 
 	// 角色摘要（仅名称+身份，节省 token）
