@@ -2237,9 +2237,9 @@ func (s *VideoService) ListShotAssetHistory(videoID, shotID uint) ([]*model.Asse
 	return s.assetRepo.ListByShotID(shotID)
 }
 
-// RestoreShotAsset 把分镜恢复到历史记录里的某个版本：先把当前版本存入历史（避免恢复动作本身
-// 让当前版本无声丢失），再把 asset 的 storage_url 写回 shot 对应字段（按 asset.Type 决定
-// 覆盖 ImageURL 还是 VideoURL）。
+// RestoreShotAsset 把分镜恢复到历史记录里的某个版本：直接把 asset 的 storage_url 写回 shot
+// 对应字段（按 asset.Type 决定覆盖 ImageURL 还是 VideoURL），不产生新的历史记录——恢复动作本身
+// 不算一次新生成，历史列表里的版本条数不应因为回滚而增加。
 func (s *VideoService) RestoreShotAsset(tenantID, videoID, shotID, assetID uint) (*model.StoryboardShot, error) {
 	shot, err := s.GetShotByID(videoID, shotID)
 	if err != nil {
@@ -2257,10 +2257,8 @@ func (s *VideoService) RestoreShotAsset(tenantID, videoID, shotID, assetID uint)
 	}
 	switch asset.Type {
 	case "image":
-		s.snapshotShotAsset(shot, "image", shot.ImageURL, tenantID)
 		shot.ImageURL = asset.MediaMeta.StorageURL
 	case "video":
-		s.snapshotShotAsset(shot, "video", shot.VideoURL, tenantID)
 		shot.VideoURL = asset.MediaMeta.StorageURL
 	default:
 		return nil, fmt.Errorf("unsupported asset type %q", asset.Type)
