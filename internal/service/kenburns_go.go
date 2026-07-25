@@ -114,7 +114,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		}
 
 		t := float64(i) / float64(fps)
-		cropX, cropY, cropW, cropH := kbCrop(shot.CamDir.CameraType, srcW, srcH, t, duration)
+		cropX, cropY, cropW, cropH := kbCrop(shot.CamDir.CameraType, srcW, srcH, outW, outH, t, duration)
 
 		frame := kbCropScale(rgba, cropX, cropY, cropW, cropH, outW, outH)
 
@@ -190,6 +190,16 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 // kbCrop returns the crop rectangle in source-image coordinates for the given
 // camera type and time t ∈ [0, duration] (seconds).
 //
+// The crop rectangle is always kept at the outW:outH aspect ratio (the video's
+// target aspect ratio), not the source image's own ratio — AI image providers
+// commonly return square or otherwise differently-ratioed images (see
+// ai_service_image.go default sizes), and kbCropScale below resizes the crop
+// directly to outW×outH. If the crop ratio didn't match outW:outH, that resize
+// would stretch each axis by a different factor, visibly distorting the image
+// (most often seen as horizontal stretching when a square/portrait source is
+// forced into a wider 16:9 target). Matching the ratio here keeps that resize
+// a uniform scale.
+//
 // Zoom factors mirror the FFmpeg zoompan expressions in generateKenBurnsClip:
 //   - "zoom":         z increments by 0.002/frame from 1.0 → 1.5, centred (zoom in)
 //   - "zoom_out":      mirror of "zoom": z decrements from 1.5 → 1.0, centred (zoom out)
@@ -198,7 +208,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 //   - "tilt":         fixed z=1.3, vertical pan top→bottom, centred horizontally
 //   - "tilt_reverse":  fixed z=1.3, vertical pan bottom→top, centred horizontally
 //   - default:        z increments by 0.0008/frame from 1.0 → 1.2, centred (Ken Burns classic)
-func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h int) {
+func kbCrop(cameraType string, srcW, srcH, outW, outH int, t, duration float64) (x, y, w, h int) {
 	const fps = 30
 
 	// Compute linear progress [0, 1] then apply smoothstep easing (cubic 3t²-2t³).
@@ -216,6 +226,30 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 	// Smoothstep easing: 消除线性运动的机械感
 	progress = progress * progress * (3 - 2*progress)
 
+	// Base crop size at zoom=1.0: the largest outW:outH-ratio window that fits
+	// inside the source image, centred (a standard "cover" crop base).
+	targetRatio := float64(outW) / float64(outH)
+	srcRatio := float64(srcW) / float64(srcH)
+	baseW, baseH := float64(srcW), float64(srcH)
+	if srcRatio > targetRatio {
+		baseW = baseH * targetRatio
+	} else {
+		baseH = baseW / targetRatio
+	}
+
+	// Applies a zoom factor to the base crop size, keeping the outW:outH ratio.
+	zoomedSize := func(zoom float64) (w, h int) {
+		w = int(baseW / zoom)
+		h = int(baseH / zoom)
+		if w < 1 {
+			w = 1
+		}
+		if h < 1 {
+			h = 1
+		}
+		return
+	}
+
 	var zoom float64
 	switch cameraType {
 	case "zoom":
@@ -225,8 +259,7 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 		if zoom > 1.5 {
 			zoom = 1.5
 		}
-		w = int(float64(srcW) / zoom)
-		h = int(float64(srcH) / zoom)
+		w, h = zoomedSize(zoom)
 		x = (srcW - w) / 2
 		y = (srcH - h) / 2
 
@@ -237,16 +270,14 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 		if zoom < 1.0 {
 			zoom = 1.0
 		}
-		w = int(float64(srcW) / zoom)
-		h = int(float64(srcH) / zoom)
+		w, h = zoomedSize(zoom)
 		x = (srcW - w) / 2
 		y = (srcH - h) / 2
 
 	case "pan":
 		// Fixed zoom=1.3, pan from left to right with smoothstep easing.
 		const panZoom = 1.3
-		w = int(float64(srcW) / panZoom)
-		h = int(float64(srcH) / panZoom)
+		w, h = zoomedSize(panZoom)
 		xStart := (srcW - w) / 2
 		xEnd := xStart + (srcW - w) // matches FFmpeg: iw/2-(iw/zoom/2) + (iw - iw/zoom)
 		x = xStart + int(float64(xEnd-xStart)*progress)
@@ -255,8 +286,7 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 	case "pan_reverse":
 		// Mirror of "pan": horizontal pan from right to left.
 		const panZoom = 1.3
-		w = int(float64(srcW) / panZoom)
-		h = int(float64(srcH) / panZoom)
+		w, h = zoomedSize(panZoom)
 		xEnd := (srcW - w) / 2
 		xStart := xEnd + (srcW - w)
 		x = xStart + int(float64(xEnd-xStart)*progress)
@@ -265,8 +295,7 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 	case "tilt":
 		// 垂直平移（从上到下）with smoothstep easing.
 		const tiltZoom = 1.3
-		w = int(float64(srcW) / tiltZoom)
-		h = int(float64(srcH) / tiltZoom)
+		w, h = zoomedSize(tiltZoom)
 		x = (srcW - w) / 2
 		yStart := 0
 		yEnd := srcH - h
@@ -275,8 +304,7 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 	case "tilt_reverse":
 		// 垂直平移（从下到上）with smoothstep easing.
 		const tiltZoom = 1.3
-		w = int(float64(srcW) / tiltZoom)
-		h = int(float64(srcH) / tiltZoom)
+		w, h = zoomedSize(tiltZoom)
 		x = (srcW - w) / 2
 		yStart := srcH - h
 		yEnd := 0
@@ -289,8 +317,7 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 		if zoom > 1.2 {
 			zoom = 1.2
 		}
-		w = int(float64(srcW) / zoom)
-		h = int(float64(srcH) / zoom)
+		w, h = zoomedSize(zoom)
 		x = (srcW - w) / 2
 		y = (srcH - h) / 2
 	}
