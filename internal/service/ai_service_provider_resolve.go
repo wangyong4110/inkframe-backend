@@ -214,7 +214,7 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType commons.ModelTy
 // GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。
 // name 为空时返回第一个可用的视频提供商（kling 优先）。
 func (s *AIService) GetTenantVideoProvider(tenantID uint, modelName string) (ai.VideoProvider, error) {
-	m, err := s.modelRepo.GetByName(modelName)
+	m, err := s.modelRepo.GetByName(tenantID, modelName)
 	if err != nil {
 		return nil, err
 	}

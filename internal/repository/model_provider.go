@@ -181,9 +181,9 @@ func (r *AIModelRepository) GetByID(id uint) (*model.AIModel, error) {
 }
 
 // GetByName 按模型名称查找（如 "deepseek-chat"），返回第一个匹配的活跃模型及其提供商
-func (r *AIModelRepository) GetByName(name string) (*model.AIModel, error) {
+func (r *AIModelRepository) GetByName(tenantID uint, name string) (*model.AIModel, error) {
 	var m model.AIModel
-	if err := r.db.Preload("Provider").Where("name = ? AND is_active = ?", name, true).First(&m).Error; err != nil {
+	if err := r.db.Preload("Provider").Where("tenant_id = ? AND name = ? AND is_active = ?", tenantID, name, true).First(&m).Error; err != nil {
 		return nil, err
 	}
 	return &m, nil

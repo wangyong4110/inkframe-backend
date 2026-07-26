@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -1076,7 +1077,7 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p, err := s.generateOneCharacterProfile(ctx, tenantID, novelID, novelTitle, novelGenre, worldviewContext, e, shortSummaries)
+			p, err := s.generateOneCharacterProfile(ctx, tenantID, novelTitle, novelGenre, worldviewContext, e, shortSummaries)
 			results[idx] = profileResult{p, err}
 		}(i, entry)
 	}
@@ -1086,7 +1087,7 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 	// ── 加载可用音色（一次，用于后续自动推荐）────────────────────────────────
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+		voiceModels, _ = s.modelRepo.ListByTenantAndType(tenantID, commons.Video)
 	}
 
 	// ── Upsert ───────────────────────────────────────────────────────────────
@@ -1315,7 +1316,7 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 	// 根据最新 gender/age/role 重新推荐配音设置（仅在用户未手动配置时填充）
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+		voiceModels, _ = s.modelRepo.ListByTenantAndType(tenantID, commons.Video)
 	}
 	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Meta.Gender, profile.PersonalityTags, char.Role, voiceModels)
 	suggestedStyle := suggestVoiceStyle(char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, char.Description)
@@ -1443,7 +1444,7 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 	// 加载可用音色，用于自动推荐（与主角色提取逻辑一致）
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+		voiceModels, _ = s.modelRepo.ListByTenantAndType(tenantID, commons.Video)
 	}
 
 	// 构建已有角色名→ID 映射，用于 AI 识别的出场角色绑定

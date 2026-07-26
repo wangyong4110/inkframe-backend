@@ -133,7 +133,7 @@ func (s *AIService) acquireModelSlotByName(ctx context.Context, tenantID uint, m
 	if s.modelRepo == nil || modelName == "" {
 		return func() {}, nil
 	}
-	m, err := s.modelRepo.GetByName(modelName)
+	m, err := s.modelRepo.GetByName(tenantID, modelName)
 	if err != nil || (m.Concurrency <= 0 && m.RateLimit <= 0) {
 		return func() {}, nil
 	}

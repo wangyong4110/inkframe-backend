@@ -796,24 +796,6 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 		}
 	}
 
-	// ── Step 1c: 百科知识查询（可选）─────────────────────
-	var wikiContext string
-	if toolEnabled("wiki_search") && s.mcpService != nil {
-		query := buildWikiSearchQuery(novel.Meta.Genre, chapterMeta.summary)
-		wikiCtx, wikiCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer wikiCancel()
-		out, searchErr := s.mcpService.InvokeTool(wikiCtx, tenantID, "wiki_search", map[string]interface{}{
-			"query":       query,
-			"max_results": 3,
-		})
-		if searchErr == nil {
-			wikiContext = parseWikiOutput(out)
-			logger.Printf("[WikiSearch] chapter %d: query=%q", req.ChapterNo, query)
-		} else {
-			logger.Errorf("[WikiSearch] chapter %d: skipped: %v", req.ChapterNo, searchErr)
-		}
-	}
-
 	// ── Step 1d: 情节模板查询（可选）─────────────────────
 	var storyPatternRef string
 	if toolEnabled("story_pattern") && s.mcpService != nil {
@@ -890,7 +872,7 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 	}
 
 	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
-		ctx, tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
 	)
 	if outlineErr != nil {
 		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -906,7 +888,7 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		ctx, tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, knowledgeContext, prevEnding, finalChapterCtx,
 	)
 	if err != nil {
 		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -1359,7 +1341,6 @@ func (s *ChapterService) generateSceneOutline(
 	globalCtx string,
 	meta chapterOutlineMeta,
 	refStories string,
-	wikiContext string,
 	knowledgeContext string,
 	storyPatternRef string,
 	prevEnding string,
@@ -1500,7 +1481,6 @@ func (s *ChapterService) generateSceneOutline(
 		"ReviewHints":           buildReviewHintsText(req.ReviewHints),
 		"PlotTensionState":      plotTensionState,
 		"RefStories":            refStories,
-		"WikiContext":           wikiContext,
 		"KnowledgeContext":      knowledgeContext,
 		"StoryPatternRef":       storyPatternRef,
 		"ChapterBudget":         budgetText,
@@ -1590,7 +1570,6 @@ func (s *ChapterService) generateSceneOutline(
 				"ForeshadowHints":       foreshadowHints,
 				"PlotTensionState":      plotTensionState,
 				"RefStories":            refStories,
-				"WikiContext":           wikiContext,
 				"KnowledgeContext":      knowledgeContext,
 				"StoryPatternRef":       storyPatternRef,
 				"ChapterBudget":         budgetText,
@@ -1675,7 +1654,6 @@ func (s *ChapterService) generateFromSceneOutline(
 	globalCtx string,
 	meta chapterOutlineMeta,
 	refStories string,
-	wikiContext string,
 	knowledgeContext string,
 	prevEnding string,
 	finalChapterCtx string,
@@ -2170,7 +2148,6 @@ func (s *ChapterService) generateFromSceneOutline(
 		"IsStandalone":          req.IsStandalone,
 		"ChapterMode":           novel.AIConfig.ChapterMode,
 		"RefStories":            refStories,
-		"WikiContext":           wikiContext,
 		"KnowledgeContext":      knowledgeContext,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
