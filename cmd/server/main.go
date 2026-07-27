@@ -174,12 +174,6 @@ func main() {
 	dbMediaReader := storage.New(storage.Config{}, db)
 	services.VideoService.WithDBMediaReader(dbMediaReader)
 	services.AIService.WithStorage(storageSvc)
-	services.AIService.WithDBMediaReader(dbMediaReader)
-	if cfg.Server.PublicURL != "" {
-		services.AIService.WithServerBaseURL(cfg.Server.PublicURL)
-		services.VideoService.WithBackendBaseURL(cfg.Server.PublicURL)
-	}
-	services.BGMService.WithStorage(storageSvc)
 	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithScreenplayService(services.ScreenplayService)
@@ -219,56 +213,56 @@ func main() {
 
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
-		JWTSecret:              cfg.Server.JWTSecret,
-		AllowedOrigins:         cfg.Server.AllowedOrigins,
-		TrustedProxies:         cfg.Server.TrustedProxies,
-		RedisClient:            redisClient,
-		DB:                     db,
-		AIService:              services.AIService,
-		NovelHandler:           handlers.NovelHandler,
-		ChapterHandler:         handlers.ChapterHandler,
-		CharacterHandler:       handlers.CharacterHandler,
-		VideoHandler:           handlers.VideoHandler,
-		ModelHandler:           handlers.ModelHandler,
-		McpHandler:             handlers.McpHandler,
-		StyleHandler:           handlers.StyleHandler,
-		ContextHandler:         handlers.ContextHandler,
-		AuthHandler:            handlers.AuthHandler,
-		ImportHandler:          handlers.ImportHandler,
-		WorldviewHandler:       handlers.WorldviewHandler,
-		TenantHandler:          handlers.TenantHandler,
-		ItemHandler:            handlers.ItemHandler,
-		SkillHandler:           handlers.SkillHandler,
-		UploadHandler:          handlers.UploadHandler,
-		PlotPointHandler:       handlers.PlotPointHandler,
-		TaskHandler:            handlers.TaskHandler,
-		MediaHandler:           handlers.MediaHandler,
-		SceneAnchorHandler:     handlers.SceneAnchorHandler,
-		ScreenplayHandler:      handlers.ScreenplayHandler,
-		SystemHandler:          handlers.SystemHandler,
-		FsHandler:              handlers.FsHandler,
-		RewriteHandler:         handlers.RewriteHandler,
-		PlatformHandler:        handlers.PlatformHandler,
-		AssetHandler:           handlers.AssetHandler,
-		ImageHandler:           handlers.ImageHandler,
-		WebSearchHandler:       handlers.WebSearchHandler,
-		WikiSearchHandler:      handlers.WikiSearchHandler,
-		StoryPatternHandler:    handlers.StoryPatternHandler,
-		ImageRefSearchHandler:  handlers.ImageRefSearchHandler,
-		NotificationHandler:    handlers.NotificationHandler,
-		KnowledgeHandler:       handlers.KnowledgeHandler,
-		KnowledgeToolHandler:   handlers.KnowledgeToolHandler,
-		CharacterLookupHandler: handlers.CharacterLookupHandler,
-		DramaticHandler:        handlers.DramaticHandler,
-		DashboardHandler:       handlers.DashboardHandler,
-		ForeshadowHandler:      handlers.ForeshadowHandler,
-		WebhookHandler:         handlers.WebhookHandler,
-		AuditHandler:           handlers.AuditHandler,
-		OutlineReviewHandler:   handlers.OutlineReviewHandler,
-		CollabHandler:          handlers.CollabHandler,
-		SysAdminHandler:        handlers.SysAdminHandler,
-		SensitiveWordHandler:   handlers.SensitiveWordHandler,
-		FeedbackHandler:        handlers.FeedbackHandler,
+		JWTSecret:               cfg.Server.JWTSecret,
+		AllowedOrigins:          cfg.Server.AllowedOrigins,
+		TrustedProxies:          cfg.Server.TrustedProxies,
+		RedisClient:             redisClient,
+		DB:                      db,
+		AIService:               services.AIService,
+		NovelHandler:            handlers.NovelHandler,
+		ChapterHandler:          handlers.ChapterHandler,
+		CharacterHandler:        handlers.CharacterHandler,
+		VideoHandler:            handlers.VideoHandler,
+		ModelHandler:            handlers.ModelHandler,
+		McpHandler:              handlers.McpHandler,
+		StyleHandler:            handlers.StyleHandler,
+		ContextHandler:          handlers.ContextHandler,
+		AuthHandler:             handlers.AuthHandler,
+		ImportHandler:           handlers.ImportHandler,
+		WorldviewHandler:        handlers.WorldviewHandler,
+		TenantHandler:           handlers.TenantHandler,
+		ItemHandler:             handlers.ItemHandler,
+		SkillHandler:            handlers.SkillHandler,
+		UploadHandler:           handlers.UploadHandler,
+		PlotPointHandler:        handlers.PlotPointHandler,
+		TaskHandler:             handlers.TaskHandler,
+		MediaHandler:            handlers.MediaHandler,
+		SceneAnchorHandler:      handlers.SceneAnchorHandler,
+		ScreenplayHandler:       handlers.ScreenplayHandler,
+		SystemHandler:           handlers.SystemHandler,
+		FsHandler:               handlers.FsHandler,
+		RewriteHandler:          handlers.RewriteHandler,
+		PlatformHandler:         handlers.PlatformHandler,
+		AssetHandler:            handlers.AssetHandler,
+		ImageHandler:            handlers.ImageHandler,
+		WebSearchHandler:        handlers.WebSearchHandler,
+		WikiSearchHandler:       handlers.WikiSearchHandler,
+		StoryPatternHandler:     handlers.StoryPatternHandler,
+		ImageRefSearchHandler:   handlers.ImageRefSearchHandler,
+		NotificationHandler:     handlers.NotificationHandler,
+		KnowledgeHandler:        handlers.KnowledgeHandler,
+		KnowledgeToolHandler:    handlers.KnowledgeToolHandler,
+		CharacterLookupHandler:  handlers.CharacterLookupHandler,
+		DramaticHandler:         handlers.DramaticHandler,
+		DashboardHandler:        handlers.DashboardHandler,
+		ForeshadowHandler:       handlers.ForeshadowHandler,
+		WebhookHandler:          handlers.WebhookHandler,
+		AuditHandler:            handlers.AuditHandler,
+		OutlineReviewHandler:    handlers.OutlineReviewHandler,
+		CollabHandler:           handlers.CollabHandler,
+		SysAdminHandler:         handlers.SysAdminHandler,
+		SensitiveWordHandler:    handlers.SensitiveWordHandler,
+		FeedbackHandler:         handlers.FeedbackHandler,
 		DramaTemplateHandler:    handlers.DramaTemplateHandler,
 		ImageStylePresetHandler: handlers.ImageStylePresetHandler,
 	})
@@ -298,9 +292,6 @@ func main() {
 	hotScoreQuit := make(chan struct{})
 	startRecalcLoop("hot-score", time.Hour, hotScoreQuit, redisClient, services.VideoService.RecalcVideoHotScores)
 	startRecalcLoop("novel-hot-score", time.Hour, hotScoreQuit, redisClient, services.NovelService.RecalcNovelHotScores)
-
-	// 后台定时任务：每 10 分钟对所有 AI 提供商执行健康检查
-	startRecalcLoop("provider-health-check", 10*time.Minute, hotScoreQuit, redisClient, services.ModelService.RunHealthChecks)
 
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	safeGo("chunk-cleanup", handler.CleanupChunkStore)

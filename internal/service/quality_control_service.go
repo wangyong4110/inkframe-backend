@@ -137,7 +137,7 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 		return nil, fmt.Errorf("render quality_check: %w", err)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "quality_check", prompt, s.aiSvc.taskRouting.QualityCheck)
+	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, "quality_check", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI quality check failed: %w", err)
 	}
@@ -678,7 +678,7 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 		return "", fmt.Errorf("render quality_refine: %w", err)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "quality_refine", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, "quality_refine", prompt)
 	if err != nil {
 		return "", fmt.Errorf("AI refine failed: %w", err)
 	}
@@ -717,7 +717,7 @@ func (s *QualityControlService) RewriteByInstruction(ctx context.Context, chapte
 		return "", fmt.Errorf("render chapter_rewrite: %w", err)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_rewrite", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, "chapter_rewrite", prompt)
 	if err != nil {
 		return "", fmt.Errorf("AI rewrite failed: %w", err)
 	}
@@ -760,7 +760,7 @@ func (s *QualityControlService) RefineSelection(ctx context.Context, chapterID u
 	if novel, nErr := s.novelRepo.GetByID(chapter.NovelID); nErr == nil {
 		tenantID = novel.TenantID
 	}
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "selection_refine", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, "selection_refine", prompt)
 	if err != nil {
 		return "", fmt.Errorf("AI refine selection failed: %w", err)
 	}
@@ -878,10 +878,10 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		"Content":            sb.String(),
 		"HasIgnored":         len(ignoredLines) > 0,
 		"IgnoredText":        strings.Join(ignoredLines, "\n"),
-		"HasPreviousScore":    previousScore > 0,
-		"PreviousScoreStr":    fmt.Sprintf("%.0f", previousScore),
-		"PreviousWeaknesses":  previousWeaknessesText,
-		"CoreTheme":           novel.Meta.CoreTheme,
+		"HasPreviousScore":   previousScore > 0,
+		"PreviousScoreStr":   fmt.Sprintf("%.0f", previousScore),
+		"PreviousWeaknesses": previousWeaknessesText,
+		"CoreTheme":          novel.Meta.CoreTheme,
 		"HasArcContext":      arcContext != "",
 		"ArcContext":         arcContext,
 		"HasForeshadows":     foreshadowContext != "",
@@ -891,7 +891,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		return nil, fmt.Errorf("render chapter_review: %w", err)
 	}
 
-	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_review", prompt, provider)
+	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, "chapter_review", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI chapter review failed: %w", err)
 	}
@@ -1187,8 +1187,8 @@ func (s *QualityControlService) UnignoreIssue(issueID uint) error {
 
 // RunAutoReview 在章节生成后自动执行最多 rounds 轮 AI 深度审查 + 自动应用修改。
 // 结束条件（任一满足即停止）：
-//   1. 已完成 rounds 轮；
-//   2. 当轮评分 >= minScore（minScore=0 表示不设分数阈值，只按轮数控制）。
+//  1. 已完成 rounds 轮；
+//  2. 当轮评分 >= minScore（minScore=0 表示不设分数阈值，只按轮数控制）。
 //
 // 返回：最终分数、总共应用的段落数、遇到的错误（非致命，调用方可忽略）。
 func (s *QualityControlService) RunAutoReview(
@@ -1288,9 +1288,9 @@ func (s *QualityControlService) buildCharacterVoiceSummary(novelID uint) string 
 		if c.VoiceConfig.VoiceProfile != "" {
 			// Extract overall_voice field from JSON without full parse
 			var vp struct {
-				OverallVoice   string   `json:"overall_voice"`
-				SpeechHabits   []string `json:"speech_habits"`
-				VocabularyLevel string  `json:"vocabulary_level"`
+				OverallVoice    string   `json:"overall_voice"`
+				SpeechHabits    []string `json:"speech_habits"`
+				VocabularyLevel string   `json:"vocabulary_level"`
 			}
 			if err2 := json.Unmarshal([]byte(c.VoiceConfig.VoiceProfile), &vp); err2 == nil && vp.OverallVoice != "" {
 				voiceLine = vp.OverallVoice

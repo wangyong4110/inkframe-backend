@@ -9,8 +9,6 @@ import (
 	"log"
 	"net/http"
 	"time"
-
-	"github.com/inkframe/inkframe-backend/internal/ai/aliyun"
 )
 
 // QwenTTSProvider 千问 TTS 语音合成提供者（阿里云百炼）
@@ -128,7 +126,7 @@ func (p *QwenTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 		return nil, fmt.Errorf("qwen-tts: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("qwen-tts: HTTP %d: %s", resp.StatusCode, aliyun.truncate(string(respBody), 300))
+		return nil, fmt.Errorf("qwen-tts: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
 	}
 
 	var result struct {

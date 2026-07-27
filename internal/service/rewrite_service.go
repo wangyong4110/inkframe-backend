@@ -25,9 +25,9 @@ type RewriteService struct {
 	novelRepo          *repository.NovelRepository
 	aiSvc              *AIService
 	taskSvc            *TaskService
-	continuityRepo     *repository.RewriteContinuityIndexRepository  // optional; nil = no continuity index
-	summaryRepo        *repository.RewriteChapterSummaryRepository   // optional; nil = use excerpt fallback
-	chapterVersionRepo *repository.ChapterVersionRepository          // optional; nil = skip version backup
+	continuityRepo     *repository.RewriteContinuityIndexRepository // optional; nil = no continuity index
+	summaryRepo        *repository.RewriteChapterSummaryRepository  // optional; nil = use excerpt fallback
+	chapterVersionRepo *repository.ChapterVersionRepository         // optional; nil = skip version backup
 }
 
 // rewriteLevelConfig holds per-level parameters.
@@ -839,7 +839,7 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 		return fmt.Errorf("task cancelled")
 	}
 
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, "chapter_gen", prompt)
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
@@ -861,16 +861,16 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 	}
 
 	analysis := &model.LiteraryAnalysis{
-		ProjectID:          project.ID,
-		VoiceFingerprint:   toJSON(analysisData["voice_fingerprint"]),
-		SceneArchitecture:  toJSON(analysisData["scene_architecture"]),
-		CharacterPsych:     toJSON(analysisData["character_psychology"]),
-		ThemeCore:          toJSON(analysisData["theme_core"]),
-		WorldLogic:         toJSON(analysisData["world_logic"]),
-		HighRiskMarkers:    toJSON(analysisData["high_risk_markers"]),
-		RhythmPattern:      toJSON(analysisData["rhythm_pattern"]),
-		ImagerySystem:      toJSON(analysisData["imagery_system"]),
-		InterChapterHooks:  toJSON(analysisData["inter_chapter_hooks"]),
+		ProjectID:         project.ID,
+		VoiceFingerprint:  toJSON(analysisData["voice_fingerprint"]),
+		SceneArchitecture: toJSON(analysisData["scene_architecture"]),
+		CharacterPsych:    toJSON(analysisData["character_psychology"]),
+		ThemeCore:         toJSON(analysisData["theme_core"]),
+		WorldLogic:        toJSON(analysisData["world_logic"]),
+		HighRiskMarkers:   toJSON(analysisData["high_risk_markers"]),
+		RhythmPattern:     toJSON(analysisData["rhythm_pattern"]),
+		ImagerySystem:     toJSON(analysisData["imagery_system"]),
+		InterChapterHooks: toJSON(analysisData["inter_chapter_hooks"]),
 	}
 	if err := s.analysisRepo.Create(analysis); err != nil {
 		return fmt.Errorf("save analysis: %w", err)
@@ -924,7 +924,7 @@ func (s *RewriteService) generateBible(ctx context.Context, taskID string, proje
 		return err
 	}
 
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, "chapter_gen", prompt)
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
@@ -1276,28 +1276,28 @@ func (s *RewriteService) rewriteChapter(
 	coreElements := extractCoreElements(task.OriginalContent, project.Level)
 
 	templateData := map[string]interface{}{
-		"WorldName":        bible.NewWorldName,
-		"NamingStyle":      bible.NamingStyle,
-		"CharNames":        formatCharNamesForPrompt(bible.NewCharNames),
-		"PropsTransform":   formatPropsForPrompt(bible.PropsTransform),
-		"PlotTransform":    bible.PlotTransform,
-		"VoiceStrategy":    bible.VoiceStrategy,
-		"StyleGuide":       bible.StyleGuide,
-		"ImageryTransform": bible.ImageryTransform,
-		"ForbiddenBlock":   formatForbiddenForPrompt(bible),
-		"OriginalContent":  task.OriginalContent,
-		"CoreElements":     coreElements,
-		"LevelGoal":        cfg.Goal,
-		"RetentionTarget":  cfg.RetentionTarget,
-		"OrigWords":        origLen,
-		"MinWords":         minWords,
-		"MaxWords":         maxWords,
-		"Level":            project.Level,
-		"PrevContext":      prevContext,
+		"WorldName":         bible.NewWorldName,
+		"NamingStyle":       bible.NamingStyle,
+		"CharNames":         formatCharNamesForPrompt(bible.NewCharNames),
+		"PropsTransform":    formatPropsForPrompt(bible.PropsTransform),
+		"PlotTransform":     bible.PlotTransform,
+		"VoiceStrategy":     bible.VoiceStrategy,
+		"StyleGuide":        bible.StyleGuide,
+		"ImageryTransform":  bible.ImageryTransform,
+		"ForbiddenBlock":    formatForbiddenForPrompt(bible),
+		"OriginalContent":   task.OriginalContent,
+		"CoreElements":      coreElements,
+		"LevelGoal":         cfg.Goal,
+		"RetentionTarget":   cfg.RetentionTarget,
+		"OrigWords":         origLen,
+		"MinWords":          minWords,
+		"MaxWords":          maxWords,
+		"Level":             project.Level,
+		"PrevContext":       prevContext,
 		"ContinuityContext": continuityCtx,
-		"ArcStage":         arcStage,
-		"RetryHint":        retryHint,
-		"AttemptNo":        attemptNo,
+		"ArcStage":          arcStage,
+		"RetryHint":         retryHint,
+		"AttemptNo":         attemptNo,
 	}
 
 	prompt, err := renderRewriteTemplate(cfg.Template, templateData)
@@ -1305,7 +1305,7 @@ func (s *RewriteService) rewriteChapter(
 		return nil, err
 	}
 
-	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), project.NovelID, "chapter_gen", prompt, "")
+	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), "chapter_gen", prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -1375,7 +1375,7 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			if attempt > 0 {
 				time.Sleep(5 * time.Second)
 			}
-			result, genErr = s.aiSvc.GenerateWithProviderCtx(genCtx, tenantID, novelID, "chapter_gen", prompt, "")
+			result, genErr = s.aiSvc.GenerateWithProviderCtx(genCtx, tenantID, "chapter_gen", prompt)
 			if genErr == nil && result != "" {
 				break
 			}
@@ -1439,7 +1439,7 @@ func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewritePro
 		logger.Errorf("[Rewrite] deAIPass render: %v", err)
 		return ""
 	}
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), "chapter_gen", prompt)
 	if err != nil {
 		logger.Errorf("[Rewrite] deAIPass generate: %v", err)
 		return ""
@@ -1596,18 +1596,18 @@ type ChapterComplianceItem struct {
 
 // ComplianceReport aggregates similarity and quality metrics across all chapters.
 type ComplianceReport struct {
-	ProjectID            uint                    `json:"project_id"`
-	Level                int                     `json:"level"`
-	TotalChapters        int                     `json:"total_chapters"`
-	DoneChapters         int                     `json:"done_chapters"`
-	PassedChapters       int                     `json:"passed_chapters"`
-	AvgLexicalSim        float64                 `json:"avg_lexical_sim"`
-	AvgStructuralSim     float64                 `json:"avg_structural_sim"`
-	AvgSemanticSim       float64                 `json:"avg_semantic_sim"`
-	SemanticSimComputed  bool                    `json:"semantic_sim_computed"` // true when any chapter has real semantic sim
-	AvgQualityScore      float64                 `json:"avg_quality_score"`
-	OverallRating        string                  `json:"overall_rating"`
-	Chapters             []ChapterComplianceItem `json:"chapters"`
+	ProjectID           uint                    `json:"project_id"`
+	Level               int                     `json:"level"`
+	TotalChapters       int                     `json:"total_chapters"`
+	DoneChapters        int                     `json:"done_chapters"`
+	PassedChapters      int                     `json:"passed_chapters"`
+	AvgLexicalSim       float64                 `json:"avg_lexical_sim"`
+	AvgStructuralSim    float64                 `json:"avg_structural_sim"`
+	AvgSemanticSim      float64                 `json:"avg_semantic_sim"`
+	SemanticSimComputed bool                    `json:"semantic_sim_computed"` // true when any chapter has real semantic sim
+	AvgQualityScore     float64                 `json:"avg_quality_score"`
+	OverallRating       string                  `json:"overall_rating"`
+	Chapters            []ChapterComplianceItem `json:"chapters"`
 }
 
 // chapterComplianceRating computes a compliance rating using level-specific thresholds.

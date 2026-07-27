@@ -199,8 +199,7 @@ func (s *SkillService) GenerateSkills(ctx context.Context, tenantID, novelID uin
 		novelTitle, novelGenre,
 	)
 
-	aiResult, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_items", prompt, "",
-		StoryboardOverrides{})
+	aiResult, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_items", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -269,31 +268,4 @@ func (s *SkillService) GenerateSkills(ctx context.Context, tenantID, novelID uin
 		upserted = append(upserted, skill)
 	}
 	return upserted, nil
-}
-
-// GenerateSkillEffect 为技能生成效果图
-func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (*model.Skill, error) {
-	skill, err := s.skillRepo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("skill not found: %w", err)
-	}
-	if skill.ImageURL != "" {
-		return skill, nil // already generated, skip regeneration
-	}
-	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
-	// 项目画面风格：优先使用小说设置的 image_style，未注入 novelRepo 或查询失败时才退回 "fantasy" 兜底。
-	imageStyle := "fantasy"
-	if s.novelRepo != nil {
-		if novel, nErr := s.novelRepo.GetByID(skill.NovelID); nErr == nil && novel.AIConfig.ImageStyle != "" {
-			imageStyle = novel.AIConfig.ImageStyle
-		}
-	}
-	imageURL, imgErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", imageStyle, "", "")
-	if imgErr != nil {
-		logger.Errorf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
-		// Continue without image — skill metadata is still updated
-	} else {
-		skill.ImageURL = imageURL
-	}
-	return skill, s.skillRepo.Update(skill)
 }

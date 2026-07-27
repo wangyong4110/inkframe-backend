@@ -586,8 +586,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	if s.aiSvc != nil {
 		// 走统一限流队列
 		var genErr error
-		llmContent, genErr = s.aiSvc.GenerateWithProviderCtx(ctx, 0, chapter.NovelID, "analysis", prompt, "",
-			StoryboardOverrides{Temperature: 0.3})
+		llmContent, genErr = s.aiSvc.GenerateWithProviderCtx(ctx, chapter.TenantID, "analysis", prompt)
 		if genErr != nil {
 			extractStatus = "error"
 			return genErr

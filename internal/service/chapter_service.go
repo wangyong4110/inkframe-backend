@@ -1103,88 +1103,10 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 		}
 	}
 
-	// 若大纲 JSON 中无剧情点，尝试从文本摘要中提取——保证 plot coverage 机制始终有效
-	if len(meta.plotPoints) == 0 && meta.summary != "" {
-		meta.plotPoints = extractPlotPointsFromText(meta.summary)
-		if len(meta.plotPoints) > 0 {
-			logger.Printf("[extractChapterMeta] ch%d: extracted %d plot points from text summary", chapterNo, len(meta.plotPoints))
-		}
-	}
-
 	logger.Printf("[extractChapterMeta] ch%d final: summaryLen=%d plotPoints=%d title=%q",
 		chapterNo, len(meta.summary), len(meta.plotPoints), meta.chapterTitle)
 
 	return meta
-}
-
-// extractPlotPointsFromText 将纯文本的章节概述/大纲转换为剧情点列表。
-// 当 novel.Outline JSON 中没有结构化 plot_points 时使用（如用户手动编辑的大纲文本）。
-func extractPlotPointsFromText(text string) []string {
-	if text == "" {
-		return nil
-	}
-	var points []string
-
-	// 按换行分割，识别列表项（带编号或符号前缀）
-	lines := strings.Split(text, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if len([]rune(line)) < 10 {
-			continue
-		}
-		extracted := ""
-		// 符号前缀: - · • *
-		for _, prefix := range []string{"- ", "· ", "• ", "* "} {
-			if strings.HasPrefix(line, prefix) {
-				extracted = strings.TrimSpace(line[len(prefix):])
-				break
-			}
-		}
-		// 数字编号: "1. " "2. " ... "10. "
-		if extracted == "" {
-			r := []rune(line)
-			for i, ch := range r {
-				if ch == '.' || ch == '、' || ch == '）' {
-					prefix := string(r[:i])
-					// 判断前缀全是数字或序号字符
-					isNum := true
-					for _, c := range prefix {
-						if c < '0' || c > '9' {
-							isNum = false
-							break
-						}
-					}
-					if isNum && i > 0 && i < 4 && len(r) > i+2 {
-						extracted = strings.TrimSpace(string(r[i+1:]))
-					}
-					break
-				}
-			}
-		}
-		if extracted != "" && len([]rune(extracted)) >= 8 {
-			points = append(points, extracted)
-		}
-	}
-
-	if len(points) >= 2 {
-		if len(points) > 5 {
-			points = points[:5]
-		}
-		return points
-	}
-
-	// 兜底：按句号切分，取有意义的句子作为剧情点
-	sentences := strings.Split(text, "。")
-	for _, s := range sentences {
-		s = strings.TrimSpace(s)
-		if len([]rune(s)) >= 15 {
-			points = append(points, s)
-		}
-	}
-	if len(points) > 5 {
-		points = points[:5]
-	}
-	return points
 }
 
 // ensureProtagonistExtracted 确保 DB 中至少有一个角色（含主角）。

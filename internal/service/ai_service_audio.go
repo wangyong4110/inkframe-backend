@@ -10,39 +10,42 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
+type GenerateAudioOptions struct {
+	Text     string  `json:"text"`
+	Voice    string  `json:"voice"`
+	Speed    float64 `json:"speed"`
+	Emotion  string  `json:"emotion"`
+	Language string  `json:"language"`
+}
+
 // AudioGenerateWithOptions 支持语速、风格和语言/方言的 TTS 生成。
 // DB 是唯一权威来源：loadDBVoiceProvider 失败就直接把错误返回给调用方，绝不静默退化到
 // 别的 provider——否则用户以为自己在 DB 里配置的 provider 生效了，实际上请求偷偷换成了
 // 另一个完全不同的 provider，故障也被日志吞掉。
-func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string, language ...string) (string, error) {
-	lang := ""
-	if len(language) > 0 {
-		lang = language[0]
-	}
-	logger.Printf("[TTS] AudioGenerateWithOptions: tenantID=%d voice=%q speed=%.2f style=%q language=%q textLen=%d text=%q",
-		tenantID, voice, speed, style, lang, len([]rune(text)), text)
+func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, opt GenerateAudioOptions) (string, error) {
+	logger.Printf("[TTS] AudioGenerateWithOptions: tenantID=%d options=%+v", tenantID, opt)
 
 	if s.providerRepo == nil {
 		return "", fmt.Errorf("provider repository not configured")
 	}
 
-	provider, err := s.loadDBVoiceProvider(tenantID, commons.Voice, voice)
+	provider, err := s.loadDBVoiceProvider(tenantID, commons.Voice, opt.Voice)
 	if err != nil {
 		logger.Errorf("[TTS] AudioGenerateWithOptions: loadDBVoiceProvider ERROR: %v", err)
 		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key: %w", err)
 	}
-	logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", provider.GetName(), voice)
+	logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", provider.GetName(), opt.Voice)
 
-	if speed <= 0 {
-		speed = 1.0
+	if opt.Speed <= 0 {
+		opt.Speed = 1.0
 	}
 	ttsStart := time.Now()
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
-		Text:     text,
-		Voice:    voice,
-		Speed:    speed,
-		Emotion:  style,
-		Language: lang,
+		Text:     opt.Text,
+		Voice:    opt.Voice,
+		Speed:    opt.Speed,
+		Emotion:  opt.Emotion,
+		Language: opt.Language,
 	})
 	if err != nil {
 		logger.Errorf("[TTS] AudioGenerateWithOptions: ERROR provider=%q AudioGenerate failed elapsed=%s: %v",

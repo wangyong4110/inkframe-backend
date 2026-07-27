@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -34,18 +35,24 @@ type AnalysisTask struct {
 func (t *AnalysisTask) setStatus(s string) { t.mu.Lock(); t.Status = s; t.mu.Unlock() }
 func (t *AnalysisTask) setError(e string)  { t.mu.Lock(); t.Error = e; t.mu.Unlock() }
 func (t *AnalysisTask) addWarning(w string) {
-	t.mu.Lock(); t.Warnings = append(t.Warnings, w); t.mu.Unlock()
+	t.mu.Lock()
+	t.Warnings = append(t.Warnings, w)
+	t.mu.Unlock()
 }
 
 func (t *AnalysisTask) setProgress(p int) {
-	t.mu.Lock(); t.Progress = p; t.mu.Unlock()
+	t.mu.Lock()
+	t.Progress = p
+	t.mu.Unlock()
 	if t.taskSvc != nil && t.externalTaskID != "" {
 		t.taskSvc.UpdateProgress(t.externalTaskID, p) //nolint:errcheck
 	}
 }
 
 func (t *AnalysisTask) setStep(s string) {
-	t.mu.Lock(); t.Step = s; t.mu.Unlock()
+	t.mu.Lock()
+	t.Step = s
+	t.mu.Unlock()
 	if t.taskSvc != nil && t.externalTaskID != "" {
 		t.taskSvc.SetMeta(t.externalTaskID, map[string]interface{}{"step": s}) //nolint:errcheck
 	}
@@ -65,9 +72,9 @@ type NovelAnalysisService struct {
 	sceneAnchorService *SceneAnchorService
 	foreshadowSvc      *ForeshadowCRUDService
 	taskSvc            *TaskService
-	modelRepo          *repository.AIModelRepository // optional, for voice auto-suggestion
+	modelRepo          *repository.AIModelRepository       // optional, for voice auto-suggestion
 	lookRepo           *repository.CharacterLookRepository // optional, auto-create default look
-	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
+	cleanupStop        chan struct{}                       // closed by Shutdown() to stop background goroutines
 }
 
 func NewNovelAnalysisService(
@@ -392,252 +399,261 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			// ── 4.5.1 补跑小说设置 ──
 			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: reloading novel", novel.ID)
 			freshNovel, freshErr := s.novelRepo.GetByID(novel.ID)
-		if freshErr != nil {
-			logger.Errorf("NovelAnalysis[%d]: Phase4.5 reload novel failed: %v", novel.ID, freshErr)
-		}
-		needSettings := freshNovel != nil && (freshNovel.Meta.Genre == "" || freshNovel.Meta.Genre == "unknown" ||
-			freshNovel.Meta.Description == "" || freshNovel.AIConfig.StylePrompt == "")
-		logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: needSettings=%v (genre=%q desc_empty=%v style_empty=%v)",
-			novel.ID, needSettings,
-			func() string {
-				if freshNovel != nil {
-					return freshNovel.Meta.Genre
+			if freshErr != nil {
+				logger.Errorf("NovelAnalysis[%d]: Phase4.5 reload novel failed: %v", novel.ID, freshErr)
+			}
+			needSettings := freshNovel != nil && (freshNovel.Meta.Genre == "" || freshNovel.Meta.Genre == "unknown" ||
+				freshNovel.Meta.Description == "" || freshNovel.AIConfig.StylePrompt == "")
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: needSettings=%v (genre=%q desc_empty=%v style_empty=%v)",
+				novel.ID, needSettings,
+				func() string {
+					if freshNovel != nil {
+						return freshNovel.Meta.Genre
+					}
+					return "<nil>"
+				}(),
+				freshNovel != nil && freshNovel.Meta.Description == "",
+				freshNovel != nil && freshNovel.AIConfig.StylePrompt == "")
+			if needSettings {
+				task.setStep("正在补充生成设置...")
+				novelForSettings := *freshNovel
+				if novelForSettings.Meta.Description == "" && outline != nil && outline.Summary != "" {
+					novelForSettings.Meta.Description = outline.Summary
 				}
-				return "<nil>"
-			}(),
-			freshNovel != nil && freshNovel.Meta.Description == "",
-			freshNovel != nil && freshNovel.AIConfig.StylePrompt == "")
-		if needSettings {
-			task.setStep("正在补充生成设置...")
-			novelForSettings := *freshNovel
-			if novelForSettings.Meta.Description == "" && outline != nil && outline.Summary != "" {
-				novelForSettings.Meta.Description = outline.Summary
+				freshChaptersForSettings, chErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
+				if chErr != nil {
+					logger.Errorf("NovelAnalysis[%d]: Phase4.5 list chapters for settings failed: %v", novel.ID, chErr)
+				}
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: calling stepUpdateNovelSettings", novel.ID)
+				if err := s.stepUpdateNovelSettings(bgCtx, task, tenantID, &novelForSettings, freshChaptersForSettings); err != nil {
+					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [1/4] settings update failed (non-fatal): %v", novel.ID, err)
+				}
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: done", novel.ID)
+			} else {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: skipped (all fields present)", novel.ID)
 			}
-			freshChaptersForSettings, chErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
-			if chErr != nil {
-				logger.Errorf("NovelAnalysis[%d]: Phase4.5 list chapters for settings failed: %v", novel.ID, chErr)
-			}
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: calling stepUpdateNovelSettings", novel.ID)
-			if err := s.stepUpdateNovelSettings(bgCtx, task, tenantID, &novelForSettings, freshChaptersForSettings); err != nil {
-				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [1/4] settings update failed (non-fatal): %v", novel.ID, err)
-			}
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: done", novel.ID)
-		} else {
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: skipped (all fields present)", novel.ID)
-		}
 
-		// ── 4.5.2 补跑道具提取 ──
-		logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: checking", novel.ID)
-		if s.itemRepo != nil && s.itemService != nil {
-			existingItems, itemListErr := s.itemRepo.ListByNovel(novel.ID)
-			if itemListErr != nil {
-				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: list failed (will re-extract): %v", novel.ID, itemListErr)
-			}
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: existing=%d", novel.ID, len(existingItems))
-			if len(existingItems) == 0 {
-				task.setStep("正在补充提取道具...")
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: calling AIExtractAllFromNovel", novel.ID)
-				if items, err := s.itemService.AIExtractAllFromNovel(bgCtx, tenantID, novel.ID); err != nil {
-					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: extraction failed (non-fatal): %v", novel.ID, err)
+			// ── 4.5.2 补跑道具提取 ──
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: checking", novel.ID)
+			if s.itemRepo != nil && s.itemService != nil {
+				existingItems, itemListErr := s.itemRepo.ListByNovel(novel.ID)
+				if itemListErr != nil {
+					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: list failed (will re-extract): %v", novel.ID, itemListErr)
+				}
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: existing=%d", novel.ID, len(existingItems))
+				if len(existingItems) == 0 {
+					task.setStep("正在补充提取道具...")
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: calling AIExtractAllFromNovel", novel.ID)
+					if items, err := s.itemService.AIExtractAllFromNovel(bgCtx, tenantID, novel.ID); err != nil {
+						logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: extraction failed (non-fatal): %v", novel.ID, err)
+					} else {
+						logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: done, extracted=%d", novel.ID, len(items))
+					}
 				} else {
-					logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: done, extracted=%d", novel.ID, len(items))
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (already have %d items)", novel.ID, len(existingItems))
 				}
 			} else {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (already have %d items)", novel.ID, len(existingItems))
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (itemRepo or itemService nil)", novel.ID)
 			}
-		} else {
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (itemRepo or itemService nil)", novel.ID)
-		}
 
-		// ── 4.5.3 补跑场景锚点提取 ──
-		logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: checking", novel.ID)
-		if s.sceneAnchorService != nil {
-			existingAnchors, anchorListErr := s.sceneAnchorService.ListByNovel(novel.ID)
-			if anchorListErr != nil {
-				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list failed (will re-extract): %v", novel.ID, anchorListErr)
-			}
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: existing=%d", novel.ID, len(existingAnchors))
-			if len(existingAnchors) == 0 {
-				task.setStep("正在补充提取场景...")
-				if freshChapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err != nil {
-					logger.Errorf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list chapters failed: %v", novel.ID, err)
-				} else {
-					const maxConcurrent = 3
-					sem := make(chan struct{}, maxConcurrent)
-					var wg sync.WaitGroup
-					count := 0
-					for _, ch := range freshChapters {
-						text := ch.Content
-						if text == "" {
-							text = ch.Summary
-						}
-						if text == "" {
-							text = truncateForPrompt(ch.Outline, 500)
-						}
-						if text == "" || count >= 10 {
-							continue
-						}
-						count++
-						ch := ch
-						capturedText := text
-						sem <- struct{}{}
-						wg.Add(1)
-						go func() {
-							defer func() { <-sem; wg.Done() }()
-							logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d extracting...", novel.ID, ch.ChapterNo)
-							anchors, err := s.sceneAnchorService.ExtractFromChapter(bgCtx, tenantID, novel.ID, novel.Title, capturedText, 0, "")
-							if err != nil {
-								logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d failed (non-fatal): %v", novel.ID, ch.ChapterNo, err)
-							} else {
-								logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d done, anchors=%d", novel.ID, ch.ChapterNo, len(anchors))
+			// ── 4.5.3 补跑场景锚点提取 ──
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: checking", novel.ID)
+			if s.sceneAnchorService != nil {
+				existingAnchors, anchorListErr := s.sceneAnchorService.ListByNovel(novel.ID)
+				if anchorListErr != nil {
+					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list failed (will re-extract): %v", novel.ID, anchorListErr)
+				}
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: existing=%d", novel.ID, len(existingAnchors))
+				if len(existingAnchors) == 0 {
+					task.setStep("正在补充提取场景...")
+					if freshChapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err != nil {
+						logger.Errorf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list chapters failed: %v", novel.ID, err)
+					} else {
+						const maxConcurrent = 3
+						sem := make(chan struct{}, maxConcurrent)
+						var wg sync.WaitGroup
+						count := 0
+						for _, ch := range freshChapters {
+							text := ch.Content
+							if text == "" {
+								text = ch.Summary
 							}
-						}()
-					}
-					logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: waiting for %d goroutines", novel.ID, count)
-					wg.Wait()
-					logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: all goroutines done", novel.ID)
-				}
-			} else {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (already have %d anchors)", novel.ID, len(existingAnchors))
-			}
-		} else {
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (sceneAnchorService nil)", novel.ID)
-		}
-
-		// ── 4.5.4 补跑角色信息丰富 ──
-		logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: checking", novel.ID)
-		{
-			existingChars, charListErr := s.characterRepo.ListByNovel(novel.ID)
-			if charListErr != nil {
-				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list failed: %v", novel.ID, charListErr)
-			}
-			var emptyChars []*model.Character
-			for _, c := range existingChars {
-				if c.Description == "" {
-					emptyChars = append(emptyChars, c)
-				}
-			}
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: total=%d empty=%d", novel.ID, len(existingChars), len(emptyChars))
-			if len(emptyChars) > 0 {
-				task.setStep("正在补充角色信息...")
-				novelForChar := freshNovel
-				if novelForChar == nil {
-					var ncErr error
-					novelForChar, ncErr = s.novelRepo.GetByID(novel.ID)
-					if ncErr != nil {
-						logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: reload novel failed: %v", novel.ID, ncErr)
-					}
-				}
-				if novelForChar != nil {
-					freshChaptersForChar, chForCharErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
-					if chForCharErr != nil {
-						logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list chapters failed: %v", novel.ID, chForCharErr)
-					}
-					summariesText := buildChapterSummariesText(freshChaptersForChar, 15, 8000)
-					logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: summaries_len=%d", novel.ID, len(summariesText))
-					if summariesText != "" {
-						extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
-							"NovelTitle":       novelForChar.Title,
-							"Genre":            novelForChar.Meta.Genre,
-							"Summaries":        summariesText,
-							"GenreVisualHints": genreVisualHints(novelForChar.Meta.Genre),
-						})
-						if pErr != nil {
-							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: render prompt failed: %v", novel.ID, pErr)
-						}
-						if pErr == nil {
-							logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: calling AI (extract_characters)", novel.ID)
-							result, aErr := s.aiService.GenerateWithProviderCtx(bgCtx, tenantID, novel.ID, "extract_characters", extractPrompt, "",
-								StoryboardOverrides{})
-							if aErr != nil {
-								logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI call failed (non-fatal): %v", novel.ID, aErr)
+							if text == "" {
+								text = truncateForPrompt(ch.Outline, 500)
 							}
-							if aErr == nil {
-								logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI done, parsing result len=%d", novel.ID, len(result))
-								chars, pErr2 := parseCharacterJSONResult(result)
-								if pErr2 != nil {
-									logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: parse JSON failed: %v", novel.ID, pErr2)
+							if text == "" || count >= 10 {
+								continue
+							}
+							count++
+							ch := ch
+							capturedText := text
+							sem <- struct{}{}
+							wg.Add(1)
+							go func() {
+								defer func() { <-sem; wg.Done() }()
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d extracting...", novel.ID, ch.ChapterNo)
+								anchors, err := s.sceneAnchorService.ExtractFromChapter(bgCtx, tenantID, novel.ID, novel.Title, capturedText, 0, "")
+								if err != nil {
+									logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d failed (non-fatal): %v", novel.ID, ch.ChapterNo, err)
+								} else {
+									logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d done, anchors=%d", novel.ID, ch.ChapterNo, len(anchors))
 								}
-								if pErr2 == nil {
-									emptyByName := make(map[string]*model.Character, len(emptyChars))
-									for _, c := range emptyChars {
-										emptyByName[strings.ToLower(c.Name)] = c
+							}()
+						}
+						logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: waiting for %d goroutines", novel.ID, count)
+						wg.Wait()
+						logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: all goroutines done", novel.ID)
+					}
+				} else {
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (already have %d anchors)", novel.ID, len(existingAnchors))
+				}
+			} else {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (sceneAnchorService nil)", novel.ID)
+			}
+
+			// ── 4.5.4 补跑角色信息丰富 ──
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: checking", novel.ID)
+			{
+				existingChars, charListErr := s.characterRepo.ListByNovel(novel.ID)
+				if charListErr != nil {
+					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list failed: %v", novel.ID, charListErr)
+				}
+				var emptyChars []*model.Character
+				for _, c := range existingChars {
+					if c.Description == "" {
+						emptyChars = append(emptyChars, c)
+					}
+				}
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: total=%d empty=%d", novel.ID, len(existingChars), len(emptyChars))
+				if len(emptyChars) > 0 {
+					task.setStep("正在补充角色信息...")
+					novelForChar := freshNovel
+					if novelForChar == nil {
+						var ncErr error
+						novelForChar, ncErr = s.novelRepo.GetByID(novel.ID)
+						if ncErr != nil {
+							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: reload novel failed: %v", novel.ID, ncErr)
+						}
+					}
+					if novelForChar != nil {
+						freshChaptersForChar, chForCharErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
+						if chForCharErr != nil {
+							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list chapters failed: %v", novel.ID, chForCharErr)
+						}
+						summariesText := buildChapterSummariesText(freshChaptersForChar, 15, 8000)
+						logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: summaries_len=%d", novel.ID, len(summariesText))
+						if summariesText != "" {
+							extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
+								"NovelTitle":       novelForChar.Title,
+								"Genre":            novelForChar.Meta.Genre,
+								"Summaries":        summariesText,
+								"GenreVisualHints": genreVisualHints(novelForChar.Meta.Genre),
+							})
+							if pErr != nil {
+								logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: render prompt failed: %v", novel.ID, pErr)
+							}
+							if pErr == nil {
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: calling AI (extract_characters)", novel.ID)
+								result, aErr := s.aiService.GenerateWithProviderCtx(bgCtx, tenantID, "extract_characters", extractPrompt)
+								if aErr != nil {
+									logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI call failed (non-fatal): %v", novel.ID, aErr)
+								}
+								if aErr == nil {
+									logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI done, parsing result len=%d", novel.ID, len(result))
+									chars, pErr2 := parseCharacterJSONResult(result)
+									if pErr2 != nil {
+										logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: parse JSON failed: %v", novel.ID, pErr2)
 									}
-									for _, c := range chars {
-										ec, ok := emptyByName[strings.ToLower(c.Name)]
-										if !ok {
-											continue
+									if pErr2 == nil {
+										emptyByName := make(map[string]*model.Character, len(emptyChars))
+										for _, c := range emptyChars {
+											emptyByName[strings.ToLower(c.Name)] = c
 										}
-										descEnriched := false
-										if ec.Description == "" {
-											desc := c.Description
-											if desc == "" {
-												var parts []string
-												if c.Appearance != "" { parts = append(parts, "外貌："+c.Appearance) }
-												if c.Personality != "" { parts = append(parts, "性格："+c.Personality) }
-												if c.Background != "" { parts = append(parts, "背景："+c.Background) }
-												if c.CharacterArc != "" { parts = append(parts, "弧光："+c.CharacterArc) }
-												if c.Archetype != "" { parts = append(parts, "原型："+c.Archetype) }
-												if c.DialogueStyle.SpeechHabits != "" {
-													parts = append(parts, "口头禅："+c.DialogueStyle.SpeechHabits)
-												} else if len(c.DialogueStyle.Patterns) > 0 {
-													parts = append(parts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+										for _, c := range chars {
+											ec, ok := emptyByName[strings.ToLower(c.Name)]
+											if !ok {
+												continue
+											}
+											descEnriched := false
+											if ec.Description == "" {
+												desc := c.Description
+												if desc == "" {
+													var parts []string
+													if c.Appearance != "" {
+														parts = append(parts, "外貌："+c.Appearance)
+													}
+													if c.Personality != "" {
+														parts = append(parts, "性格："+c.Personality)
+													}
+													if c.Background != "" {
+														parts = append(parts, "背景："+c.Background)
+													}
+													if c.CharacterArc != "" {
+														parts = append(parts, "弧光："+c.CharacterArc)
+													}
+													if c.Archetype != "" {
+														parts = append(parts, "原型："+c.Archetype)
+													}
+													if c.DialogueStyle.SpeechHabits != "" {
+														parts = append(parts, "口头禅："+c.DialogueStyle.SpeechHabits)
+													} else if len(c.DialogueStyle.Patterns) > 0 {
+														parts = append(parts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+													}
+													desc = strings.Join(parts, "\n")
 												}
-												desc = strings.Join(parts, "\n")
+												if desc != "" {
+													ec.Description = desc
+													descEnriched = true
+												}
 											}
-											if desc != "" {
-												ec.Description = desc
-												descEnriched = true
+											if descEnriched {
+												logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: updating char %q", novel.ID, ec.Name)
+												if err := s.characterRepo.Update(ec); err != nil {
+													logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: update char %q failed: %v", novel.ID, ec.Name, err)
+												} else {
+													logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: enriched char %q", novel.ID, ec.Name)
+												}
 											}
-										}
-										if descEnriched {
-											logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: updating char %q", novel.ID, ec.Name)
-											if err := s.characterRepo.Update(ec); err != nil {
-												logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: update char %q failed: %v", novel.ID, ec.Name, err)
-											} else {
-												logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: enriched char %q", novel.ID, ec.Name)
-											}
-										}
-										if s.lookRepo != nil {
-											filteredVP := s.aiService.FilterPrompt(c.VisualPrompt)
-											if ec.DefaultLookID != 0 {
-												if filteredVP != "" {
-													if look, e := s.lookRepo.GetByID(ec.DefaultLookID); e == nil && look.VisualPrompt == "" {
-														look.VisualPrompt = filteredVP
-														if uErr := s.lookRepo.Update(look); uErr != nil {
-															logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] update look visual_prompt for char %q: %v", novel.ID, ec.Name, uErr)
+											if s.lookRepo != nil {
+												filteredVP := c.VisualPrompt
+												if ec.DefaultLookID != 0 {
+													if filteredVP != "" {
+														if look, e := s.lookRepo.GetByID(ec.DefaultLookID); e == nil && look.VisualPrompt == "" {
+															look.VisualPrompt = filteredVP
+															if uErr := s.lookRepo.Update(look); uErr != nil {
+																logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] update look visual_prompt for char %q: %v", novel.ID, ec.Name, uErr)
+															}
+														}
+													}
+												} else {
+													newLook := &model.CharacterLook{
+														CharacterID:  ec.ID,
+														NovelID:      ec.NovelID,
+														Label:        "默认形象",
+														VisualPrompt: filteredVP,
+													}
+													if cErr := s.lookRepo.Create(newLook); cErr != nil {
+														logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] create default look for char %q: %v", novel.ID, ec.Name, cErr)
+													} else {
+														if uErr := s.characterRepo.UpdateDefaultLookID(ec.ID, newLook.ID); uErr != nil {
+															logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] set default_look_id for char %q: %v", novel.ID, ec.Name, uErr)
 														}
 													}
 												}
-											} else {
-												newLook := &model.CharacterLook{
-													CharacterID:  ec.ID,
-													NovelID:      ec.NovelID,
-													Label:        "默认形象",
-													VisualPrompt: filteredVP,
-												}
-												if cErr := s.lookRepo.Create(newLook); cErr != nil {
-													logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] create default look for char %q: %v", novel.ID, ec.Name, cErr)
-												} else {
-													if uErr := s.characterRepo.UpdateDefaultLookID(ec.ID, newLook.ID); uErr != nil {
-														logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] set default_look_id for char %q: %v", novel.ID, ec.Name, uErr)
-													}
-												}
 											}
 										}
 									}
 								}
 							}
+						} else {
+							logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (no summaries available)", novel.ID)
 						}
-					} else {
-						logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (no summaries available)", novel.ID)
 					}
+				} else {
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (all chars have description)", novel.ID)
 				}
-			} else {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (all chars have description)", novel.ID)
 			}
-		}
-		logger.Printf("NovelAnalysis[%d]: Phase4.5 done (background)", novel.ID)
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 done (background)", novel.ID)
 		}()
 	}
 	logger.Printf("NovelAnalysis[%d]: reaching setProgress(95)", novel.ID)
@@ -684,16 +700,16 @@ type analysisDialogueStyleJSON struct {
 type analysisCharJSON struct {
 	Name            string                    `json:"name"`
 	Role            string                    `json:"role"`
-	Gender          string                    `json:"gender"`          // male/female/neutral
-	Age             string                    `json:"age"`             // 如 "16" / "约25岁"
-	Description     string                    `json:"description"`     // 统一中文描述（新格式）
-	Archetype       string                    `json:"archetype"`       // 旧格式兼容
-	Appearance      string                    `json:"appearance"`      // 旧格式兼容
-	Personality     string                    `json:"personality"`     // 旧格式兼容
+	Gender          string                    `json:"gender"`           // male/female/neutral
+	Age             string                    `json:"age"`              // 如 "16" / "约25岁"
+	Description     string                    `json:"description"`      // 统一中文描述（新格式）
+	Archetype       string                    `json:"archetype"`        // 旧格式兼容
+	Appearance      string                    `json:"appearance"`       // 旧格式兼容
+	Personality     string                    `json:"personality"`      // 旧格式兼容
 	PersonalityTags []string                  `json:"personality_tags"` // AI 生成的性格标签
-	Background      string                    `json:"background"`      // 旧格式兼容
-	CharacterArc    string                    `json:"character_arc"`   // 旧格式兼容
-	DialogueStyle   analysisDialogueStyleJSON `json:"dialogue_style"`  // 旧格式兼容
+	Background      string                    `json:"background"`       // 旧格式兼容
+	CharacterArc    string                    `json:"character_arc"`    // 旧格式兼容
+	DialogueStyle   analysisDialogueStyleJSON `json:"dialogue_style"`   // 旧格式兼容
 	VisualPrompt    string                    `json:"visual_prompt"`
 }
 
@@ -780,7 +796,7 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 			})
 			if pErr != nil {
 				logger.Errorf("NovelAnalysis: chapter %d render prompt: %v", ch.ChapterNo, pErr)
-			} else if summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "chapter_summary", prompt, ""); err != nil {
+			} else if summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter_summary", prompt); err != nil {
 				logger.Errorf("NovelAnalysis: chapter %d summary AI error: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = strings.TrimSpace(summary)
@@ -837,7 +853,7 @@ func (s *NovelAnalysisService) summarizeChaptersBackground(
 				logger.Errorf("NovelAnalysis[bg][%d]: chapter %d render prompt failed: %v", novel.ID, ch.ChapterNo, err)
 				return
 			}
-			summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "chapter_summary", prompt, "")
+			summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter_summary", prompt)
 			if err != nil {
 				if ctx.Err() != nil {
 					logger.Warnf("NovelAnalysis[bg][%d]: chapter %d summary cancelled: %v", novel.ID, ch.ChapterNo, ctx.Err())
@@ -882,8 +898,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		return fmt.Errorf("render extract_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "extract_characters", extractCharsPrompt, "",
-		StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_characters", extractCharsPrompt)
 	if err != nil {
 		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters AI call failed: %v", novel.ID, err)
 		return fmt.Errorf("AI extract_characters: %w", err)
@@ -909,7 +924,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	// 加载可用音色模型（用于自动推荐，可选）
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+		voiceModels, _ = s.modelRepo.ListByTenantAndType(tenantID, commons.Voice)
 	}
 
 	const maxMainCharacters = 20
@@ -936,11 +951,21 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		finalDesc := c.Description
 		if finalDesc == "" {
 			var descParts []string
-			if c.Appearance != "" { descParts = append(descParts, "外貌："+c.Appearance) }
-			if c.Personality != "" { descParts = append(descParts, "性格："+c.Personality) }
-			if c.Background != "" { descParts = append(descParts, "背景："+c.Background) }
-			if c.CharacterArc != "" { descParts = append(descParts, "弧光："+c.CharacterArc) }
-			if c.Archetype != "" { descParts = append(descParts, "原型："+c.Archetype) }
+			if c.Appearance != "" {
+				descParts = append(descParts, "外貌："+c.Appearance)
+			}
+			if c.Personality != "" {
+				descParts = append(descParts, "性格："+c.Personality)
+			}
+			if c.Background != "" {
+				descParts = append(descParts, "背景："+c.Background)
+			}
+			if c.CharacterArc != "" {
+				descParts = append(descParts, "弧光："+c.CharacterArc)
+			}
+			if c.Archetype != "" {
+				descParts = append(descParts, "原型："+c.Archetype)
+			}
 			if c.DialogueStyle.SpeechHabits != "" {
 				descParts = append(descParts, "口头禅/语癖："+c.DialogueStyle.SpeechHabits)
 			} else if len(c.DialogueStyle.Patterns) > 0 {
@@ -1029,7 +1054,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		return fmt.Errorf("render extract_worldview: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "extract_worldview", worldviewPrompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_worldview", worldviewPrompt)
 	if err != nil {
 		logger.Errorf("NovelAnalysis[%d]: stepExtractWorldview AI call failed: %v", novel.ID, err)
 		return fmt.Errorf("AI extract_worldview: %w", err)
@@ -1421,7 +1446,7 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 // AnalysisStatus 小说分析状态（供 API 查询）
 type AnalysisStatus struct {
 	NovelID     uint      `json:"novel_id"`
-	Status      string    `json:"status"` // "not_started", "pending", "running", "completed", "failed", "cancelled"
+	Status      string    `json:"status"`   // "not_started", "pending", "running", "completed", "failed", "cancelled"
 	Progress    int       `json:"progress"` // 0-100
 	CurrentStep string    `json:"current_step"`
 	Error       string    `json:"error,omitempty"`
@@ -1569,7 +1594,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 		}
 		combinedPrompt := fmt.Sprintf("小说《%s》部分章节内容：\n%s\n\n请用JSON格式返回以下字段：\n{\n%s\n}\n只输出JSON对象，不要任何其他内容。",
 			novel.Title, sampleContent, strings.Join(fieldDescs, ",\n"))
-		if resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "novel_settings", combinedPrompt, ""); err != nil {
+		if resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "novel_settings", combinedPrompt); err != nil {
 			logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings AI error: %v", novel.ID, err)
 		} else {
 			var res settingsJSON

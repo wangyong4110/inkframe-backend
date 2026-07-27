@@ -627,18 +627,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/compute-timeline", cfg.VideoHandler.ComputeTimeline)
 			videos.GET("/:id/sync-manifest", cfg.VideoHandler.GetSyncManifest)
 			// BGM 背景音乐
-			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
-			videos.PUT("/:id/bgm/segments/:seg_id", cfg.VideoHandler.UpdateBGMSegment)
-			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
-			videos.PATCH("/:id/bgm/segments/:seg_id/disabled", cfg.VideoHandler.ToggleBGMSegment)
-			videos.POST("/:id/bgm/analyze", cfg.VideoHandler.AnalyzeBGMSegments)
-			videos.POST("/:id/bgm/generate", cfg.VideoHandler.GenerateBGM)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
 			videos.POST("/:id/shots/:shot_id/copy", cfg.VideoHandler.CopyShot)
 			videos.DELETE("/:id/shots/:shot_id", cfg.VideoHandler.DeleteShot)
 			videos.POST("/:id/shots/:shot_id/refine-image", cfg.VideoHandler.RefineShotImage)
-			videos.POST("/:id/shots/:shot_id/lipsync", cfg.VideoHandler.GenerateLipSync)
-			videos.GET("/:id/shots/:shot_id/lipsync/status", cfg.VideoHandler.GetLipSyncStatus)
+			//videos.POST("/:id/shots/:shot_id/lipsync", cfg.VideoHandler.GenerateLipSync)
+			//videos.GET("/:id/shots/:shot_id/lipsync/status", cfg.VideoHandler.GetLipSyncStatus)
 			videos.POST("/:id/shots/:shot_id/sfx", cfg.VideoHandler.GenerateShotSFX)
 			videos.PUT("/:id/shots/:shot_id/sfx-tags", cfg.VideoHandler.UpdateShotSFXTags)
 			// 音效条目（多条）
@@ -661,7 +655,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// ServeAudio 已移至公开路由区域
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
 			videos.GET("/:id/download", cfg.VideoHandler.DownloadVideo)
-			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
+			//videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
 			videos.POST("/:id/subtitles/export", cfg.VideoHandler.ExportSubtitles)
 			videos.POST("/:id/synthesize", cfg.VideoHandler.SynthesizeVideo)
 			videos.POST("/:id/publish", cfg.VideoHandler.PublishVideo)
@@ -691,21 +685,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			storyboard.POST("/generate", func(c *gin.Context) {
 				cfg.VideoHandler.GenerateStoryboard(c)
 			})
-			storyboard.POST("/analyze-emotions", cfg.VideoHandler.AnalyzeEmotions)
-		}
-
-		// 视频增强
-		video := v1.Group("/video")
-		{
-			video.POST("/enhance", cfg.VideoHandler.EnhanceVideo)
-			video.POST("/recommendations", cfg.VideoHandler.GetEnhancementRecommendations)
-		}
-
-		// 一致性检测
-		consistency := v1.Group("/consistency")
-		{
-			consistency.GET("/default", cfg.VideoHandler.GetDefaultConsistencyConfig)
-			consistency.POST("/score", cfg.VideoHandler.CalculateConsistencyScore)
 		}
 
 		// 模型管理
@@ -719,17 +698,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			modelProviders.GET("/:id", cfg.ModelHandler.GetProvider)
 			modelProviders.PUT("/:id", cfg.ModelHandler.UpdateProvider)
 			modelProviders.DELETE("/:id", cfg.ModelHandler.DeleteProvider)
-			modelProviders.POST("/:id/test", cfg.ModelHandler.TestProvider)
 		}
 
 		models := v1.Group("/models")
 		{
 			models.GET("", cfg.ModelHandler.ListModels)
 			models.POST("", cfg.ModelHandler.CreateModel)
-			models.GET("/available/:task_type", cfg.ModelHandler.GetAvailableModels)
-			models.POST("/select", cfg.ModelHandler.SelectModel)
 			models.POST("/voice-preview", cfg.ModelHandler.VoicePreview)
-			models.POST("/test-prompt", cfg.ModelHandler.TestModelPrompt)
 			models.PUT("/:id", cfg.ModelHandler.UpdateModel)
 			models.DELETE("/:id", cfg.ModelHandler.DeleteModel)
 			models.POST("/:id/test", cfg.ModelHandler.TestModel)

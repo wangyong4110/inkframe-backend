@@ -554,7 +554,7 @@ func (s *NovelService) generateCoverBrief(novel *model.Novel) string {
 	logger.Infof("[coverBrief] novelID=%d inputLen=%d hasDesc=%v hasWorldview=%v",
 		novel.ID, len(llmInput), novel.Meta.Description != "", novel.Worldview != nil)
 
-	brief, err := s.aiService.Generate(novel.ID, "cover_brief", llmInput)
+	brief, err := s.aiService.GenerateWithProvider(novel.TenantID, "cover_brief", llmInput)
 	if err != nil {
 		logger.Warnf("[coverBrief] LLM failed novelID=%d: %v", novel.ID, err)
 		return ""
@@ -624,8 +624,6 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		return "", fmt.Errorf("not found")
 	}
 
-	negativePrompt := "text, watermark, signature, blurry, low quality, ugly, distorted, nsfw, letters, words, title"
-
 	// 判断是否有可用的旧封面作为参考图（图生图模式）
 	existingCover := ""
 	if suggestion != "" && novel.Meta.CoverImage != "" &&
@@ -662,11 +660,18 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	if novel.VideoConfig != nil && novel.VideoConfig.Config.VideoAspectRatio != "" {
 		sizeOverride = novel.VideoConfig.Config.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.AIConfig.ImageStyle, negativePrompt, sizeOverride)
+	resp, err := s.aiService.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
+		Prompt:          prompt,
+		NegativePrompt:  "",
+		Size:            sizeOverride,
+		ReferenceImages: nil,
+		ImageStyle:      novel.AIConfig.ImageStyle,
+	})
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}
 
+	imageURL := resp.URL
 	novel.Meta.CoverImage = imageURL
 	if err := s.novelRepo.Update(novel); err != nil {
 		return imageURL, fmt.Errorf("persist cover image: %w", err)
@@ -840,7 +845,7 @@ func (s *NovelService) GenerateOutline(ctx context.Context, tenantID uint, req *
 	}
 
 	// 调用AI生成（使用租户提供商）
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "outline", prompt)
 	if err != nil {
 		recordOutline("error")
 		return nil, err
@@ -1182,7 +1187,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	prompt := fmt.Sprintf("从以下章节内容中提取主要角色的当前状态，以JSON格式返回：\n角色列表：%s\n章节内容（章末节选）：\n%s\n\n【严格要求】\n- 必须返回且只返回一个 JSON 对象，根键为 \"characters\"，值为数组\n- 禁止直接返回裸数组（即禁止以 [ 开头）\n- 禁止在 JSON 前后添加任何说明文字或代码块标记\n- 只包含章节中实际出现的角色\n\n正确格式示例：\n{\"characters\":[{\"name\":\"角色名\",\"mood\":\"情绪状态\",\"location\":\"当前位置\",\"motivation\":\"当前动机\",\"power_level\":5}]}",
 		strings.Join(charNames, "、"), contentPreview)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, "character_state", prompt)
 	if err != nil {
 		logger.Errorf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
 		metrics.CharacterSnapshotExtractionTotal.WithLabelValues("ai_error").Inc()
@@ -1362,7 +1367,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 			char.Name, prevCtx, contentPreview,
 		)
 
-		result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
+		result, err := s.aiService.GenerateWithProvider(tenantID, "character_state", prompt)
 		if err != nil {
 			logger.Errorf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
 			continue

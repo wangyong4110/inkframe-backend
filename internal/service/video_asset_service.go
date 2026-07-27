@@ -321,7 +321,13 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 	}
 	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d calling TTS voice=%q speed=%.2f style=%q language=%q", segID, voice, speed, style, seg.Language)
 
-	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style, seg.Language)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, GenerateAudioOptions{
+		Text:     text,
+		Voice:    voice,
+		Speed:    speed,
+		Emotion:  style,
+		Language: seg.Language,
+	})
 	if err != nil {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
 		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
@@ -489,7 +495,13 @@ func (s *VideoService) GenerateShotAudio(ctx context.Context, shot *model.Storyb
 	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
 	logger.Printf("[TTS] GenerateShotAudio: shotID=%d resolved voice=%q speed=%.2f style=%q", shot.ID, voice, speed, style)
 
-	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
+	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, GenerateAudioOptions{
+		Text:     text,
+		Voice:    voice,
+		Speed:    speed,
+		Emotion:  style,
+		Language: "",
+	})
 	if err != nil {
 		logger.Errorf("[TTS] GenerateShotAudio: shotID=%d TTS FAILED voice=%q textLen=%d error: %v",
 			shot.ID, voice, len([]rune(text)), err)
@@ -913,4 +925,11 @@ func (s *VideoService) shotTotalAudioDuration(shot *model.StoryboardShot) float6
 		}
 	}
 	return shot.Duration
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

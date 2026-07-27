@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -83,7 +84,7 @@ func (s *SceneConsistencyService) ScoreScene(
 		return nil, fmt.Errorf("render scene_consistency_score: %w", err)
 	}
 
-	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "scene_consistency", prompt, "")
+	raw, err := s.aiSvc.GenerateWithProvider(tenantID, "scene_consistency", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM consistency score: %w", err)
 	}
@@ -151,7 +152,6 @@ func (s *SceneConsistencyService) ScoreScene(
 func (s *SceneConsistencyService) GetLogsByAnchorID(anchorID uint) ([]*model.SceneConsistencyLog, error) {
 	return s.logRepo.ListByAnchorID(anchorID)
 }
-
 
 // consistencyLLMResponse LLM 返回结构
 type consistencyLLMResponse struct {

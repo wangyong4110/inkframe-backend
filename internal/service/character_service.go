@@ -249,58 +249,6 @@ func (s *CharacterService) consolidateCharacterNames(
 	return valid, nil
 }
 
-// extractCharacterNameList 阶段一：从小说摘要中提取角色名单（输出极短，避免截断）
-func (s *CharacterService) extractCharacterNameList(
-	tenantID uint,
-	novelTitle, genre, summariesText string,
-	existing []*model.Character,
-) ([]charNameEntry, error) {
-	existingJSON := marshalExistingNames(existing, func(c *model.Character) any {
-		return struct {
-			Name string `json:"name"`
-			Role string `json:"role"`
-		}{c.Name, c.Role}
-	})
-
-	prompt, err := renderPrompt("extract_character_names", map[string]interface{}{
-		"NovelTitle":    novelTitle,
-		"Genre":         genre,
-		"Summaries":     summariesText,
-		"ExistingNames": existingJSON,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("render extract_character_names: %w", err)
-	}
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, "extract_character_names", prompt)
-	if err != nil {
-		return nil, fmt.Errorf("AI call failed: %w", err)
-	}
-
-	cleaned := extractJSON(strings.TrimSpace(result))
-	var entries []charNameEntry
-	if err := json.Unmarshal([]byte(cleaned), &entries); err != nil {
-		// 兜底：尝试用 Decoder 部分恢复
-		dec := json.NewDecoder(strings.NewReader(cleaned))
-		if _, e := dec.Token(); e == nil {
-			for dec.More() {
-				var e charNameEntry
-				if dec.Decode(&e) == nil && e.Name != "" {
-					entries = append(entries, e)
-				}
-			}
-		}
-	}
-	// 过滤掉名字为空的
-	valid := entries[:0]
-	for _, e := range entries {
-		if e.Name != "" {
-			valid = append(valid, e)
-		}
-	}
-	return valid, nil
-}
-
 // generateOneCharacterProfile 阶段二：为单个角色生成完整档案
 func (s *CharacterService) generateOneCharacterProfile(
 	ctx context.Context,
@@ -358,6 +306,35 @@ func (s *CharacterService) generateOneCharacterProfile(
 		profile.Role = entry.Role
 	}
 	return &profile, nil
+}
+
+// buildDescriptionFromAnalysisChar 将 analysisCharJSON 的分离字段合并为统一 description。
+// 优先使用 p.Description；为空时按旧格式拼接外貌/性格/背景/弧光/说话风格。
+func buildDescriptionFromAnalysisChar(p analysisCharJSON) string {
+	if p.Description != "" {
+		return p.Description
+	}
+	var parts []string
+	if p.Appearance != "" {
+		parts = append(parts, "外貌："+p.Appearance)
+	}
+	if p.Personality != "" {
+		parts = append(parts, "性格："+p.Personality)
+	}
+	if p.Background != "" {
+		parts = append(parts, "背景："+p.Background)
+	}
+	if p.CharacterArc != "" {
+		parts = append(parts, "弧光："+p.CharacterArc)
+	}
+	if p.DialogueStyle.SpeechHabits != "" {
+		parts = append(parts, "说话风格："+p.DialogueStyle.SpeechHabits)
+	} else if len(p.DialogueStyle.Patterns) > 0 {
+		parts = append(parts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
+	} else if p.DialogueStyle.VocabularyLevel != "" {
+		parts = append(parts, "说话风格："+p.DialogueStyle.VocabularyLevel)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // GenerateCharacterInfo 根据角色名称、类型（及用户可选的草稿描述提示）AI 生成角色描述（外貌、性格、背景）。
@@ -625,6 +602,43 @@ func suggestVoiceLanguage() string {
 	return "zh-cmn" // 中文普通话
 }
 
+// suggestVoiceConfig 根据角色信息一次性推荐完整配音配置。
+func suggestVoiceConfig(description, gender, age, role string, personalityTags []string, voiceModels []*model.AIModel) model.CharacterVoiceConfig {
+	return model.CharacterVoiceConfig{
+		VoiceID:       suggestVoiceForCharacter(description, gender, personalityTags, role, voiceModels),
+		VoiceStyle:    suggestVoiceStyle(gender, age, role, personalityTags, description),
+		VoiceLanguage: suggestVoiceLanguage(),
+	}
+}
+
+// applyProfileToCharacter 将 AI 生成的档案应用到已有角色，不操作 DB。
+// 用户手动配置过的字段（通过 fillIfEmpty）不会被覆盖。
+func applyProfileToCharacter(char *model.Character, description, gender, age, role string, cfg model.CharacterVoiceConfig) {
+	if description != "" {
+		char.Description = description
+	}
+	if gender != "" {
+		char.Meta.Gender = gender
+	}
+	if age != "" {
+		char.Meta.Age = age
+	}
+	if role != "" {
+		if v, ok := fillIfEmpty(char.Role, role); ok {
+			char.Role = v
+		}
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, cfg.VoiceID); ok {
+		char.VoiceConfig.VoiceID = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, cfg.VoiceStyle); ok {
+		char.VoiceConfig.VoiceStyle = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, cfg.VoiceLanguage); ok {
+		char.VoiceConfig.VoiceLanguage = v
+	}
+}
+
 func NewCharacterService(
 	characterRepo *repository.CharacterRepository,
 	aiService *AIService,
@@ -635,12 +649,48 @@ func NewCharacterService(
 	}
 }
 
-// GetNovelTitle 返回小说标题，用于 OSS 路径构建；未注入 novelRepo 或查询失败时返回空字符串。
-func (s *CharacterService) GetNovelTitle(novelID uint) string {
+// fetchNovel 安全加载小说对象；未注入 novelRepo 或查询失败返回 nil。
+func (s *CharacterService) fetchNovel(novelID uint) *model.Novel {
 	if s.novelRepo == nil || novelID == 0 {
+		return nil
+	}
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return nil
+	}
+	return novel
+}
+
+// novelContext 返回小说标题、类型、世界观视觉上下文。
+func (s *CharacterService) novelContext(novelID uint) (title, genre, worldview string) {
+	title = "本小说"
+	if novel := s.fetchNovel(novelID); novel != nil {
+		title = novel.Title
+		genre = novel.Meta.Genre
+		worldview = buildWorldviewVisualContext(novel.Worldview)
+	}
+	return
+}
+
+// buildShortSummaries 加载小说章节并构建短摘要文本，用于角色 AI 分析。
+func (s *CharacterService) buildShortSummaries(novelID uint) string {
+	if s.chapterRepo == nil {
 		return ""
 	}
-	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
+	if err != nil {
+		return ""
+	}
+	shortSummaries := buildChapterSummariesText(chapters, 5, 2000)
+	if shortSummaries == "" {
+		shortSummaries = collectContent(chapters, 5, 2000)
+	}
+	return shortSummaries
+}
+
+// GetNovelTitle 返回小说标题，用于 OSS 路径构建；未注入 novelRepo 或查询失败时返回空字符串。
+func (s *CharacterService) GetNovelTitle(novelID uint) string {
+	if novel := s.fetchNovel(novelID); novel != nil {
 		return novel.Title
 	}
 	return ""
@@ -648,10 +698,7 @@ func (s *CharacterService) GetNovelTitle(novelID uint) string {
 
 // GetNovelImageStyle 返回小说的画面风格（image_style），用于图像生成风格一致性。
 func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
-	if s.novelRepo == nil || novelID == 0 {
-		return ""
-	}
-	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+	if novel := s.fetchNovel(novelID); novel != nil {
 		return novel.AIConfig.ImageStyle
 	}
 	return ""
@@ -1011,6 +1058,29 @@ func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) e
 	return s.chapterCharacterRepo.Delete(chapterID, characterID)
 }
 
+// bindCharacterToChapter 将角色绑定到章节（ChapterCharacter upsert）。
+// 返回 Upsert 错误；chapterCharacterRepo 未注入时返回 nil。
+func (s *CharacterService) bindCharacterToChapter(characterID, chapterID, novelID uint) error {
+	if s.chapterCharacterRepo == nil {
+		return nil
+	}
+	cc := &model.ChapterCharacter{
+		CharacterID: characterID,
+		ChapterID:   chapterID,
+		NovelID:     novelID,
+	}
+	return s.chapterCharacterRepo.Upsert(cc)
+}
+
+// normalizeCharacterRole 将 AI 返回的角色类型规范化为数据库允许值。
+func normalizeCharacterRole(role string) string {
+	switch role {
+	case "protagonist", "antagonist", "supporting":
+		return role
+	}
+	return "supporting"
+}
+
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（按 novel_id+name upsert，仅补填空字段）
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（两阶段：先提名单，再并发生成档案）
 func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelID uint) ([]*model.Character, error) {
@@ -1030,16 +1100,7 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 	}
 
 	// 获取小说标题/类型/世界观
-	novelTitle := "本小说"
-	novelGenre := ""
-	worldviewContext := ""
-	if s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			novelTitle = novel.Title
-			novelGenre = novel.Meta.Genre
-			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
-		}
-	}
+	novelTitle, novelGenre, worldviewContext := s.novelContext(novelID)
 
 	// ── 阶段一：逐章并发提取角色名单，合并去重 ──────────────────────────────
 	nameList, err := s.extractCharacterNamesFromChapters(ctx, tenantID, novelID, novelTitle, novelGenre, chapters)
@@ -1059,10 +1120,7 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 
 	// ── 阶段二：并发生成每个角色的完整档案（短摘要，最多 3 并发）────────────
 	// 阶段二每次只处理一个角色，用较短摘要节省 token
-	shortSummaries := buildChapterSummariesText(chapters, 5, 2000)
-	if shortSummaries == "" {
-		shortSummaries = collectContent(chapters, 5, 2000)
-	}
+	shortSummaries := s.buildShortSummaries(novelID)
 
 	type profileResult struct {
 		profile *analysisCharJSON
@@ -1102,151 +1160,76 @@ func (s *CharacterService) AIBatchGenerate(ctx context.Context, tenantID, novelI
 			continue
 		}
 
-		role := p.Role
-		if role != "protagonist" && role != "antagonist" && role != "supporting" {
-			role = "supporting"
-		}
-
-		// 优先使用新格式的统一 description，兼容旧格式分离字段
-		description := p.Description
-		if description == "" {
-			var descParts []string
-			if p.Appearance != "" {
-				descParts = append(descParts, "外貌："+p.Appearance)
-			}
-			if p.Personality != "" {
-				descParts = append(descParts, "性格："+p.Personality)
-			}
-			if p.Background != "" {
-				descParts = append(descParts, "背景："+p.Background)
-			}
-			if p.CharacterArc != "" {
-				descParts = append(descParts, "弧光："+p.CharacterArc)
-			}
-			if len(p.DialogueStyle.Patterns) > 0 {
-				descParts = append(descParts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
-			} else if p.DialogueStyle.VocabularyLevel != "" {
-				descParts = append(descParts, "说话风格："+p.DialogueStyle.VocabularyLevel)
-			}
-			description = strings.Join(descParts, "\n")
-		}
-
-		suggestedVoice := suggestVoiceForCharacter(description, p.Gender, p.PersonalityTags, role, voiceModels)
-		suggestedStyle := suggestVoiceStyle(p.Gender, p.Age, role, p.PersonalityTags, description)
-		suggestedLang := suggestVoiceLanguage()
+		role := normalizeCharacterRole(p.Role)
+		description := buildDescriptionFromAnalysisChar(*p)
+		voiceCfg := suggestVoiceConfig(description, p.Gender, p.Age, role, p.PersonalityTags, voiceModels)
 
 		if ch, ok := byName[p.Name]; ok {
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
-			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
-			if description != "" {
-				ch.Description = description
-			}
-			if p.Gender != "" {
-				ch.Meta.Gender = p.Gender
-			}
-			if p.Age != "" {
-				ch.Meta.Age = p.Age
-			}
-			// 用户手动配置字段仅在空时填充
-			if v, ok := fillIfEmpty(ch.Role, role); ok {
-				ch.Role = v
-			}
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceID, suggestedVoice); ok {
-				ch.VoiceConfig.VoiceID = v
-			}
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceStyle, suggestedStyle); ok {
-				ch.VoiceConfig.VoiceStyle = v
-			}
-			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceLanguage, suggestedLang); ok {
-				ch.VoiceConfig.VoiceLanguage = v
-			}
+			applyProfileToCharacter(ch, description, p.Gender, p.Age, role, voiceCfg)
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
 			}
-			// 同步默认形象的 VisualPrompt
 			if p.VisualPrompt != "" {
 				s.upsertDefaultLookVisualPrompt(ch.ID, ch.NovelID, p.VisualPrompt)
 			}
 			upserted = append(upserted, ch)
-		} else {
-			// DB 级二次兜底：byName 快照可能在并发/重试间过期。
-			// 同时检查软删除记录，避免触发唯一索引冲突。
-			if existing, _ := s.characterRepo.FindByNovelAndNameUnscoped(novelID, p.Name); existing != nil {
-				if existing.DeletedAt.Valid {
-					// 软删除记录：恢复并更新字段
-					logger.Printf("[CharacterService] AIBatchGenerate: restoring soft-deleted character %q (id=%d)", p.Name, existing.ID)
-					if err := s.characterRepo.RestoreByID(existing.ID); err != nil {
-						logger.Errorf("CharacterService.AIBatchGenerate: restore %s: %v", p.Name, err)
-						continue
-					}
-					existing.DeletedAt.Valid = false
-					if description != "" {
-						existing.Description = description
-					}
-					if p.Gender != "" {
-						existing.Meta.Gender = p.Gender
-					}
-					if p.Age != "" {
-						existing.Meta.Age = p.Age
-					}
-					existing.Status = "active"
-					if err := s.characterRepo.Update(existing); err != nil {
-						logger.Errorf("CharacterService.AIBatchGenerate: update restored %s: %v", p.Name, err)
-					}
-					if p.VisualPrompt != "" {
-						s.upsertDefaultLookVisualPrompt(existing.ID, existing.NovelID, p.VisualPrompt)
-					}
-					upserted = append(upserted, existing)
-				} else {
-					// 活跃记录（race condition / 并发写入）：按更新逻辑处理
-					logger.Printf("[CharacterService] AIBatchGenerate: DB dedup (active) %q (id=%d)", p.Name, existing.ID)
-					if description != "" {
-						existing.Description = description
-					}
-					if p.Gender != "" {
-						existing.Meta.Gender = p.Gender
-					}
-					if p.Age != "" {
-						existing.Meta.Age = p.Age
-					}
-					if err := s.characterRepo.Update(existing); err != nil {
-						logger.Errorf("CharacterService.AIBatchGenerate: update dedup %s: %v", p.Name, err)
-					}
-					if p.VisualPrompt != "" {
-						s.upsertDefaultLookVisualPrompt(existing.ID, existing.NovelID, p.VisualPrompt)
-					}
-					upserted = append(upserted, existing)
-				}
-				continue
-			}
-			character := &model.Character{
-				UUID:        uuid.New().String(),
-				NovelID:     novelID,
-				Name:        p.Name,
-				Role:        role,
-				Description: description,
-				Meta: model.CharacterMeta{
-					Gender: p.Gender,
-					Age:    p.Age,
-				},
-				VoiceConfig: model.CharacterVoiceConfig{
-					VoiceID:       suggestedVoice,
-					VoiceStyle:    suggestedStyle,
-					VoiceLanguage: suggestedLang,
-				},
-				Status: "active",
-			}
-			if err := s.characterRepo.Create(character); err != nil {
-				logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
-				continue
-			}
-			// 为新角色创建携带 VisualPrompt 的默认形象
-			if p.VisualPrompt != "" {
-				s.upsertDefaultLookVisualPrompt(character.ID, character.NovelID, p.VisualPrompt)
-			}
-			upserted = append(upserted, character)
+			continue
 		}
+
+		// DB 级二次兜底：byName 快照可能在并发/重试间过期。
+		// 同时检查软删除记录，避免触发唯一索引冲突。
+		if existing, _ := s.characterRepo.FindByNovelAndNameUnscoped(novelID, p.Name); existing != nil {
+			if existing.DeletedAt.Valid {
+				// 软删除记录：恢复并更新字段
+				logger.Printf("[CharacterService] AIBatchGenerate: restoring soft-deleted character %q (id=%d)", p.Name, existing.ID)
+				if err := s.characterRepo.RestoreByID(existing.ID); err != nil {
+					logger.Errorf("CharacterService.AIBatchGenerate: restore %s: %v", p.Name, err)
+					continue
+				}
+				existing.DeletedAt.Valid = false
+				existing.Status = "active"
+				applyProfileToCharacter(existing, description, p.Gender, p.Age, role, voiceCfg)
+				if err := s.characterRepo.Update(existing); err != nil {
+					logger.Errorf("CharacterService.AIBatchGenerate: update restored %s: %v", p.Name, err)
+				}
+			} else {
+				// 活跃记录（race condition / 并发写入）：按更新逻辑处理
+				logger.Printf("[CharacterService] AIBatchGenerate: DB dedup (active) %q (id=%d)", p.Name, existing.ID)
+				applyProfileToCharacter(existing, description, p.Gender, p.Age, "", voiceCfg)
+				if err := s.characterRepo.Update(existing); err != nil {
+					logger.Errorf("CharacterService.AIBatchGenerate: update dedup %s: %v", p.Name, err)
+				}
+			}
+			if p.VisualPrompt != "" {
+				s.upsertDefaultLookVisualPrompt(existing.ID, existing.NovelID, p.VisualPrompt)
+			}
+			upserted = append(upserted, existing)
+			continue
+		}
+
+		character := &model.Character{
+			UUID:        uuid.New().String(),
+			NovelID:     novelID,
+			Name:        p.Name,
+			Role:        role,
+			Description: description,
+			Meta: model.CharacterMeta{
+				Gender: p.Gender,
+				Age:    p.Age,
+			},
+			VoiceConfig: voiceCfg,
+			Status:      "active",
+		}
+		if err := s.characterRepo.Create(character); err != nil {
+			logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
+			continue
+		}
+		if p.VisualPrompt != "" {
+			s.upsertDefaultLookVisualPrompt(character.ID, character.NovelID, p.VisualPrompt)
+		}
+		upserted = append(upserted, character)
 	}
 
 	if len(upserted) == 0 && len(nameList) > 0 {
@@ -1267,31 +1250,10 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 		return nil, fmt.Errorf("character not found")
 	}
 
-	novelTitle := "本小说"
-	novelGenre := ""
-	worldviewContext := ""
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
-			novelTitle = novel.Title
-			novelGenre = novel.Meta.Genre
-			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
-		}
-	}
+	novelTitle, novelGenre, worldviewContext := s.novelContext(char.NovelID)
+	shortSummaries := s.buildShortSummaries(char.NovelID)
 
-	var shortSummaries string
-	if s.chapterRepo != nil {
-		if chapters, e := s.chapterRepo.ListByNovelWithContent(char.NovelID); e == nil {
-			shortSummaries = buildChapterSummariesText(chapters, 5, 2000)
-			if shortSummaries == "" {
-				shortSummaries = collectContent(chapters, 5, 2000)
-			}
-		}
-	}
-
-	role := char.Role
-	if role != "protagonist" && role != "antagonist" && role != "supporting" {
-		role = "supporting"
-	}
+	role := normalizeCharacterRole(char.Role)
 	entry := charNameEntry{
 		Name:  char.Name,
 		Role:  role,
@@ -1303,31 +1265,21 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 		return nil, fmt.Errorf("AI reanalyze: %w", err)
 	}
 
-	if profile.Description != "" {
-		char.Description = profile.Description
-	}
-	if profile.Gender != "" {
-		char.Meta.Gender = profile.Gender
-	}
-	if profile.Age != "" {
-		char.Meta.Age = profile.Age
-	}
+	applyProfileToCharacter(char, profile.Description, profile.Gender, profile.Age, "", model.CharacterVoiceConfig{})
 
 	// 根据最新 gender/age/role 重新推荐配音设置（仅在用户未手动配置时填充）
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
 		voiceModels, _ = s.modelRepo.ListByTenantAndType(tenantID, commons.Video)
 	}
-	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Meta.Gender, profile.PersonalityTags, char.Role, voiceModels)
-	suggestedStyle := suggestVoiceStyle(char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, char.Description)
-	suggestedLang := suggestVoiceLanguage()
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, suggestedVoice); ok {
+	voiceCfg := suggestVoiceConfig(char.Description, char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, voiceModels)
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, voiceCfg.VoiceID); ok {
 		char.VoiceConfig.VoiceID = v
 	}
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, suggestedStyle); ok {
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, voiceCfg.VoiceStyle); ok {
 		char.VoiceConfig.VoiceStyle = v
 	}
-	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, suggestedLang); ok {
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, voiceCfg.VoiceLanguage); ok {
 		char.VoiceConfig.VoiceLanguage = v
 	}
 
@@ -1386,14 +1338,7 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 	}
 	logger.Printf("[CharacterService] AIExtractMinorChars: chapterID=%d contentLen=%d", chapterID, len(content))
 
-	novelTitle := "本小说"
-	novelGenre := ""
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
-			novelTitle = novel.Title
-			novelGenre = novel.Meta.Genre
-		}
-	}
+	novelTitle, novelGenre, _ := s.novelContext(novelID)
 
 	// 已有角色名列表，用于去重
 	existing, _ := s.characterRepo.ListByNovel(novelID)
@@ -1463,33 +1408,8 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 			continue
 		}
 
-		// 优先使用 AI 生成的统一 description，兼容旧格式分离字段（与主角色提取逻辑一致）
-		finalDesc := c.Description
-		if finalDesc == "" {
-			var parts []string
-			if c.Appearance != "" {
-				parts = append(parts, "外貌："+c.Appearance)
-			}
-			if c.Personality != "" {
-				parts = append(parts, "性格："+c.Personality)
-			}
-			if c.Background != "" {
-				parts = append(parts, "背景："+c.Background)
-			}
-			if c.CharacterArc != "" {
-				parts = append(parts, "弧光："+c.CharacterArc)
-			}
-			if c.DialogueStyle.SpeechHabits != "" {
-				parts = append(parts, "说话风格："+c.DialogueStyle.SpeechHabits)
-			} else if len(c.DialogueStyle.Patterns) > 0 {
-				parts = append(parts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
-			}
-			finalDesc = strings.Join(parts, "\n")
-		}
-
-		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, "minor", voiceModels)
-		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, "minor", c.PersonalityTags, finalDesc)
-		suggestedLang := suggestVoiceLanguage()
+		finalDesc := buildDescriptionFromAnalysisChar(c)
+		voiceCfg := suggestVoiceConfig(finalDesc, c.Gender, c.Age, "minor", c.PersonalityTags, voiceModels)
 
 		char := &model.Character{
 			NovelID:     novelID,
@@ -1501,12 +1421,8 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 				Gender: c.Gender,
 				Age:    c.Age,
 			},
-			VoiceConfig: model.CharacterVoiceConfig{
-				VoiceID:       suggestedVoice,
-				VoiceStyle:    suggestedStyle,
-				VoiceLanguage: suggestedLang,
-			},
-			Status: "active",
+			VoiceConfig: voiceCfg,
+			Status:      "active",
 		}
 		// 插入前再次确认（mutex 内，但 reload 防止极端情况）
 		existingNameSet[strings.ToLower(c.Name)] = true // 先占位，防止同批次重复
@@ -1518,29 +1434,17 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 				if e := s.characterRepo.RestoreByID(dup.ID); e != nil {
 					logger.Errorf("[CharacterService] AIExtractMinorChars: restore %q: %v", c.Name, e)
 				}
-				if s.chapterCharacterRepo != nil {
-					if e := s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
-						CharacterID: dup.ID,
-						ChapterID:   chapterID,
-						NovelID:     novelID,
-					}); e != nil {
-						logger.Errorf("[CharacterService] AIExtractMinorChars: bind restored char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
-					} else {
-						logger.Printf("[CharacterService] AIExtractMinorChars: bound restored char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
-					}
+				if e := s.bindCharacterToChapter(dup.ID, chapterID, novelID); e != nil {
+					logger.Errorf("[CharacterService] AIExtractMinorChars: bind restored char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
+				} else {
+					logger.Printf("[CharacterService] AIExtractMinorChars: bound restored char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
 				}
 			} else {
 				logger.Printf("[CharacterService] AIExtractMinorChars: DB dedup: %q already exists (id=%d), binding to chapter instead", c.Name, dup.ID)
-				if s.chapterCharacterRepo != nil {
-					if e := s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
-						CharacterID: dup.ID,
-						ChapterID:   chapterID,
-						NovelID:     novelID,
-					}); e != nil {
-						logger.Errorf("[CharacterService] AIExtractMinorChars: bind dedup char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
-					} else {
-						logger.Printf("[CharacterService] AIExtractMinorChars: bound dedup char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
-					}
+				if e := s.bindCharacterToChapter(dup.ID, chapterID, novelID); e != nil {
+					logger.Errorf("[CharacterService] AIExtractMinorChars: bind dedup char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
+				} else {
+					logger.Printf("[CharacterService] AIExtractMinorChars: bound dedup char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
 				}
 			}
 			continue
@@ -1549,32 +1453,15 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 			logger.Errorf("[CharacterService] AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
 		}
-		if s.lookRepo != nil && c.VisualPrompt != "" {
-			defaultLook := &model.CharacterLook{
-				CharacterID:  char.ID,
-				NovelID:      char.NovelID,
-				Label:        "默认形象",
-				VisualPrompt: c.VisualPrompt,
-			}
-			if e := s.lookRepo.Create(defaultLook); e != nil {
-				logger.Errorf("[CharacterService] AIExtractMinorChars: create default look for %q: %v", char.Name, e)
-			} else {
-				_ = s.characterRepo.UpdateDefaultLookID(char.ID, defaultLook.ID)
-			}
+		if c.VisualPrompt != "" {
+			s.upsertDefaultLookVisualPrompt(char.ID, char.NovelID, c.VisualPrompt)
 		}
 		logger.Printf("[CharacterService] AIExtractMinorChars: created character %q id=%d", char.Name, char.ID)
 		// 关联到章节
-		if s.chapterCharacterRepo != nil {
-			cc := &model.ChapterCharacter{
-				CharacterID: char.ID,
-				ChapterID:   chapterID,
-				NovelID:     novelID,
-			}
-			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				logger.Errorf("[CharacterService] AIExtractMinorChars: link charID=%d to chapterID=%d: %v", char.ID, chapterID, e)
-			} else {
-				logger.Printf("[CharacterService] AIExtractMinorChars: bound new char %q (id=%d) to chapterID=%d", char.Name, char.ID, chapterID)
-			}
+		if e := s.bindCharacterToChapter(char.ID, chapterID, novelID); e != nil {
+			logger.Errorf("[CharacterService] AIExtractMinorChars: link charID=%d to chapterID=%d: %v", char.ID, chapterID, e)
+		} else {
+			logger.Printf("[CharacterService] AIExtractMinorChars: bound new char %q (id=%d) to chapterID=%d", char.Name, char.ID, chapterID)
 		}
 		created = append(created, char)
 	}
@@ -1588,23 +1475,16 @@ func (s *CharacterService) AIExtractMinorChars(ctx context.Context, tenantID, no
 			existingNameToID[strings.ToLower(fc.Name)] = fc.ID
 		}
 	}
-	if s.chapterCharacterRepo != nil {
-		for _, name := range aiResp.AppearingCharacters {
-			charID, matched := existingNameToID[strings.ToLower(name)]
-			if !matched {
-				logger.Printf("[CharacterService] AIExtractMinorChars: appearing char %q not found in existing list, skipping", name)
-				continue
-			}
-			cc := &model.ChapterCharacter{
-				CharacterID: charID,
-				ChapterID:   chapterID,
-				NovelID:     novelID,
-			}
-			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				logger.Errorf("[CharacterService] AIExtractMinorChars: bind appearing charID=%d %q to chapterID=%d: %v", charID, name, chapterID, e)
-			} else {
-				logger.Printf("[CharacterService] AIExtractMinorChars: bound existing char %q (id=%d) to chapterID=%d", name, charID, chapterID)
-			}
+	for _, name := range aiResp.AppearingCharacters {
+		charID, matched := existingNameToID[strings.ToLower(name)]
+		if !matched {
+			logger.Printf("[CharacterService] AIExtractMinorChars: appearing char %q not found in existing list, skipping", name)
+			continue
+		}
+		if e := s.bindCharacterToChapter(charID, chapterID, novelID); e != nil {
+			logger.Errorf("[CharacterService] AIExtractMinorChars: bind appearing charID=%d %q to chapterID=%d: %v", charID, name, chapterID, e)
+		} else {
+			logger.Printf("[CharacterService] AIExtractMinorChars: bound existing char %q (id=%d) to chapterID=%d", name, charID, chapterID)
 		}
 	}
 
@@ -1780,170 +1660,14 @@ type GeneratedCharacterImage struct {
 
 func (s *ImageGenerationService) GenerateCharacterImage(ctx context.Context, tenantID uint, req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
-		Prompt:   req.Description,
-		Size:     "1024x1024",
-		Steps:    50,
-		CFGScale: 7.5,
+		Prompt: req.Description,
+		Size:   "1024x1024",
 	}
 	image, err := s.aiService.GenerateImage(ctx, tenantID, options)
 	if err != nil {
 		return nil, err
 	}
 	return &GeneratedCharacterImage{URL: image.URL, Description: req.Description}, nil
-}
-
-// resolveStyleCategory 从风格库（ImageStylePreset.PromptCategory，管理员可在 /image-style-presets
-// 管理页编辑）读取风格 ID 归入的大类，用于选择匹配的质量提升词/冲突清理词。
-// 返回值："realistic" / "anime" / "classic_illustration" / "dark_stylized" / "pixel" / "render_3d" / "" (未知)
-func resolveStyleCategory(styleID string) string {
-	if c, ok := lookupStylePresetFromCache(styleID); ok {
-		return c.category
-	}
-	return ""
-}
-
-// universalQualityTags 是所有图像生成 prompt 必须携带的通用质量指令，保证输出基准一致。
-const universalQualityTags = "杰作，最佳质量，超精细，锐利对焦，8K，超高分辨率，专业级"
-
-// resolveStyleQualityTokens 返回与风格匹配的中文质量提升词串，末尾不加逗号。
-// 场景图和角色图共用同一套质量词，保证输出基准一致。
-// 重要：写实/3D 风格才使用 "8K，超高分辨率" 等摄影写实信号；
-// 动漫/插画等风格禁止使用这些词，否则模型会偏向写实输出。
-func resolveStyleQualityTokens(styleID string) string {
-	// 写实/3D 专用基础词（含 8K/UHD 摄影信号）
-	realisticBase := universalQualityTags
-	// 插画/动漫基础词（不含 8K/UHD，避免推向写实）
-	illustrationBase := "杰作，最佳质量，超精细，锐利对焦，专业级"
-	switch resolveStyleCategory(styleID) {
-	case "realistic":
-		return realisticBase + "，照片级真实感，电影感光效，8k超高清"
-	case "render_3d":
-		return realisticBase + "，3D渲染，光线追踪，体积光，高保真3D"
-	case "anime":
-		return illustrationBase + "，鲜艳色彩，干净线稿，专业动漫插画"
-	case "pixel":
-		return illustrationBase + "，清晰像素画，锐利像素点，复古游戏美术风格"
-	case "classic_illustration":
-		return illustrationBase + "，精湛笔触，鲜艳色彩，专业插画"
-	case "dark_stylized":
-		return illustrationBase + "，戏剧化氛围，鲜艳色彩，专业数字绘画"
-	default: // unknown
-		return illustrationBase + "，鲜艳色彩，干净线稿，专业插画"
-	}
-}
-
-// removeConflictingQualityTokens strips style-conflicting quality tokens from a prompt.
-// Non-realistic styles: removes realistic/photography tokens from character VPs or old storyboard data.
-// Realistic/3D styles: removes anime/illustration tokens that may come from character VPs generated
-// under a different style setting.
-func removeConflictingQualityTokens(prompt, styleID string) string {
-	cat := resolveStyleCategory(styleID)
-	var conflicts []string
-	switch cat {
-	case "realistic", "render_3d":
-		// Remove anime/illustration tokens that contaminate realistic/3D prompts.
-		// 保留旧版英文 token（清理历史存量数据），并追加中文等效表述（清理迁移后新生成的数据）。
-		conflicts = []string{
-			"anime illustration style",
-			"anime illustration",
-			"clean lineart, flat color cel shading",
-			"flat color cel shading",
-			"cel shading",
-			"clean lineart",
-			"vibrant colors, clean linework, professional anime illustration",
-			"professional anime illustration",
-			"Chinese donghua animation style",
-			"donghua animation style",
-			"ink wash painting style",
-			"brush stroke texture, monochrome ink wash",
-			"xuan paper aesthetic",
-			"xianxia fantasy illustration",
-			"watercolor illustration style",
-			"soft color washes, wet-on-wet blending",
-			"pixel art style",
-			"crisp retro pixels",
-			"pencil sketch illustration",
-			"graphite line work",
-			"动漫插画风格",
-			"平涂赛璐璐上色",
-			"赛璐璐上色",
-			"干净线稿",
-			"专业动漫插画",
-			"国产动画风格",
-			"水墨画风格",
-			"笔触质感，单色水墨",
-			"宣纸质感",
-			"仙侠奇幻插画",
-			"水彩插画风格",
-			"柔和色彩晕染",
-			"像素画风格",
-			"清晰复古像素",
-			"铅笔素描插画",
-			"石墨线条",
-		}
-	case "":
-		return prompt // unknown style: keep all tokens
-	default:
-		// For non-realistic styles: remove tokens that belong exclusively to realistic photography.
-		// 保留旧版英文 token（清理历史存量数据），并追加中文等效表述（清理迁移后新生成的数据）。
-		conflicts = []string{
-			"photorealistic, cinematic lighting, 8k uhd",
-			"photorealistic, cinematic lighting",
-			"photorealistic",
-			"cinematic lighting",
-			"cinematic film photography",
-			"cinematic photography",
-			"film photography",
-			"realistic skin texture",
-			"8k uhd",
-			"8K uhd",
-			"shot on DSLR",
-			"DSLR photography",
-			"hyperrealistic",
-			"ultra realistic",
-			"照片级真实感，电影感光效，8k超高清",
-			"照片级真实感，电影感光效",
-			"照片级真实感",
-			"电影感光效",
-			"复古胶片摄影美术风格",
-			"胶片摄影",
-			"写实皮肤质感",
-			"8k超高清",
-			"单反相机拍摄",
-			"单反摄影",
-			"超写实",
-		}
-	}
-	result := prompt
-	for _, tok := range conflicts {
-		// Case-insensitive removal: replace ", TOKEN" or "TOKEN, " or standalone
-		lower := strings.ToLower(result)
-		lowerTok := strings.ToLower(tok)
-		for {
-			idx := strings.Index(lower, lowerTok)
-			if idx < 0 {
-				break
-			}
-			// Determine the full token span including surrounding commas/spaces
-			start := idx
-			end := idx + len(tok)
-			// Absorb leading ", " or ", "
-			if start >= 2 && result[start-2:start] == ", " {
-				start -= 2
-			} else if start >= 1 && (result[start-1] == ',' || result[start-1] == ' ') {
-				start--
-			}
-			// Absorb trailing ", " or ", "
-			if end+2 <= len(result) && result[end:end+2] == ", " {
-				end += 2
-			} else if end < len(result) && (result[end] == ',' || result[end] == ' ') {
-				end++
-			}
-			result = result[:start] + result[end:]
-			lower = strings.ToLower(result)
-		}
-	}
-	return strings.TrimRight(strings.TrimLeft(result, ", "), ", ")
 }
 
 // resolveStyleIllustrationDesc returns Chinese-language style descriptor tokens for non-realistic styles.
@@ -2060,7 +1784,11 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	size := fmt.Sprintf("%dx%d", characterSheetCanvasWidth, characterSheetCanvasHeight)
-	image, err := s.aiService.GenerateImage(ctx, tenantID, provider, prompt, refs, style, "", size, 0)
+	image, err := s.aiService.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
+		Prompt:          prompt,
+		Size:            size,
+		ReferenceImages: refs,
+	})
 	if err != nil {
 		return nil, err
 	}

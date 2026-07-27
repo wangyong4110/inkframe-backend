@@ -522,11 +522,11 @@ func (h *VideoHandler) ListReviewRecords(c *gin.Context) {
 
 	// 将 ReviewJSON 反序列化后附在响应中
 	type recordResp struct {
-		ID           uint                 `json:"id"`
-		CreatedAt    string               `json:"created_at"`
-		OverallScore float64              `json:"overall_score"`
-		Status       string               `json:"status"`
-		AppliedAt    *string              `json:"applied_at,omitempty"`
+		ID           uint                    `json:"id"`
+		CreatedAt    string                  `json:"created_at"`
+		OverallScore float64                 `json:"overall_score"`
+		Status       string                  `json:"status"`
+		AppliedAt    *string                 `json:"applied_at,omitempty"`
 		Review       *model.StoryboardReview `json:"review,omitempty"`
 	}
 	resp := make([]recordResp, 0, len(records))
@@ -699,75 +699,6 @@ func (h *VideoHandler) ApplyReviewDeletes(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"deleted_shots": count})
-}
-
-// AnalyzeEmotions 情感分析
-// POST /api/v1/storyboard/analyze-emotions
-func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
-	var req struct {
-		Content string `json:"content" binding:"required"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	result, err := h.storyboardService.AnalyzeEmotions(req.Content)
-	if err != nil {
-		reqLogger(c).Errorf("[VideoHandler] AnalyzeEmotions: err=%v", err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, result)
-}
-
-// EnhanceVideo 增强视频
-// POST /api/v1/video/enhance
-func (h *VideoHandler) EnhanceVideo(c *gin.Context) {
-	var req struct {
-		VideoURL     string                    `json:"video_url" binding:"required"`
-		Enhancements []model.EnhancementConfig `json:"enhancements"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	svcConfigs := make([]service.EnhancementConfig, 0, len(req.Enhancements))
-	for _, ec := range req.Enhancements {
-		svcConfigs = append(svcConfigs, service.EnhancementConfig{
-			Type:      service.EnhancementType(ec.Type),
-			Enabled:   ec.Enabled,
-			Intensity: ec.Intensity,
-		})
-	}
-	result, err := h.enhancementService.EnhanceVideoWithConfigs(req.VideoURL, svcConfigs)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, result)
-}
-
-// GetEnhancementRecommendations 获取增强建议
-// POST /api/v1/video/recommendations
-func (h *VideoHandler) GetEnhancementRecommendations(c *gin.Context) {
-	var req struct {
-		FPS        int    `json:"fps"`
-		Resolution string `json:"resolution"`
-		Duration   int    `json:"duration"`
-		Style      string `json:"style"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	result, err := h.enhancementService.GetRecommendations(req.FPS, req.Resolution, req.Duration, req.Style)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, result)
 }
 
 // StartVideoGeneration 开始视频生成

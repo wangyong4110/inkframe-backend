@@ -68,7 +68,7 @@ func (r *ModelProviderRepository) GetByIDAndTenant(id uint, tenantID uint) (*mod
 }
 
 // ListByModelType 获取拥有指定类型模型的提供商列表（含系统级 tenant_id=0）
-func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType string) ([]*model.ModelProvider, error) {
+func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType commons.ModelType) ([]*model.ModelProvider, error) {
 	var providers []*model.ModelProvider
 	var err error
 	if modelType == "voice" {

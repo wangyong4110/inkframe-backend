@@ -40,11 +40,6 @@ func (s *AIService) Embed(ctx context.Context, tenantID uint, text string) ([]fl
 	return provider.Embed(ctx, text)
 }
 
-// Generate 生成内容（使用系统级提供商，tenantID=0）
-func (s *AIService) Generate(taskType string, prompt string) (string, error) {
-	return s.GenerateWithProvider(0, taskType, prompt)
-}
-
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）
 func (s *AIService) GenerateWithProvider(tenantID uint, taskType string, prompt string) (string, error) {
 	return s.GenerateWithProviderCtx(context.Background(), tenantID, taskType, prompt)
@@ -164,7 +159,7 @@ func (s *AIService) GenerateWithMessagesCtx(ctx context.Context, tenantID uint, 
 // StreamWithMessagesCtx streams AI response tokens for a multi-turn conversation.
 // It returns a channel that emits content chunks; the caller must drain the channel fully.
 // The last item may carry an empty Content with a non-empty Error field.
-func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, messages []ai.ChatMessage, systemPrompt string, overrides ...StoryboardOverrides) (<-chan *ai.GenerateResponse, error) {
+func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, messages []ai.ChatMessage, systemPrompt string) (<-chan *ai.GenerateResponse, error) {
 	if s.aiManager == nil {
 		return nil, fmt.Errorf("AI manager not initialized")
 	}

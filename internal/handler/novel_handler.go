@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -18,10 +19,10 @@ import (
 )
 
 var (
-	novelChatSystemPromptOnce    sync.Once
-	novelChatSystemPromptVal     string
-	novelChatExtractPromptOnce   sync.Once
-	novelChatExtractPromptVal    string
+	novelChatSystemPromptOnce  sync.Once
+	novelChatSystemPromptVal   string
+	novelChatExtractPromptOnce sync.Once
+	novelChatExtractPromptVal  string
 )
 
 func getNovelChatSystemPrompt() string {
@@ -108,7 +109,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 
 	// 前置检查：要求至少配置一个有效的 LLM 提供商
 	if h.modelService != nil {
-		capable, err := h.modelService.ListCapableProviders(tenantID, "llm")
+		capable, err := h.modelService.ListCapableProviders(tenantID, commons.LLM)
 		if err == nil && len(capable) == 0 {
 			respondErr(c, http.StatusUnprocessableEntity,
 				"请先前往「模型管理」页面为至少一个文本生成（LLM）提供商配置 API Key，再创建小说项目")
@@ -694,7 +695,6 @@ func (h *NovelHandler) ExportNovel(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(buf.String()))
 }
 
-
 // novelChatNovelParams is the extracted novel parameters from the AI response.
 type novelChatNovelParams struct {
 	Title          string `json:"title"`
@@ -891,8 +891,8 @@ func (h *NovelHandler) NovelChatStream(c *gin.Context) {
 	aiSvc := h.novelService.GetAIService()
 	messages := buildChatMessages(req.Messages)
 
-	ch, err := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", messages,
-		getNovelChatSystemPrompt())
+	ch, err := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID,
+		messages, getNovelChatSystemPrompt())
 	if err != nil {
 		reqLogger(c).Errorf("[NovelChatStream] stream init error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "AI 流式响应失败: "+err.Error())

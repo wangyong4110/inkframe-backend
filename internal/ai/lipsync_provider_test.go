@@ -2,13 +2,11 @@ package ai
 
 import (
 	"testing"
-
-	"github.com/inkframe/inkframe-backend/internal/ai/kling"
 )
 
 // TestLipSyncProvider_InterfaceSatisfiedByAllImplementations pins the
 // LipSyncProvider interface's implementors at compile time.
-var _ LipSyncProvider = (*kling.KlingLipSyncProvider)(nil)
+var _ LipSyncProvider = (*KlingLipSyncProvider)(nil)
 
 func TestLipSyncRequest_Fields(t *testing.T) {
 	req := &LipSyncRequest{

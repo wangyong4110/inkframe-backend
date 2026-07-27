@@ -119,7 +119,7 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 
 	now := time.Now()
 	review := &model.OutlineReview{
-		NovelID: chapter.NovelID,
+		NovelID:    chapter.NovelID,
 		ChapterID:  chapterID,
 		ChapterNo:  chapter.ChapterNo,
 		Status:     "reviewing",
@@ -348,16 +348,16 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 
 	// 幕次均衡 JSON
 	arcBalance := model.ArcBalance{
-		Act1Count: act1.count,
-		Act2Count: act2.count,
-		Act3Count: act3.count,
+		Act1Count:    act1.count,
+		Act2Count:    act2.count,
+		Act3Count:    act3.count,
 		Act1AvgScore: act1.avgScore,
 		Act2AvgScore: act2.avgScore,
 		Act3AvgScore: act3.avgScore,
 	}
 
 	syn := &model.NovelOutlineSynthesis{
-		NovelID: novel.ID,
+		NovelID:          novel.ID,
 		TotalChapters:    totalPlanned,
 		ReviewedCount:    reviewedCount,
 		PassedCount:      passed,
@@ -472,12 +472,12 @@ func countActChapters(planned []plannedChapter, chapters []*model.Chapter, revie
 }
 
 type plannedChapter struct {
-	ChapterNo    int
-	Title        string
-	TensionLevel int
-	Act          int
+	ChapterNo     int
+	Title         string
+	TensionLevel  int
+	Act           int
 	EmotionalTone string
-	Summary      string
+	Summary       string
 }
 
 func parseNovelOutlineChapters(outline string) []plannedChapter {
@@ -552,10 +552,10 @@ func buildTensionCurve(planned []plannedChapter, chapters []*model.Chapter, revi
 // ── AI 综合分析 ──────────────────────────────────────────────────────────────
 
 type batchSynthesisAIResult struct {
-	ArcBalance      model.ArcBalance      `json:"arc_balance"`
-	RecurringIssues []model.OutlineIssue  `json:"recurring_issues"`
-	ChapterAdvices  []model.ChapterAdvice `json:"chapter_advices"`
-	GlobalSuggestion string               `json:"global_suggestion"`
+	ArcBalance       model.ArcBalance      `json:"arc_balance"`
+	RecurringIssues  []model.OutlineIssue  `json:"recurring_issues"`
+	ChapterAdvices   []model.ChapterAdvice `json:"chapter_advices"`
+	GlobalSuggestion string                `json:"global_suggestion"`
 }
 
 func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID uint, novel *model.Novel, planned []plannedChapter, chapters []*model.Chapter, reviews []*model.OutlineReview, arcBalance model.ArcBalance) (*batchSynthesisAIResult, error) {
@@ -601,7 +601,7 @@ func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID
 		return nil, fmt.Errorf("render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_review", prompt, "", StoryboardOverrides{})
+	resp, err := s.aiService.GenerateWithProvider(tenantID, "chapter_review", prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -877,7 +877,7 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		return nil, fmt.Errorf("render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_review", prompt, "", StoryboardOverrides{})
+	resp, err := s.aiService.GenerateWithProvider(tenantID, "chapter_review", prompt)
 	if err != nil {
 		return nil, err
 	}

@@ -149,11 +149,8 @@ func (s *ItemService) DeleteItem(id uint) error {
 // generateItemImageCore is the shared AI call for item image generation.
 // It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
 // and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
-func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle string) (string, error) {
+func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, novelTitle, imageStyle string) (string, error) {
 	prompt := item.VisualPrompt
-	if prompt == "" {
-		prompt = fmt.Sprintf("%s，奇幻道具插画，精细细节，概念艺术", item.Name)
-	}
 	aiRefURL := item.ReferenceImageURL
 	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
 		aiRefURL = ""
@@ -161,7 +158,18 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if novelTitle != "" {
 		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
 	}
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+itemRefFormatRules, aiRefURL, imageStyle, "", "")
+
+	resp, err := s.aiService.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
+		Prompt:          prompt + itemRefFormatRules,
+		NegativePrompt:  "",
+		Size:            "",
+		ReferenceImages: []string{aiRefURL},
+		ImageStyle:      imageStyle,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.URL, nil
 }
 
 // itemRefFormatRules 是道具参考图的版式+规则文案，拼在 item.VisualPrompt（外观描述）之后。
@@ -193,7 +201,7 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 			imageStyle = novel.AIConfig.ImageStyle
 		}
 	}
-	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
+	url, err := s.generateItemImageCore(context.Background(), tenantID, item, novelTitle, imageStyle)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -205,7 +213,7 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 // BatchGenerateImages 批量为小说的道具生成图像。
 // force=false：跳过已有图片的道具；force=true：全量重新生成（风格变更时使用）。
 // 并发度由 AIService.imageSem 统一管控（系统设置 image_concurrency）。
-func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	items, err := s.itemRepo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list items: %w", err)
@@ -236,7 +244,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, novelTitle, imageStyle)
 			if genErr != nil {
 				logger.Errorf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()
@@ -316,7 +324,7 @@ func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []ui
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, novelTitle, imageStyle)
 			mu.Lock()
 			done++
 			cur := done
@@ -393,8 +401,7 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 		itemsPrompt += "\n\n注意：已有道具如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_items", itemsPrompt, "",
-		StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_items", itemsPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
@@ -413,9 +420,18 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 		if it, ok := byName[e.Name]; ok {
 			// 更新：用 AI 数据填充空缺字段
 			var changed bool
-			if v, ok := fillIfEmpty(it.Location, e.Location); ok { it.Location = v; changed = true }
-			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { it.Owner = v; changed = true }
-			if v, ok := fillIfEmpty(it.VisualPrompt, s.aiService.FilterPrompt(e.VisualPrompt)); ok { it.VisualPrompt = v; changed = true }
+			if v, ok := fillIfEmpty(it.Location, e.Location); ok {
+				it.Location = v
+				changed = true
+			}
+			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok {
+				it.Owner = v
+				changed = true
+			}
+			if v, ok := fillIfEmpty(it.VisualPrompt, e.VisualPrompt); ok {
+				it.VisualPrompt = v
+				changed = true
+			}
 			if !changed {
 				upserted = append(upserted, it)
 				continue
@@ -437,7 +453,7 @@ func (s *ItemService) AIExtractFromNovel(ctx context.Context, tenantID, novelID 
 				Name:         e.Name,
 				Location:     e.Location,
 				Owner:        e.Owner,
-				VisualPrompt: s.aiService.FilterPrompt(e.VisualPrompt),
+				VisualPrompt: e.VisualPrompt,
 			}
 			if err := s.itemRepo.Create(item); err != nil {
 				logger.Errorf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
@@ -551,8 +567,7 @@ func (s *ItemService) extractItemsFromContent(
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_chapter_items", chItemsPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -771,7 +786,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 			Name:         it.Name,
 			Location:     it.Location,
 			Owner:        it.Owner,
-			VisualPrompt: s.aiService.FilterPrompt(it.VisualPrompt),
+			VisualPrompt: it.VisualPrompt,
 		}
 		if e := s.itemRepo.Create(item); e != nil {
 			// existingNameSet 是函数开头一次性查出来的快照，如果另一次并发的章节提取
@@ -823,7 +838,7 @@ func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint st
 		return "", fmt.Errorf("render generate_item_info: %w", tplErr)
 	}
 
-	result, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_item_info", rendered, "")
+	result, genErr := s.aiService.GenerateWithProvider(tenantID, "generate_item_info", rendered)
 	if genErr != nil {
 		return "", fmt.Errorf("AI generate item info: %w", genErr)
 	}
@@ -838,5 +853,5 @@ func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint st
 		return "", fmt.Errorf("parse item info JSON: %w", parseErr)
 	}
 
-	return s.aiService.FilterPrompt(info.VisualPrompt), nil
+	return info.VisualPrompt, nil
 }

@@ -161,7 +161,7 @@ func (s *SceneAnchorService) GenerateSceneAnchorInfo(tenantID, novelID uint, nam
 		return "", fmt.Errorf("render generate_scene_anchor_info: %w", tplErr)
 	}
 
-	result, genErr := s.aiSvc.GenerateWithProvider(tenantID, novelID, "generate_scene_anchor_info", rendered, "")
+	result, genErr := s.aiSvc.GenerateWithProvider(tenantID, "generate_scene_anchor_info", rendered)
 	if genErr != nil {
 		return "", fmt.Errorf("AI generate scene anchor info: %w", genErr)
 	}
@@ -387,7 +387,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	}
 
 	// 调用 LLM（带租户 ID + ctx，确保使用正确的 provider 且可被超时/取消）
-	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_extract", anchorPrompt, "")
+	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_extract", anchorPrompt)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: LLM call failed: %v", err)
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
@@ -552,7 +552,7 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		return nil, fmt.Errorf("render scene_anchor_analyze: %w", err)
 	}
 
-	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_analyze", prompt, "")
+	jsonStr, err := s.aiSvc.GenerateWithProviderCtx(ctx, tenantID, "scene_anchor_analyze", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI analyze: %w", err)
 	}
@@ -606,7 +606,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		titleNote = fmt.Sprintf("，居中显示加粗场景标题\"%s\"", anchor.Name)
 	}
 	formatRules := fmt.Sprintf(sceneRefFormatRules, nameQuoted, titleNote)
-	// TODO 补充画风提示词
+
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
 		"Description": description,
 		"FormatRules": formatRules,
@@ -617,11 +617,9 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 
 	resp, err := s.aiSvc.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
 		Prompt:          rendered,
-		NegativePrompt:  "",
 		Size:            sizeOverride,
-		LoraModels:      nil,
 		ReferenceImages: []string{anchor.RefImageURL},
-		//ReferenceWeight: 0,
+		ImageStyle:      imageStyle,
 	})
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
@@ -629,7 +627,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 
 	if err := s.AutoSetRefImage(ctx, id, resp.URL); err != nil {
-		logger.Errorf("[SceneAnchorService] GenerateRefImage: save ref image anchorID=%d url=%s: %v", id, imageURL, err)
+		logger.Errorf("[SceneAnchorService] GenerateRefImage: save ref image anchorID=%d url=%s: %v", id, resp.URL, err)
 		return nil, fmt.Errorf("save ref image: %w", err)
 	}
 

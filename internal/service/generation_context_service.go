@@ -65,18 +65,6 @@ func (s *StoryboardService) ApplyReviewDeletes(videoID uint, shotNos []int) (int
 	return s.videoService.ApplyReviewDeletes(videoID, shotNos)
 }
 
-func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {
-	prompt := fmt.Sprintf("请分析以下内容的情感曲线：\n%s", content)
-	result, err := s.aiService.Generate(0, "analysis", prompt)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"analysis": result,
-		"content":  content[:min(100, len(content))],
-	}, nil
-}
-
 // ============================================
 // QualityControlService adapter methods
 // ============================================
@@ -92,69 +80,6 @@ func (s *QualityControlService) CheckChapter(id uint) (*QualityReport, error) {
 		return nil, fmt.Errorf("novel %d not found: %w", chapter.NovelID, err)
 	}
 	return s.CheckChapterQuality(context.Background(), chapter, novel)
-}
-
-// ============================================
-// VideoEnhancementService adapter methods
-// ============================================
-
-// EnhanceVideo handler-compatible wrapper (accepts model.EnhancementConfig)
-func (s *VideoEnhancementService) EnhanceVideo(videoURL string, enhancements []model.EnhancementConfig) (interface{}, error) {
-	configs := make([]EnhancementConfig, 0, len(enhancements))
-	for _, e := range enhancements {
-		configs = append(configs, EnhancementConfig{
-			Type:      EnhancementType(e.Type),
-			Enabled:   e.Enabled,
-			Intensity: e.Intensity,
-		})
-	}
-	return s.EnhanceVideoWithConfigs(videoURL, configs)
-}
-
-// GetRecommendations handler-compatible wrapper
-func (s *VideoEnhancementService) GetRecommendations(fps int, resolution string, duration int, style string) (interface{}, error) {
-	var recs []map[string]interface{}
-
-	// fps-based frame interpolation
-	if fps < 24 {
-		recs = append(recs, map[string]interface{}{"type": "frame_interpolation", "priority": "high", "reason": "提升流畅度"})
-	} else if fps < 30 {
-		recs = append(recs, map[string]interface{}{"type": "frame_interpolation", "priority": "medium", "reason": "提升流畅度"})
-	}
-	// fps >= 60: skip frame_interpolation
-
-	// resolution-based super resolution
-	if resolution == "720p" || resolution == "480p" {
-		recs = append(recs, map[string]interface{}{"type": "super_resolution", "priority": "high", "reason": "提升画质"})
-	} else if resolution == "1080p" {
-		recs = append(recs, map[string]interface{}{"type": "super_resolution", "priority": "low", "reason": "提升画质"})
-	}
-	// resolution == "4k": skip super_resolution
-
-	// duration-based compression
-	if duration > 300 {
-		recs = append(recs, map[string]interface{}{"type": "compression", "priority": "medium", "reason": "时长较长，建议压缩以减小体积"})
-	}
-
-	// style-based recommendations
-	if style == "cinematic" {
-		recs = append(recs, map[string]interface{}{"type": "color_grading", "priority": "high", "reason": "电影风格需要专业调色"})
-	} else if style == "anime" {
-		recs = append(recs, map[string]interface{}{"type": "sharpening", "priority": "medium", "reason": "动漫风格需要锐化处理"})
-	}
-
-	// default fallback when no recommendations apply
-	if len(recs) == 0 {
-		recs = append(recs, map[string]interface{}{"type": "noise_reduction", "priority": "low", "reason": "通用降噪优化"})
-	}
-
-	return map[string]interface{}{
-		"fps":             fps,
-		"resolution":      resolution,
-		"duration":        duration,
-		"style":           style,
-		"recommendations": recs,
-	}, nil
 }
 
 // ============================================

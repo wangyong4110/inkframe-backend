@@ -22,9 +22,9 @@ const (
 	recentShortCount = 7           // 再往前N章注入简短摘要（30字）
 
 	shortSummaryMaxRunes        = 800 // 简短摘要截断字符数（提升上下文保真度）
-	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
-	consecutivePronounThreshold = 4  // 连续以他/她开头的段落数阈值
-	clichePhraseThreshold       = 2  // 长套话短语出现 N 次即触发精修（阈值低于单字）
+	repeatWordThreshold         = 5   // 重复词出现 N 次触发精修建议
+	consecutivePronounThreshold = 4   // 连续以他/她开头的段落数阈值
+	clichePhraseThreshold       = 2   // 长套话短语出现 N 次即触发精修（阈值低于单字）
 )
 
 // repeatWords 高频 AI 套词（出现≥5次触发精修）
@@ -171,7 +171,7 @@ type HierarchicalContext struct {
 	RecentShort      []ChapterBrief // 再往前 recentShortCount 章（简短摘要）
 	ArcSummaries     []ArcBrief     // 已完成弧
 	GlobalSummary    string
-	PlotTensionState string         // 当前剧情张力状态（供场景大纲决策参考）
+	PlotTensionState string           // 当前剧情张力状态（供场景大纲决策参考）
 	Characters       []CharacterBrief // 主要角色设定
 }
 
@@ -797,7 +797,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 		return fmt.Errorf("render arc_summary: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "arc_summary", prompt, "")
+	resp, err := s.aiService.GenerateWithProvider(tenantID, "arc_summary", prompt)
 	if err != nil {
 		return fmt.Errorf("AI arc summary: %w", err)
 	}
@@ -806,8 +806,8 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 	var result struct {
 		ArcSummary        string                   `json:"arc_summary"`
 		KeyEvents         []map[string]interface{} `json:"key_events"`
-		CharacterChanges  map[string]string        `json:"character_changes"`  // 旧字段，向后兼容
-		CharacterStates   map[string]string        `json:"character_states"`   // 新字段（优先使用）
+		CharacterChanges  map[string]string        `json:"character_changes"` // 旧字段，向后兼容
+		CharacterStates   map[string]string        `json:"character_states"`  // 新字段（优先使用）
 		RelationshipMap   []map[string]interface{} `json:"relationship_map"`
 		ResolvedConflicts []string                 `json:"resolved_conflicts"`
 		OpenForeshadows   []string                 `json:"open_foreshadows"`
@@ -951,27 +951,27 @@ func (s *NarrativeMemoryService) adaptOutlineAfterArc(
 	remainingJSON, _ := json.MarshalIndent(remainingChapters, "", "  ")
 
 	prompt, err := renderPrompt("arc_outline_update", map[string]interface{}{
-		"NovelTitle":        novel.Title,
-		"ArcNo":             arcNo,
-		"StartChapter":      endChapter - arcSize + 1,
-		"EndChapter":        endChapter,
-		"NextChapter":       nextChapter,
-		"LastChapter":       lastChapter,
-		"RemainingCount":    len(remainingChapters),
-		"ArcSummary":        arcSummary,
-		"KeyEvents":         keyEvents,
-		"CharacterStates":   charStates,
-		"WorldUpdates":      worldUpdates,
-		"OpenForeshadows":   openForeshadows,
-		"ResolvedConflicts": resolvedConflicts,
-		"ProtagonistPower":  protagonistPower,
+		"NovelTitle":           novel.Title,
+		"ArcNo":                arcNo,
+		"StartChapter":         endChapter - arcSize + 1,
+		"EndChapter":           endChapter,
+		"NextChapter":          nextChapter,
+		"LastChapter":          lastChapter,
+		"RemainingCount":       len(remainingChapters),
+		"ArcSummary":           arcSummary,
+		"KeyEvents":            keyEvents,
+		"CharacterStates":      charStates,
+		"WorldUpdates":         worldUpdates,
+		"OpenForeshadows":      openForeshadows,
+		"ResolvedConflicts":    resolvedConflicts,
+		"ProtagonistPower":     protagonistPower,
 		"RemainingOutlineJSON": string(remainingJSON),
 	})
 	if err != nil {
 		return fmt.Errorf("adaptOutlineAfterArc: render prompt: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "arc_outline_update", prompt, "")
+	resp, err := s.aiService.GenerateWithProvider(tenantID, "arc_outline_update", prompt)
 	if err != nil {
 		return fmt.Errorf("adaptOutlineAfterArc: AI call: %w", err)
 	}
@@ -1093,7 +1093,7 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(ctx context.Context, ten
 	const minSummaryRunes = 150
 	var summary string
 	for attempt := 0; attempt < 3; attempt++ {
-		summary, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_summary", prompt, "")
+		summary, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter_summary", prompt)
 		if err != nil {
 			logger.Errorf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d attempt=%d err=%v", chapter.ChapterNo, attempt+1, err)
 			return "", err
@@ -1132,7 +1132,7 @@ func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *mo
 	if err != nil {
 		return "", err
 	}
-	title, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_title", prompt, "")
+	title, err := s.aiService.GenerateWithProvider(tenantID, "chapter_title", prompt)
 	if err != nil {
 		logger.Errorf("[NarrativeMemory] GenerateChapterTitle AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
@@ -1192,7 +1192,7 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 	if err != nil {
 		return "", err
 	}
-	return s.aiService.GenerateWithProvider(tenantID, novelID, "character_voice", prompt, "")
+	return s.aiService.GenerateWithProvider(tenantID, "character_voice", prompt)
 }
 
 // ──────────────────────────────────────────────
@@ -1229,7 +1229,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		return chapter.Content, err
 	}
 
-	refined, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "refinement", prompt, "")
+	refined, err := s.aiService.GenerateWithProvider(tenantID, "refinement", prompt)
 	if err != nil {
 		logger.Errorf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
 		refineStatus = "error"
@@ -1412,4 +1412,3 @@ func truncateForRefinement(s string, maxChars int) (string, bool) {
 	tail := string(r[len(r)-half:])
 	return head + "\n\n…（中间段已省略，精修时保持前后文风格一致）…\n\n" + tail, true
 }
-

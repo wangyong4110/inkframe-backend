@@ -89,8 +89,6 @@ type ImageGenerateRequest struct {
 	Prompt          string                 `json:"prompt"`
 	NegativePrompt  string                 `json:"negative_prompt,omitempty"`
 	Size            string                 `json:"size"` // 512x512, 1024x1024, 2K, 4K 等
-	Steps           int                    `json:"steps"`
-	CFGScale        float64                `json:"cfg_scale"`
 	Seed            int64                  `json:"seed"`
 	Style           string                 `json:"style"`                      // realistic, anime, cartoon, etc.
 	ReferenceImage  string                 `json:"reference_image,omitempty"`  // 单张参考图 base64（向后兼容）

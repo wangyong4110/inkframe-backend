@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -87,7 +88,7 @@ func (h *ModelHandler) ListProviders(c *gin.Context) {
 // GET /api/v1/model-providers/capable?type=LLM
 func (h *ModelHandler) ListCapableProviders(c *gin.Context) {
 	providerType := c.Query("type")
-	providers, err := h.modelService.ListCapableProviders(getTenantID(c), providerType)
+	providers, err := h.modelService.ListCapableProviders(getTenantID(c), commons.ModelType(providerType))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -236,30 +237,6 @@ func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 	})
-}
-
-// TestProvider 测试提供商连接
-// POST /api/v1/model-providers/:id/test
-func (h *ModelHandler) TestProvider(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	result, err := h.modelService.TestProvider(uint(id), getTenantID(c))
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    0,
-			"message": "success",
-			"data": gin.H{
-				"success": false,
-				"error":   err.Error(),
-			},
-		})
-		return
-	}
-
-	respondOK(c, result)
 }
 
 // ListModels 获取模型列表
@@ -418,40 +395,6 @@ func (h *ModelHandler) TestModel(c *gin.Context) {
 	}
 
 	respondOK(c, result)
-}
-
-// GetAvailableModels 获取任务可用模型
-// GET /api/v1/models/available/:task_type
-func (h *ModelHandler) GetAvailableModels(c *gin.Context) {
-	taskType := c.Param("task_type")
-
-	models, err := h.modelService.GetAvailableModels(taskType, getTenantID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, models)
-}
-
-// SelectModel 选择模型
-// POST /api/v1/models/select
-func (h *ModelHandler) SelectModel(c *gin.Context) {
-	var req struct {
-		TaskType string `json:"task_type" binding:"required"`
-		Strategy string `json:"strategy"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	selected, err := h.modelService.SelectModel(req.TaskType, req.Strategy, getTenantID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, selected)
 }
 
 // ListExperiments 获取对比实验列表
@@ -652,17 +595,17 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	type providerTemplate struct {
-		Name                string              `json:"name"`
-		DisplayName         string              `json:"display_name"`
-		APIEndpoint         string              `json:"api_endpoint"`
-		NeedsSecretKey      bool                `json:"needs_secret_key"`
-		NoAPIKey            bool                `json:"no_api_key,omitempty"`
-		NeedsAPIVersion     bool                `json:"needs_api_version,omitempty"`
-		DeploymentBased     bool                `json:"deployment_based,omitempty"`
-		APIVersionHint      string              `json:"api_version_hint,omitempty"`
-		ConfigHint          string              `json:"config_hint,omitempty"`
-		StaticModels        []string            `json:"static_models,omitempty"`        // 所有模型展平列表（向后兼容）
-		StaticModelsByType  map[string][]string `json:"static_models_by_type,omitempty"` // 按类型分组
+		Name               string              `json:"name"`
+		DisplayName        string              `json:"display_name"`
+		APIEndpoint        string              `json:"api_endpoint"`
+		NeedsSecretKey     bool                `json:"needs_secret_key"`
+		NoAPIKey           bool                `json:"no_api_key,omitempty"`
+		NeedsAPIVersion    bool                `json:"needs_api_version,omitempty"`
+		DeploymentBased    bool                `json:"deployment_based,omitempty"`
+		APIVersionHint     string              `json:"api_version_hint,omitempty"`
+		ConfigHint         string              `json:"config_hint,omitempty"`
+		StaticModels       []string            `json:"static_models,omitempty"`         // 所有模型展平列表（向后兼容）
+		StaticModelsByType map[string][]string `json:"static_models_by_type,omitempty"` // 按类型分组
 	}
 
 	result := make([]providerTemplate, 0, len(templates))
@@ -707,37 +650,6 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	respondOK(c, result)
-}
-
-
-// TestModelPrompt 用指定提供商生成文本（前端「生成测试」功能）
-// POST /api/v1/models/test-prompt
-func (h *ModelHandler) TestModelPrompt(c *gin.Context) {
-	if !isAdminOrOwner(c) {
-		respondErr(c, http.StatusForbidden, "admin or owner role required")
-		return
-	}
-
-	var req struct {
-		ProviderID uint   `json:"provider_id" binding:"required"`
-		Prompt     string `json:"prompt" binding:"required"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-	tenantID := getTenantID(c)
-
-	start := time.Now()
-	content, tokens, err := h.modelService.TestGeneratePrompt(c.Request.Context(), tenantID, req.ProviderID, req.Prompt)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, gin.H{
-		"content":    content,
-		"tokens":     tokens,
-		"latency_ms": time.Since(start).Milliseconds(),
-	})
 }
 
 // validateEndpointURL 验证 endpoint URL 防止 SSRF 攻击。

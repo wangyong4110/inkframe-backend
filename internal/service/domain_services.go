@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
-	"github.com/inkframe/inkframe-backend/internal/crypto"
+	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -119,16 +118,6 @@ func providerHasCredentials(p *model.ModelProvider) bool {
 	return strings.TrimSpace(p.APIKey) != ""
 }
 
-// effectiveModelName returns the model name to use when constructing a provider.
-// DefaultModel takes precedence; falls back to APIVersion for backward compatibility.
-// Do NOT use for doubao-speech (APIVersion = resourceID) or doubao-speech-v1 (APIVersion = cluster).
-func effectiveModelName(p *model.ModelProvider) string {
-	if p.DefaultModel != "" {
-		return p.DefaultModel
-	}
-	return p.APIVersion
-}
-
 func capableProviderDisplayName(providerName, dbDisplayName string) string {
 	if dbDisplayName != "" {
 		return dbDisplayName
@@ -139,25 +128,16 @@ func capableProviderDisplayName(providerName, dbDisplayName string) string {
 	return providerName
 }
 
-// normalizeProviderType canonicalizes type aliases so "tts"=="voice", "img2img"=="img2img", etc.
-func normalizeProviderType(t string) string {
-	switch strings.ToLower(t) {
-	case "tts":
-		return "voice"
-	}
-	return strings.ToLower(t)
-}
-
 // ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
-func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
-	normalizedType := normalizeProviderType(typeFilter)
+func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter commons.ModelType) ([]CapableProvider, error) {
+	//normalizedType := normalizeProviderType(typeFilter)
 	var providers []*model.ModelProvider
 	var err error
 	if s.aiService != nil {
-		providers, err = s.aiService.eligibleProviders(tenantID, normalizedType)
+		providers, err = s.aiService.eligibleProviders(tenantID, typeFilter)
 	} else {
 		// aiService 未注入（可选依赖）时退回直接过滤，行为与 eligibleProviders 一致。
-		providers, err = s.providerRepo.ListByModelType(tenantID, normalizedType)
+		providers, err = s.providerRepo.ListByModelType(tenantID, typeFilter)
 		if err == nil {
 			var filtered []*model.ModelProvider
 			for _, p := range providers {
@@ -341,116 +321,6 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 	return nil
 }
 
-func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error) {
-	provider, err := s.providerRepo.GetByIDAndTenant(id, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	dbStatus := "ok"
-	var testErr error
-
-	// 即梦AI Visual API（AK/SK 鉴权）：直接构造 provider 进行健康检查
-	if provider.Name == "volcengine-visual" {
-		if provider.APIKey == "" || provider.APISecretKey == "" {
-			return map[string]interface{}{"status": "error", "error": "AccessKey 和 SecretKey 均不能为空", "provider_id": id}, nil
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		apiKey, apiSecretKey := provider.APIKey, provider.APISecretKey
-		if s.aiService != nil {
-			if k, err := crypto.Decrypt(apiKey, s.aiService.encKey); err == nil {
-				apiKey = strings.TrimSpace(k)
-			}
-			if k, err := crypto.Decrypt(apiSecretKey, s.aiService.encKey); err == nil {
-				apiSecretKey = strings.TrimSpace(k)
-			}
-		}
-		vp := ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
-		if testErr = vp.HealthCheck(ctx); testErr != nil {
-			dbStatus = "down"
-		}
-	} else if s.aiService != nil {
-		if _, loadErr := s.aiService.getTenantProvider(tenantID, provider.Name); loadErr != nil {
-			if !strings.Contains(loadErr.Error(), "use GetTenantVideoProvider") {
-				dbStatus = "down"
-				testErr = loadErr
-			}
-		}
-	}
-
-	// 将测试结果持久化到 health_check 和 last_checked
-	_ = s.providerRepo.UpdateHealthStatus(id, dbStatus)
-
-	if testErr != nil {
-		return map[string]interface{}{"status": "error", "error": testErr.Error(), "provider_id": id}, nil
-	}
-	return map[string]interface{}{"status": "ok", "provider_id": id}, nil
-}
-
-// RunHealthChecks 对所有活跃且有凭证的 AI 提供商执行健康检查，将结果写入 health_check 和 last_checked。
-// 被 startRecalcLoop 每 10 分钟调用一次。
-func (s *ModelService) RunHealthChecks() error {
-	providers, err := s.providerRepo.List()
-	if err != nil {
-		return fmt.Errorf("RunHealthChecks: list providers: %w", err)
-	}
-	for _, p := range providers {
-		if !p.IsActive || !providerHasCredentials(p) {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		status, checkErr := s.checkProviderHealth(ctx, p)
-		cancel()
-		if status == "" {
-			continue // 视频专用 provider 无法通过 AIProvider 接口检查，跳过
-		}
-		if checkErr != nil {
-			logger.Warnf("[health-check] provider %q (id=%d): %v", p.Name, p.ID, checkErr)
-		}
-		if dbErr := s.providerRepo.UpdateHealthStatus(p.ID, status); dbErr != nil {
-			logger.Warnf("[health-check] provider %q update status: %v", p.Name, dbErr)
-		}
-	}
-	return nil
-}
-
-// checkProviderHealth 对单个提供商执行健康检查。
-// 返回 ("ok"|"down", error) 或 ("", nil) 表示跳过（视频专用 provider）。
-func (s *ModelService) checkProviderHealth(ctx context.Context, p *model.ModelProvider) (string, error) {
-	// AK/SK 双密钥的图像/视频提供商：用 VolcengineVisualProvider.HealthCheck（轻量级 GET 验证）
-	if p.Name == ai.ProviderNameVolcengineVisual || p.Name == ai.ProviderNameJimengVideo {
-		apiKey, apiSecretKey := p.APIKey, p.APISecretKey
-		if s.aiService != nil {
-			if k, err := crypto.Decrypt(apiKey, s.aiService.encKey); err == nil {
-				apiKey = strings.TrimSpace(k)
-			}
-			if k, err := crypto.Decrypt(apiSecretKey, s.aiService.encKey); err == nil {
-				apiSecretKey = strings.TrimSpace(k)
-			}
-		}
-		vp := ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
-		if err := vp.HealthCheck(ctx); err != nil {
-			return "down", err
-		}
-		return "ok", nil
-	}
-	if s.aiService == nil {
-		return "ok", nil
-	}
-	prov, err := s.aiService.getTenantProvider(p.TenantID, p.Name)
-	if err != nil {
-		if strings.Contains(err.Error(), "use GetTenantVideoProvider") {
-			return "", nil // 视频专用 provider，跳过
-		}
-		return "down", err
-	}
-	if err := prov.HealthCheck(ctx); err != nil {
-		return "down", err
-	}
-	return "ok", nil
-}
-
 func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{}, error) {
 	models, err := s.modelRepo.List(providerID, tenantID)
 	if err != nil {
@@ -550,10 +420,6 @@ func (s *ModelService) DeleteModel(id uint, tenantID uint) error {
 	if err := s.modelRepo.Delete(id); err != nil {
 		return err
 	}
-	// Invalidate provider cache so stale model config is not served after deletion.
-	if s.aiService != nil && m.Provider != nil {
-		s.aiService.InvalidateProviderCache(m.Provider.Name)
-	}
 	return nil
 }
 
@@ -609,43 +475,6 @@ func (s *ModelService) StartExperiment(id uint) error {
 	exp.Progress = 0
 	exp.UpdatedAt = time.Now()
 	return s.experimentRepo.Update(exp)
-}
-
-func (s *ModelService) GetAvailableModels(taskType string, tenantID uint) ([]*model.AIModel, error) {
-	return s.modelRepo.GetAvailableByTaskType(taskType, tenantID)
-}
-
-func (s *ModelService) SelectModel(taskType, strategy string, tenantID uint) (*model.AIModel, error) {
-	models, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if len(models) == 0 {
-		return nil, fmt.Errorf("no available models for task type: %s", taskType)
-	}
-	switch strategy {
-	case "quality":
-		return selectByQuality(models), nil
-	case "cost":
-		return selectByCost(models), nil
-	default:
-		return selectBalanced(models), nil
-	}
-}
-
-// TestGeneratePrompt 用指定提供商直接生成内容（供前端测试功能使用）
-// providerID 为 model_provider 的 ID；prompt 为用户测试文本。
-func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, providerID uint, prompt string) (content string, tokens int, err error) {
-	if s.aiService == nil {
-		return "", 0, fmt.Errorf("AI service not available")
-	}
-	// 解析 provider name
-	provider, lookupErr := s.providerRepo.GetByIDAndTenant(providerID, tenantID)
-	if lookupErr != nil {
-		return "", 0, fmt.Errorf("provider not found: %w", lookupErr)
-	}
-	content, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, "chapter", prompt)
-	return content, 0, err
 }
 
 // ============================================

@@ -72,7 +72,7 @@ func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID,
   ]
 }`, chapter.Content)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "foreshadow_extraction", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, "foreshadow_extraction", prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,6 @@ func (s *ForeshadowService) AnalyzeFulfillmentOpportunity(novelID uint, currentC
 
 	return opportunities, nil
 }
-
 
 // ============================================
 // Timeline Service - 时间线管理

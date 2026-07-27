@@ -56,12 +56,11 @@ type SFXService struct {
 	tagRepo          *repository.TagRepository
 	sfxDir           string // 本地音效目录
 	httpClient       *http.Client
-	localLib         map[string]string // 内置标签 → 文件名（不含目录）
-	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
-	queryCache       sync.Map          // "source:query" → sfxCacheEntry（进程内二级缓存）
-	elevenLabsSem    chan struct{}     // 限制 ElevenLabs 并发数（免费版最多 4 路）
-	aiSfxSem         chan struct{}     // 限制 AI 文生音效（Kling 等）并发数，避免触发资源包超限
-	cache            *redis.Client     // optional: shared query cache across instances
+	localUploadCache sync.Map      // local file path → OSS URL（进程内缓存）
+	queryCache       sync.Map      // "source:query" → sfxCacheEntry（进程内二级缓存）
+	elevenLabsSem    chan struct{} // 限制 ElevenLabs 并发数（免费版最多 4 路）
+	aiSfxSem         chan struct{} // 限制 AI 文生音效（Kling 等）并发数，避免触发资源包超限
+	cache            *redis.Client // optional: shared query cache across instances
 }
 
 // WithRedis enables a Redis-backed shared query cache so all instances reuse search results.
@@ -110,59 +109,8 @@ func NewSFXService(
 		storyboardRepo: storyboardRepo,
 		sfxDir:         cfg.SFXDir,
 		httpClient:     buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
-		localLib:       buildDefaultSFXLib(),
 		elevenLabsSem:  make(chan struct{}, 3), // 保守限制 3 路并发，避免触发 ElevenLabs 429
 		aiSfxSem:       make(chan struct{}, 3), // 限制 Kling 等 AI SFX 并发，避免触发资源包超限
-	}
-}
-
-// sfxProviderCreds 从 DB 取指定 sfx 供应商的凭据；aiSvc 为 nil 时返回空。错误已经在
-// AIService.GetSFXProviderCreds 里用 logger.Errorf 打出来了，这里不重复处理。
-func (s *SFXService) sfxProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
-	if s.aiSvc == nil {
-		return "", ""
-	}
-	apiKey, endpoint, _ = s.aiSvc.GetSFXProviderCreds(tenantID, name)
-	return apiKey, endpoint
-}
-
-// buildDefaultSFXLib 内置音效标签 → 文件名映射表。
-// 文件名相对于 SFXDir，不含目录。
-// 用户只需把对应 WAV/MP3 放入 SFXDir 即可生效。
-func buildDefaultSFXLib() map[string]string {
-	return map[string]string{
-		// 环境音 — 自然
-		"rain_heavy":     "rain_heavy.wav",
-		"rain_light":     "rain_light.wav",
-		"wind_night":     "wind_night.wav",
-		"wind_strong":    "wind_strong.wav",
-		"thunder":        "thunder.wav",
-		"forest_ambient": "forest_ambient.wav",
-		"river_flowing":  "river_flowing.wav",
-		"fire_crackle":   "fire_crackle.wav",
-		// 环境音 — 室内/城市
-		"crowd_outdoor": "crowd_outdoor.wav",
-		"crowd_indoor":  "crowd_indoor.wav",
-		"crowd_murmur":  "crowd_murmur.wav",
-		"city_ambient":  "city_ambient.wav",
-		"ambient_room":  "ambient_room.wav",
-		// 动作音 — 武侠/战斗
-		"sword_clash":  "sword_clash.wav",
-		"sword_draw":   "sword_draw.wav",
-		"arrow_whoosh": "arrow_whoosh.wav",
-		"explosion":    "explosion.wav",
-		"punch_impact": "punch_impact.wav",
-		"horse_gallop": "horse_gallop.wav",
-		// 动作音 — 日常
-		"footsteps_stone":   "footsteps_stone.wav",
-		"footsteps_running": "footsteps_running.wav",
-		"footsteps_wood":    "footsteps_wood.wav",
-		"door_open":         "door_open.wav",
-		"door_knock":        "door_knock.wav",
-		"bell_ring":         "bell_ring.wav",
-		// 情绪音
-		"heartbeat":     "heartbeat.wav",
-		"clock_ticking": "clock_ticking.wav",
 	}
 }
 
@@ -344,15 +292,6 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		if err := s.sfxItemRepo.BatchCreate(dbItems); err != nil {
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
-	}
-
-	// 按 source 统计命中数量（library/ai/cache/...）
-	for _, r := range results {
-		src := r.hit.source
-		if src == "" {
-			src = "unknown"
-		}
-		metrics.SFXGenerationTotal.WithLabelValues(src, "success").Inc()
 	}
 
 	// 自动存入素材库（仅保存已上传至 OSS 的永久 URL；noCache=true 的临时 CDN URL 不入库，避免过期污染）
@@ -551,20 +490,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 	} else if err != nil && !strings.Contains(err.Error(), "audioldm not configured") {
 		logger.Errorf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
-	// 5. Freesound API（CC0，需 API Key）
-	if hit := s.ensureOSSHit(ctx, s.searchFreesound(ctx, tenantID, item, maxDur)); hit.url != "" {
-		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
-		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
-	}
-	// 6. Pixabay Audio（CC0，需 API Key）
-	if hit := s.ensureOSSHit(ctx, s.searchPixabay(ctx, tenantID, item, maxDur)); hit.url != "" {
-		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
-		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
-	}
+
 	return sfxHit{}
 }
 

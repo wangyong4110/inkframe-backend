@@ -38,8 +38,7 @@ func isDuplicateKeyError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "1062") ||
-		strings.Contains(msg, "Duplicate entry") ||
+	return strings.Contains(msg, "Duplicate entry") ||
 		strings.Contains(msg, "UNIQUE constraint failed")
 }
 

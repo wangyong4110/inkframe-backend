@@ -1052,7 +1052,13 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
 				ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 				defer cancel()
-				rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, vparams.Text, vparams.VoiceID, 1.0, "")
+				rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, service.GenerateAudioOptions{
+					Text:     vparams.Text,
+					Voice:    vparams.VoiceID,
+					Speed:    1.0,
+					Emotion:  "",
+					Language: nil,
+				})
 				if err != nil {
 					logger.Errorf("TaskService resume voice_preview(voice) %s failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, "语音生成失败: "+err.Error()) //nolint:errcheck
@@ -1090,7 +1096,13 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
-			rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, params.Text, params.VoiceID, params.VoiceSpeed, params.VoiceStyle, params.VoiceLang)
+			rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, service.GenerateAudioOptions{
+				Text:     params.Text,
+				Voice:    params.VoiceID,
+				Speed:    params.VoiceSpeed,
+				Emotion:  params.VoiceStyle,
+				Language: params.VoiceLang,
+			})
 			if err != nil {
 				logger.Errorf("TaskService resume voice_preview %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, "voice generation failed: "+err.Error()) //nolint:errcheck

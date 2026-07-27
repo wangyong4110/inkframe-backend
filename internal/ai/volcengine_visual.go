@@ -66,11 +66,11 @@ func (p *VolcengineVisualProvider) GetModels() []string {
 		VolcModelJimengI2Iv30,     // 即梦3.0-图生图智能参考（编辑/真实图/海报）
 		VolcModelJimengT2Iv31,     // 即梦3.1-文生图（美感/风格/细节升级）
 		VolcModelJimengT2Iv30,     // 即梦3.0-文生图（文字/排版/人像）
-		VolcModelText2ImgV3,    // 通用3.0-文生图
-		VolcModelPortraitPhoto, // 人像写真3.0
-		VolcModelSeedEditV3,    // SeedEdit3.0-指令编辑
-		VolcModelDreamO,        // DreamO-角色特征保持
-		VolcModelImageEffect,   // 图像特效
+		VolcModelText2ImgV3,       // 通用3.0-文生图
+		VolcModelPortraitPhoto,    // 人像写真3.0
+		VolcModelSeedEditV3,       // SeedEdit3.0-指令编辑
+		VolcModelDreamO,           // DreamO-角色特征保持
+		VolcModelImageEffect,      // 图像特效
 	}
 }
 
@@ -158,9 +158,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["prompt"] = prompt
 		params["width"] = width
 		params["height"] = height
-		if req.CFGScale > 0 {
-			params["scale"] = req.CFGScale
-		}
 		if req.NegativePrompt != "" {
 			params["negative_prompt"] = req.NegativePrompt
 		}
@@ -185,16 +182,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		// 必须回退读取 ReferenceURL，否则参考图会被静默丢弃（image_input 缺失）。
 		p.setImageInput(params, pickSingleRef(req.ReferenceURL, req.ReferenceImage), "image_urls", "binary_data_base64")
 		// scale：文本描述影响程度 float [0,1]，默认 0.5。
-		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
-		if req.CFGScale > 0 {
-			s := (req.CFGScale - 1.0) / 9.0
-			if s < 0 {
-				s = 0
-			} else if s > 1 {
-				s = 1
-			}
-			params["scale"] = s
-		}
 		if req.Size != "" {
 			params["width"] = width
 			params["height"] = height
@@ -202,17 +189,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 
 	case VolcModelSeedEditV3:
 		params["prompt"] = prompt
-		if req.CFGScale > 0 {
-			// scale 范围 [0,1]（文本描述影响程度）。
-			// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
-			s := (req.CFGScale - 1.0) / 9.0
-			if s < 0 {
-				s = 0
-			} else if s > 1 {
-				s = 1
-			}
-			params["scale"] = s
-		}
 		if imgs := pickMultiRef(req.ReferenceURLs, req.ReferenceImages); len(imgs) > 0 {
 			p.setMultiImageInput(params, imgs, "image_urls", "binary_data_base64")
 		} else {
@@ -223,16 +199,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["prompt"] = prompt
 		params["width"] = width
 		params["height"] = height
-		if req.CFGScale > 0 {
-			// scale 范围 [0,1]（IP 一致性强度）。逆映射同 SeedEditV3。
-			s := (req.CFGScale - 1.0) / 9.0
-			if s < 0 {
-				s = 0
-			} else if s > 1 {
-				s = 1
-			}
-			params["scale"] = s
-		}
 		if imgs := pickMultiRef(req.ReferenceURLs, req.ReferenceImages); len(imgs) > 0 {
 			p.setMultiImageInput(params, imgs, "image_urls", "binary_data_base64")
 		} else {
@@ -278,17 +244,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			w40, h40 := ensureMinPixelArea(width, height, 1024*1024)
 			params["width"] = w40
 			params["height"] = h40
-		}
-		// scale：文本描述影响程度 float [0,1]，默认 0.5。
-		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
-		if req.CFGScale > 0 {
-			s := (req.CFGScale - 1.0) / 9.0
-			if s < 0 {
-				s = 0
-			} else if s > 1 {
-				s = 1
-			}
-			params["scale"] = s
 		}
 		// force_single / min_ratio / max_ratio 通过 Extra 透传
 		if req.Extra != nil {
@@ -338,19 +293,6 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			w46, h46 := ensureMinPixelArea(width, height, 1024*1024)
 			params["width"] = w46
 			params["height"] = h46
-		}
-		// scale：文本描述影响程度 int [1,100]，默认 50。
-		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射为 [1,100]：
-		//   scaleInt = round((cfgScale-1)/9 * 99) + 1
-		// 示例：production cfgScale=7.5 → (6.5/9)*99+1 ≈ 72（合理中强度）
-		if req.CFGScale > 0 {
-			scaleInt := int((req.CFGScale-1.0)/9.0*99.0) + 1
-			if scaleInt < 1 {
-				scaleInt = 1
-			} else if scaleInt > 100 {
-				scaleInt = 100
-			}
-			params["scale"] = scaleInt
 		}
 		if req.Extra != nil {
 			if v, ok := req.Extra["force_single"].(bool); ok {

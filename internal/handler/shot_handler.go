@@ -429,113 +429,6 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "配音生成任务已提交")
 }
 
-// GetDefaultConsistencyConfig 获取默认一致性配置
-// GET /api/v1/consistency/default
-func (h *VideoHandler) GetDefaultConsistencyConfig(c *gin.Context) {
-	if h.consistencyService == nil {
-		respondErr(c, http.StatusServiceUnavailable, "consistency service unavailable")
-		return
-	}
-	level := h.consistencyService.GetDefaultConsistencyLevel()
-	respondOK(c, level)
-}
-
-// CalculateConsistencyScore 计算一致性评分
-// POST /api/v1/consistency/score
-func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
-	if h.consistencyService == nil {
-		respondErr(c, http.StatusServiceUnavailable, "consistency service unavailable")
-		return
-	}
-
-	var req struct {
-		ReferenceImage  string   `json:"reference_image"`
-		GeneratedImages []string `json:"generated_images"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	score, err := h.consistencyService.CalculateConsistencyScore(req.ReferenceImage, req.GeneratedImages)
-	if err != nil {
-		reqLogger(c).Errorf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, score)
-}
-
-// Export 多格式导出
-// GET /api/v1/videos/:id/export/:format
-// format: capcut | fcpxml | zip | shots | srt | vtt | edl | otio | csv | xlsx | broll
-func (h *VideoHandler) Export(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	format := c.Param("format")
-
-	video, ok := h.getVideoForTenant(c, uint(id))
-	if !ok {
-		return
-	}
-
-	shots, err := h.videoService.GetStoryboard(uint(id), 0)
-	if err != nil {
-		reqLogger(c).Errorf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	var result *service.ExportResult
-	switch format {
-	case "fcpxml":
-		result, err = h.capcutService.ExportFCPXML(video, shots)
-	case "zip":
-		var bgmSegs []*model.VideoBGMSegment
-		if h.bgmRepo != nil {
-			bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
-		}
-		result, err = h.capcutService.ExportResourceZip(video, shots, bgmSegs)
-	case "shots":
-		result, err = h.capcutService.ExportShotSlices(video, shots)
-	case "srt":
-		result, err = h.capcutService.ExportSRT(video, shots)
-	case "vtt":
-		result, err = h.capcutService.ExportVTT(video, shots)
-	case "edl":
-		result, err = h.capcutService.ExportEDL(video, shots)
-	case "otio":
-		result, err = h.capcutService.ExportOTIO(video, shots)
-	case "csv":
-		result, err = h.capcutService.ExportCSV(video, shots)
-	case "xlsx":
-		result, err = h.capcutService.ExportXLSX(video, shots)
-	case "broll":
-		novel, _ := h.videoService.GetNovelByID(video.NovelID)
-		result, err = h.capcutService.ExportBRollDraft(video, shots, novel)
-	default: // "capcut" 或其他
-		novel, _ := h.videoService.GetNovelByID(video.NovelID)
-		var bgmSegs []*model.VideoBGMSegment
-		if h.bgmRepo != nil {
-			bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
-		}
-		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
-	}
-
-	if err != nil {
-		reqLogger(c).Errorf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	reqLogger(c).Printf("[VideoHandler] Export: videoID=%d format=%s filename=%s size=%d", id, format, result.Filename, len(result.Data))
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
-	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
-	c.Data(http.StatusOK, result.ContentType, result.Data)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 声画同步时间轴
 // ─────────────────────────────────────────────────────────────────────────────
@@ -576,67 +469,68 @@ func (h *VideoHandler) GetSyncManifest(c *gin.Context) {
 	respondOK(c, manifest)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 口型对齐 (LipSync)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// GenerateLipSync POST /videos/:id/shots/:shot_id/lipsync
-// 提交口型对齐任务：角色参考图 + TTS 音频 → 口型视频。
-// 请求体（均可选）：{ "audio_url": "...", "image_url": "...", "model": "kling-v1-6" }
-// 立即返回 task_id；前端可轮询 GET .../lipsync/status 或等待 shot.status 变为 done。
-func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
-	videoID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
-		return
-	}
-	shotID, ok := parseID(c, "shot_id")
-	if !ok {
-		return
-	}
-
-	var req service.LipSyncRequest
-	_ = c.ShouldBindJSON(&req)
-
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLipSync 的执行
-	// 函数在 cmd/server/task_resume.go，用 t.EntityID 作为 shotID，反序列化下面存的
-	// video_id/req 调用同一套 GenerateLipSyncVideoWithReq + PollLipSyncUntilDone）。
-	task, err := h.taskSvc.CreateWithParams(getTenantID(c), service.TaskTypeLipSync,
-		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID), map[string]interface{}{
-			"video_id": uint(videoID),
-			"req":      req,
-		})
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	respondAccepted(c, task.TaskID, "口型对齐任务已提交")
-}
-
-// GetLipSyncStatus GET /videos/:id/shots/:shot_id/lipsync/status
-// 查询口型对齐任务状态（前端轮询）。
-func (h *VideoHandler) GetLipSyncStatus(c *gin.Context) {
-	videoID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
-		return
-	}
-	shotID, ok := parseID(c, "shot_id")
-	if !ok {
-		return
-	}
-
-	result, err := h.videoService.GetLipSyncStatus(uint(videoID), uint(shotID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, result)
-}
+//
+//// ─────────────────────────────────────────────────────────────────────────────
+//// 口型对齐 (LipSync)
+//// ─────────────────────────────────────────────────────────────────────────────
+//
+//// GenerateLipSync POST /videos/:id/shots/:shot_id/lipsync
+//// 提交口型对齐任务：角色参考图 + TTS 音频 → 口型视频。
+//// 请求体（均可选）：{ "audio_url": "...", "image_url": "...", "model": "kling-v1-6" }
+//// 立即返回 task_id；前端可轮询 GET .../lipsync/status 或等待 shot.status 变为 done。
+//func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
+//	videoID, ok := parseID(c, "id")
+//	if !ok {
+//		return
+//	}
+//	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+//		return
+//	}
+//	shotID, ok := parseID(c, "shot_id")
+//	if !ok {
+//		return
+//	}
+//
+//	var req service.LipSyncRequest
+//	_ = c.ShouldBindJSON(&req)
+//
+//	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLipSync 的执行
+//	// 函数在 cmd/server/task_resume.go，用 t.EntityID 作为 shotID，反序列化下面存的
+//	// video_id/req 调用同一套 GenerateLipSyncVideoWithReq + PollLipSyncUntilDone）。
+//	task, err := h.taskSvc.CreateWithParams(getTenantID(c), service.TaskTypeLipSync,
+//		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID), map[string]interface{}{
+//			"video_id": uint(videoID),
+//			"req":      req,
+//		})
+//	if err != nil {
+//		respondErr(c, http.StatusInternalServerError, "failed to create task")
+//		return
+//	}
+//	respondAccepted(c, task.TaskID, "口型对齐任务已提交")
+//}
+//
+//// GetLipSyncStatus GET /videos/:id/shots/:shot_id/lipsync/status
+//// 查询口型对齐任务状态（前端轮询）。
+//func (h *VideoHandler) GetLipSyncStatus(c *gin.Context) {
+//	videoID, ok := parseID(c, "id")
+//	if !ok {
+//		return
+//	}
+//	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+//		return
+//	}
+//	shotID, ok := parseID(c, "shot_id")
+//	if !ok {
+//		return
+//	}
+//
+//	result, err := h.videoService.GetLipSyncStatus(uint(videoID), uint(shotID))
+//	if err != nil {
+//		respondErr(c, http.StatusInternalServerError, err.Error())
+//		return
+//	}
+//	respondOK(c, result)
+//}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 分镜语音段落 (VoiceSegment) 处理器

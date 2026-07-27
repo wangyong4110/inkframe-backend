@@ -63,8 +63,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 	if err != nil {
 		return nil, fmt.Errorf("render prompt: %w", err)
 	}
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_foreshadows", prompt, "",
-)
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "extract_foreshadows", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction: %w", err)
 	}

@@ -573,20 +573,11 @@ type GeneratedFrame struct {
 
 // ImageGenerationOptions 图像生成选项
 type ImageGenerationOptions struct {
-	Prompt          string      `json:"prompt"`
-	NegativePrompt  string      `json:"negative_prompt,omitempty"`
-	Size            string      `json:"size,omitempty"` // 512x512, 1024x1024, etc.
-	Steps           int         `json:"steps,omitempty"`
-	CFGScale        float64     `json:"cfg_scale,omitempty"`
-	LoraModels      []LoraModel `json:"lora_models,omitempty"`
-	ReferenceImages []string    `json:"reference_images,omitempty"`
-	//ReferenceWeight float64     `json:"reference_weight,omitempty"`
-}
-
-// LoraModel LoRA模型
-type LoraModel struct {
-	ID     string  `json:"id"`
-	Weight float64 `json:"weight"`
+	Prompt          string   `json:"prompt"`
+	NegativePrompt  string   `json:"negative_prompt,omitempty"`
+	Size            string   `json:"size,omitempty"` // 512x512, 1024x1024, etc.
+	ReferenceImages []string `json:"reference_images,omitempty"`
+	ImageStyle      string   `json:"imageStyle"`
 }
 
 // GeneratedImage 生成的图像
@@ -595,48 +586,4 @@ type GeneratedImage struct {
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
 	Seed   int64  `json:"seed,omitempty"`
-}
-
-// ============================================
-// 5. 一致性验证服务
-// ============================================
-
-// ConsistencyValidationResult 一致性验证结果
-type ConsistencyValidationResult struct {
-	OverallScore    float64            `json:"overall_score"`
-	CharacterScores map[uint]float64   `json:"character_scores"` // character_id -> score
-	SceneScore      float64            `json:"scene_score"`
-	Issues          []ConsistencyIssue `json:"issues"`
-}
-
-// ConsistencyIssue 一致性问题
-type ConsistencyIssue struct {
-	Type        string `json:"type"`     // appearance_drift, missing_element, style_drift
-	Severity    string `json:"severity"` // high, medium, low
-	Description string `json:"description"`
-	Location    string `json:"location"`
-	Suggestion  string `json:"suggestion"`
-}
-
-// ConsistencyValidatorService 一致性验证服务
-type ConsistencyValidatorService struct {
-	aiService *AIService
-}
-
-// NewConsistencyValidatorService 创建一致性验证服务
-func NewConsistencyValidatorService(aiService *AIService) *ConsistencyValidatorService {
-	return &ConsistencyValidatorService{
-		aiService: aiService,
-	}
-}
-
-// ImagePromptConfig 图像 Prompt 生成配置
-type ImagePromptConfig struct {
-	ArtStyle            string   // 风格：realistic/anime/ink_wash/watercolor/cinematic
-	Resolution          string   // 分辨率标签：4k/8k/hd
-	CharacterRefs       []string // 角色外貌关键词
-	LightingStyle       string   // 光影：golden_hour/dramatic/soft/backlit
-	ColorPalette        string   // 色调：warm/cool/neutral/vibrant
-	SceneAnchorFragment string   // 场景锚点描述+锁定词（直接拼入 prompt，优先级高于 shot.Scene）
-	SceneRefImageURL    string   // 场景参考图URL（IP-Adapter，返回给前端展示）
 }

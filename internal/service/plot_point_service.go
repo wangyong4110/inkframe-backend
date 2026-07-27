@@ -12,7 +12,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
-
 // PlotPointService 剧情点服务
 type PlotPointService struct {
 	repo        *repository.PlotPointRepository
@@ -208,7 +207,7 @@ func (s *PlotPointService) ExtractFromChapter(ctx context.Context, tenantID uint
 }
 章节内容：%s`, textForAI)
 
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "plot_extraction", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, "plot_extraction", prompt)
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}

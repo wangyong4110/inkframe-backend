@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/inkframe/inkframe-backend/internal/ai/aliyun"
 )
 
 // ProviderNameMinimaxVideo MiniMax 视频提供者名称
@@ -167,7 +165,7 @@ func (p *MinimaxVideoProvider) GenerateVideo(ctx context.Context, req *VideoGene
 		return nil, fmt.Errorf("minimax-video: submit request failed: %w", err)
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("minimax-video: submit failed: HTTP %d: %s", status, aliyun.truncate(string(respBody), 300))
+		return nil, fmt.Errorf("minimax-video: submit failed: HTTP %d: %s", status, truncate(string(respBody), 300))
 	}
 
 	var result struct {
@@ -208,7 +206,7 @@ func (p *MinimaxVideoProvider) queryTask(ctx context.Context, taskID string) (*m
 		return nil, fmt.Errorf("minimax-video: query task failed: %w", err)
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("minimax-video: query task failed: HTTP %d: %s", status, aliyun.truncate(string(respBody), 300))
+		return nil, fmt.Errorf("minimax-video: query task failed: HTTP %d: %s", status, truncate(string(respBody), 300))
 	}
 
 	var result minimaxQueryResult
@@ -298,7 +296,7 @@ func (p *MinimaxVideoProvider) GetVideoURL(ctx context.Context, taskID string) (
 		return "", fmt.Errorf("minimax-video: retrieve file failed: %w", err)
 	}
 	if status != http.StatusOK {
-		return "", fmt.Errorf("minimax-video: retrieve file failed: HTTP %d: %s", status, aliyun.truncate(string(respBody), 300))
+		return "", fmt.Errorf("minimax-video: retrieve file failed: HTTP %d: %s", status, truncate(string(respBody), 300))
 	}
 
 	var result minimaxRetrieveFileResult
