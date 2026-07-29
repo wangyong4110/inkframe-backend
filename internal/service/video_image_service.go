@@ -48,7 +48,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	if mode == "" {
 		mode = "video"
 	}
-	logger.Printf("BatchGenerateShots: videoID=%d total=%d mode=%s provider=%s aspectRatio=%s", videoID, len(shotIDs), mode, effectiveProvider, aspectRatio)
+	logger.Printf("BatchGenerateShots: videoID=%d total=%d mode=%s aspectRatio=%s", videoID, len(shotIDs), mode, aspectRatio)
 
 	// 批量预取所有分镜（单次 IN 查询，避免 N 次 GetByID 往返）
 	allShots, batchErr := s.storyboardRepo.BatchGetByIDs(shotIDs)

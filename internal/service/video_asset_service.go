@@ -947,3 +947,101 @@ func stripDialogueSpeakerPrefix(text string) string {
 	}
 	return text
 }
+
+// parseAudioDurationMicros 解析音频文件的实际时长（微秒）。
+// 支持 WAV（精确解析 RIFF 头）和 MP3（扫描首帧 bitrate 近似估算）。
+// 其他格式或解析失败时返回 0（调用方应降级为 shot.Duration）。
+func parseAudioDurationMicros(data []byte, ext string) int64 {
+	switch strings.ToLower(ext) {
+	case ".wav":
+		return wavDurationMicros(data)
+	case ".mp3":
+		return mp3DurationMicros(data)
+	default:
+		return 0
+	}
+}
+
+// wavDurationMicros 解析 WAV/RIFF 格式的精确时长（微秒）。
+func wavDurationMicros(data []byte) int64 {
+	if len(data) < 44 {
+		return 0
+	}
+	if string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return 0
+	}
+	readU32LE := func(b []byte, off int) uint32 {
+		return uint32(b[off]) | uint32(b[off+1])<<8 | uint32(b[off+2])<<16 | uint32(b[off+3])<<24
+	}
+	readU16LE := func(b []byte, off int) uint16 {
+		return uint16(b[off]) | uint16(b[off+1])<<8
+	}
+
+	var byteRate uint32
+	i := 12
+	for i+8 <= len(data) {
+		chunkID := string(data[i : i+4])
+		chunkSize := int(readU32LE(data, i+4))
+		// P0-3: 防止损坏的 WAV chunkSize 导致下一轮越界
+		if chunkSize < 0 || i+8+chunkSize > len(data) {
+			break
+		}
+		if chunkID == "fmt " && chunkSize >= 16 {
+			// byteRate = sampleRate × numChannels × bitsPerSample/8
+			sampleRate := readU32LE(data, i+8+4)
+			numCh := readU16LE(data, i+8+2)
+			bps := readU16LE(data, i+8+14)
+			byteRate = sampleRate * uint32(numCh) * uint32(bps) / 8
+		}
+		if chunkID == "data" && byteRate > 0 {
+			durationSec := float64(chunkSize) / float64(byteRate)
+			return int64(durationSec * 1_000_000)
+		}
+		i += 8 + chunkSize
+		if chunkSize%2 != 0 {
+			i++ // RIFF chunks are word-aligned
+		}
+	}
+	return 0
+}
+
+// mp3DurationMicros 通过扫描首个有效 MPEG-1 Layer3 帧获取 bitrate，
+// 再用文件大小估算 MP3 时长（对 CBR MP3 准确，VBR 有偏差）。
+func mp3DurationMicros(data []byte) int64 {
+	// MPEG-1 Layer3 bitrate 表（kbps），索引 0 和 15 无效
+	bitrateKbps := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+
+	// 跳过 ID3v2 标签（常见于 TTS 输出文件头）
+	offset := 0
+	if len(data) >= 10 && string(data[0:3]) == "ID3" {
+		syncsafe := func(b []byte) int {
+			return int(b[0])<<21 | int(b[1])<<14 | int(b[2])<<7 | int(b[3])
+		}
+		offset = 10 + syncsafe(data[6:10])
+	}
+
+	// 扫描首个有效帧头（0xFF 0xFB / 0xFF 0xFA 等 MPEG-1 Layer3 同步字）
+	for i := offset; i < len(data)-3; i++ {
+		if data[i] != 0xFF || (data[i+1]&0xE0 != 0xE0) {
+			continue
+		}
+		ver := (data[i+1] >> 3) & 0x03   // 11=MPEG1
+		layer := (data[i+1] >> 1) & 0x03 // 01=Layer3
+		if ver != 3 || layer != 1 {
+			continue
+		}
+		brIdx := (data[i+2] >> 4) & 0x0F
+		if brIdx == 0 || brIdx == 15 {
+			continue
+		}
+		bitsPerSec := int64(bitrateKbps[brIdx]) * 1000
+		if bitsPerSec <= 0 {
+			continue
+		}
+		// 有效数据长度（去掉 ID3 标签）
+		audioBytes := int64(len(data) - offset)
+		durationSec := float64(audioBytes*8) / float64(bitsPerSec)
+		return int64(durationSec * 1_000_000)
+	}
+	return 0
+}
