@@ -1505,11 +1505,9 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 
 	imageStyle := ""
 	var novelTitle string
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
-			imageStyle = novel.AIConfig.ImageStyle
-			novelTitle = novel.Title
-		}
+	if novel := s.fetchNovel(novelID); novel != nil {
+		imageStyle = novel.AIConfig.ImageStyle
+		novelTitle = novel.Title
 	}
 
 	// 批量预取默认形象，用于判断哪些角色需要生成图片
@@ -2009,11 +2007,9 @@ func (s *CharacterService) GenerateLookVisualPrompt(ctx context.Context, tenantI
 	}
 	worldviewContext := ""
 	novelContext := ""
-	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
-			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
-			novelContext = strings.TrimSpace(fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description))
-		}
+	if novel := s.fetchNovel(char.NovelID); novel != nil {
+		worldviewContext = buildWorldviewVisualContext(novel.Worldview)
+		novelContext = strings.TrimSpace(fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description))
 	}
 	basePrompt := char.Description
 	// 如果 lookDesc 和 basePrompt 完全相同（前端传空、后端 fallback），只保留一份避免重复

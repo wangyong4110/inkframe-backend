@@ -349,8 +349,9 @@ func repairCorruptedTitleKey(s string) string {
 //  2. 因上述中文文字替换了逗号分隔符后导致的缺失逗号
 //
 // 修复流程：
-//   step-1 stripNonAsciiOutsideStrings — 移除 JSON 字符串外的非 ASCII 字节序列（UTF-8 多字节）
-//   step-2 insertMissingCommasJSON     — 在相邻值之间插入缺失的逗号
+//
+//	step-1 stripNonAsciiOutsideStrings — 移除 JSON 字符串外的非 ASCII 字节序列（UTF-8 多字节）
+//	step-2 insertMissingCommasJSON     — 在相邻值之间插入缺失的逗号
 func repairAIJSON(s string) string {
 	s = stripNonAsciiOutsideStrings(s)
 	s = insertMissingCommasJSON(s)
@@ -497,3 +498,9 @@ func insertMissingCommasJSON(s string) string {
 	return buf.String()
 }
 
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

@@ -927,9 +927,23 @@ func (s *VideoService) shotTotalAudioDuration(shot *model.StoryboardShot) float6
 	return shot.Duration
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// stripDialogueSpeakerPrefix 去除台词字段中的"角色名："前缀，仅保留台词内容。
+// 例："妈妈：你好吗？" → "你好吗？"
+// Dialogue 字段保留完整格式供 TTS 音色解析，字幕显示时才调用此函数。
+func stripDialogueSpeakerPrefix(text string) string {
+	for _, colon := range []string{"：", ":"} {
+		idx := strings.Index(text, colon)
+		if idx <= 0 || idx > len(colon)*12 {
+			continue
+		}
+		prefix := []rune(text[:idx])
+		if len(prefix) < 1 || len(prefix) > 8 {
+			continue
+		}
+		rest := strings.TrimSpace(text[idx+len(colon):])
+		if rest != "" {
+			return rest
+		}
 	}
-	return s[:n]
+	return text
 }
