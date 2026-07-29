@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -87,47 +86,6 @@ type CapableProvider struct {
 	DisplayName string `json:"display_name"`
 }
 
-// providerDisplayNames maps well-known provider names to human-readable labels.
-var providerDisplayNames = map[string]string{
-	"openai":                        "OpenAI",
-	"claude":                        "Claude (Anthropic)",
-	"anthropic":                     "Claude (Anthropic)",
-	"deepseek":                      "DeepSeek",
-	"doubao":                        "豆包 (Doubao)",
-	"qianwen":                       "通义千问 (Qianwen)",
-	"gemini":                        "Gemini (Google)",
-	"google":                        "Gemini (Google)",
-	"kling":                         "可灵 (Kling)",
-	"seedance":                      "Seedance",
-	"happyhorse":                    "HappyHorse（阿里云百炼）",
-	"aliyun-tts":                    "阿里云 CosyVoice",
-	"qwen-tts":                      "千问 TTS（阿里云百炼）",
-	ai.ProviderNameVolcengineVisual: "火山引擎图像",
-	ai.ProviderNameJimengVideo:      "即梦视频3.0（火山引擎）",
-}
-
-// providerHasCredentials reports whether p has all required credentials.
-// volcengine-visual uses AK/SK (two fields); all other providers use a single APIKey.
-func providerHasCredentials(p *model.ModelProvider) bool {
-	// 需要双密钥的提供商：AK 和 SK 都必须有值
-	switch p.Name {
-	case ai.ProviderNameVolcengineVisual, ai.ProviderNameJimengVideo,
-		"doubao-speech-v1", "kling", "kling-sfx", "kling-tts", "kling-image":
-		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
-	}
-	return strings.TrimSpace(p.APIKey) != ""
-}
-
-func capableProviderDisplayName(providerName, dbDisplayName string) string {
-	if dbDisplayName != "" {
-		return dbDisplayName
-	}
-	if dn := providerDisplayNames[providerName]; dn != "" {
-		return dn
-	}
-	return providerName
-}
-
 // ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
 func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter commons.ModelType) ([]CapableProvider, error) {
 	//normalizedType := normalizeProviderType(typeFilter)
@@ -141,7 +99,7 @@ func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter commons.Mo
 		if err == nil {
 			var filtered []*model.ModelProvider
 			for _, p := range providers {
-				if p.IsActive && providerHasCredentials(p) {
+				if p.IsActive {
 					filtered = append(filtered, p)
 				}
 			}
@@ -155,7 +113,7 @@ func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter commons.Mo
 	for _, p := range providers {
 		result = append(result, CapableProvider{
 			Name:        p.Name,
-			DisplayName: capableProviderDisplayName(p.Name, p.DisplayName),
+			DisplayName: p.DisplayName,
 		})
 	}
 	return result, nil

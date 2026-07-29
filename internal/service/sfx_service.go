@@ -351,55 +351,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 	if sfxDur <= 0 {
 		sfxDur = 5
 	}
-	// 强制提供商：跳过降级链，直接使用指定提供商生成
-	if provider == "elevenlabs-sfx" {
-		if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
-			logger.Printf("[SFXService] shot %d ElevenLabs(forced) hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-			return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
-		} else if err != nil {
-			logger.Errorf("[SFXService] shot %d ElevenLabs(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
-		}
-		return sfxHit{}
-	}
-	if provider == "kling-sfx" {
-		if s.aiSvc == nil {
-			logger.Errorf("[SFXService] shot %d Kling-SFX(forced): aiSvc not wired", shot.ID)
-			return sfxHit{}
-		}
-		aiPrompt := item.Prompt
-		if aiPrompt == "" {
-			aiPrompt = item.Tag
-		}
-		select {
-		case s.aiSfxSem <- struct{}{}:
-		case <-ctx.Done():
-			return sfxHit{}
-		}
-		u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur)
-		<-s.aiSfxSem
-		if err != nil {
-			logger.Errorf("[SFXService] shot %d Kling-SFX(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
-			return sfxHit{}
-		}
-		if u == "" {
-			logger.Errorf("[SFXService] shot %d Kling-SFX(forced) empty URL tag=%q", shot.ID, item.Tag)
-			return sfxHit{}
-		}
-		noCacheFlag := false
-		if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
-			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
-			if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
-				u = ossURL
-			} else {
-				logger.Errorf("[SFXService] shot %d Kling-SFX(forced) OSS upload failed: %v", shot.ID, uploadErr)
-				noCacheFlag = true
-			}
-		} else if strings.HasPrefix(u, "https://") {
-			noCacheFlag = true
-		}
-		logger.Printf("[SFXService] shot %d Kling-SFX(forced) hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
-		return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
-	}
+
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
 	// force=true 时跳过，确保用户主动重新生成时不复用旧资产链接。
 	if s.assetRepo != nil && !force {
@@ -426,71 +378,42 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Printf("[SFXService] shot %d asset-lib miss tag=%q (found %d assets, none with URL)", shot.ID, item.Tag, len(assets))
 		}
 	}
-	// 1. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
-	if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
-		// ElevenLabs 返回 file:// 临时文件路径，浏览器无法直接访问，需上传至 OSS
-		if s.storageSvc != nil && strings.HasPrefix(u, "file://") {
-			localPath := strings.TrimPrefix(u, "file://")
-			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
-			if ossURL, uploadErr := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); uploadErr == nil {
-				u = ossURL
-			} else {
-				logger.Errorf("[SFXService] shot %d ElevenLabs OSS upload failed: %v", shot.ID, uploadErr)
-			}
-		}
-		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
-	} else if err != nil {
-		if !strings.Contains(err.Error(), "no credentials") && !strings.Contains(err.Error(), "not configured") {
-			logger.Warnf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
-		}
-	}
+
 	// 2. AI 文生音效（Kling SFX 等 sfx 类型提供商）
 	// 优先使用 Prompt（中文自然语言描述，信息更丰富），降级到英文搜索词 Tag
-	if s.aiSvc != nil {
-		aiPrompt := item.Prompt
-		if aiPrompt == "" {
-			aiPrompt = item.Tag
-		}
-		select {
-		case s.aiSfxSem <- struct{}{}:
-		case <-ctx.Done():
-			return sfxHit{}
-		}
-		u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur)
-		<-s.aiSfxSem
-		if err == nil && u != "" {
-			// Kling SFX 等返回 CDN 临时链接（24~48h 后过期）；
-			// 生成后立即下载并上传存储，保证长期可访问。
-			// 上传成功 → 永久 URL，可以缓存；上传失败 → 继续使用 CDN URL，但标记不缓存。
-			noCacheFlag := false
-			if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
-				ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
-				if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
-					u = ossURL
-				} else {
-					logger.Errorf("[SFXService] shot %d AI-SFX upload failed (using CDN URL, noCache): %v", shot.ID, uploadErr)
-					noCacheFlag = true
-				}
-			} else if strings.HasPrefix(u, "https://") {
-				// 无存储服务，CDN 临时链接不缓存
+	aiPrompt := item.Prompt
+	if aiPrompt == "" {
+		aiPrompt = item.Tag
+	}
+	select {
+	case s.aiSfxSem <- struct{}{}:
+	case <-ctx.Done():
+		return sfxHit{}
+	}
+	u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur)
+	<-s.aiSfxSem
+	if err == nil && u != "" {
+		// Kling SFX 等返回 CDN 临时链接（24~48h 后过期）；
+		// 生成后立即下载并上传存储，保证长期可访问。
+		// 上传成功 → 永久 URL，可以缓存；上传失败 → 继续使用 CDN URL，但标记不缓存。
+		noCacheFlag := false
+		if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
+			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+			if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
+				u = ossURL
+			} else {
+				logger.Errorf("[SFXService] shot %d AI-SFX upload failed (using CDN URL, noCache): %v", shot.ID, uploadErr)
 				noCacheFlag = true
 			}
-			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
-			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
-		} else if err != nil && !isNoProviderErr(err) {
-			logger.Warnf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
+		} else if strings.HasPrefix(u, "https://") {
+			// 无存储服务，CDN 临时链接不缓存
+			noCacheFlag = true
 		}
+		logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
+		return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
+	} else if err != nil && !isNoProviderErr(err) {
+		logger.Warnf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
-
-	// 4. AudioLDM（本地部署模型，免费、无速率限制）
-	if u, dur, err := s.generateAudioLDMForTag(ctx, tenantID, item, shot); err == nil && u != "" {
-		logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-		return sfxHit{url: u, source: "audioldm", durationSecs: dur}
-	} else if err != nil && !strings.Contains(err.Error(), "audioldm not configured") {
-		logger.Errorf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
-	}
-
 	return sfxHit{}
 }
 

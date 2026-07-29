@@ -598,7 +598,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succ, fail, err := svcs.ItemService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
+				succ, fail, err := svcs.ItemService.BatchGenerateImages(tenantID, novelID, params.Force, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -640,7 +640,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(ctx, tenantID, novelID, params.Provider, params.Force, progressFn)
+				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(ctx, tenantID, novelID, params.Force, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -653,7 +653,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-				succ, fail, err := svcs.SceneAnchorService.GenerateChapterRefImages(ctx, tenantID, params.NovelID, params.AnchorIDs, params.Provider, progressFn)
+				succ, fail, err := svcs.SceneAnchorService.GenerateChapterRefImages(ctx, tenantID, params.NovelID, params.AnchorIDs, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -741,55 +741,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck
 			}
 		})
-	}
-
-	// bgm_analyze and bgm_generate
-	if svcs.BGMService != nil && svcs.VideoService != nil {
-		bgmResume := func(generate bool) func(context.Context, *model.AsyncTask) {
-			return func(ctx context.Context, t *model.AsyncTask) {
-				videoID := t.EntityID
-				if videoID == 0 {
-					return
-				}
-				var params struct {
-					UserPrompt string `json:"user_prompt"`
-				}
-				if t.ParamsJSON != "" {
-					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-				}
-				shots, err := svcs.VideoService.GetStoryboard(videoID, 0)
-				if err != nil || len(shots) == 0 {
-					svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
-					return
-				}
-				tenantID := t.TenantID
-				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				if !generate {
-					segs, err := svcs.BGMService.AnalyzeBGMForVideo(ctx, shots, repos.VideoBGMSegmentRepo, videoID, tenantID, params.UserPrompt)
-					if err != nil {
-						svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-					} else {
-						svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(segs)}) //nolint:errcheck
-					}
-				} else {
-					progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-					segs, err := svcs.BGMService.GenerateBGMSegments(ctx, shots, repos.VideoBGMSegmentRepo, videoID, tenantID, params.UserPrompt, progressFn)
-					if err != nil {
-						svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-					} else {
-						matched := 0
-						for _, s := range segs {
-							if s.URL != "" {
-								matched++
-							}
-						}
-						svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"total": len(segs), "matched": matched}) //nolint:errcheck
-					}
-				}
-			}
-		}
-		svcs.TaskService.RegisterResumeHandler("bgm_analyze", bgmResume(false))
-		svcs.TaskService.RegisterResumeHandler("bgm_generate", bgmResume(true))
 	}
 
 	// screenplay_gen: 分场剧本生成/重新生成。full_pipeline=true 时是"生成剧本"一键管线——先
@@ -1053,11 +1004,10 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 				defer cancel()
 				rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, service.GenerateAudioOptions{
-					Text:     vparams.Text,
-					Voice:    vparams.VoiceID,
-					Speed:    1.0,
-					Emotion:  "",
-					Language: nil,
+					Text:    vparams.Text,
+					Voice:   vparams.VoiceID,
+					Speed:   1.0,
+					Emotion: "",
 				})
 				if err != nil {
 					logger.Errorf("TaskService resume voice_preview(voice) %s failed: %v", t.TaskID, err)
@@ -1265,12 +1215,17 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			newURL, err := svcs.AIService.EditImageWithInstruction(ctx, t.TenantID, params.ImageURL, params.Instruction)
+			resp, err := svcs.AIService.GenerateImage(ctx, t.TenantID, &service.ImageGenerationOptions{
+				Prompt:          params.Instruction,
+				Size:            "",
+				ReferenceImages: []string{params.ImageURL},
+				ImageStyle:      "",
+			})
 			if err != nil {
 				logger.Errorf("TaskService resume image_edit %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, "failed to edit image: "+err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"image_url": resp.URL}) //nolint:errcheck
 			}
 		})
 	}
@@ -1328,12 +1283,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 					return
 				}
-				svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
-				modelUsed := params.Req.ModelOverride
-				if modelUsed == "" && svcs.NovelService != nil {
-					modelUsed = svcs.NovelService.GetAIService().GetDefaultProviderName()
-				}
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": chapter, "model_used": modelUsed}) //nolint:errcheck
+				svcs.TaskService.UpdateProgress(t.TaskID, 90)                                                                           //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": chapter, "model_used": params.Req.ModelOverride}) //nolint:errcheck
 
 				if svcs.NotificationService != nil && params.CallerUserID > 0 {
 					_ = svcs.NotificationService.Send(
@@ -1437,18 +1388,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				var shots []*model.StoryboardShot
-				var err error
-				switch {
-				case params.Req.VoiceFirst:
-					// 配音优先：先生成 TTS，以配音时长决定视频时长，保证声画同步
-					shots, err = svcs.VideoService.VoiceFirstGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
-				case params.Req.Sequential:
-					// 顺序模式：每镜完成后同步 chain 最后一帧再提交下一镜，保证 I2V 链接
-					shots, err = svcs.VideoService.SequentialGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
-				default:
-					shots, err = svcs.VideoService.BatchGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
-				}
+				shots, err := svcs.VideoService.BatchGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 					return
@@ -1813,72 +1753,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": updated}) //nolint:errcheck
-		})
-	}
-
-	// image_upscale: 高清放大（AI 增强，需从 ParamsJSON 读 image_url/scale）
-	if svcs.AIService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageUpscale, func(ctx context.Context, t *model.AsyncTask) {
-			var params struct {
-				ImageURL string `json:"image_url"`
-				Scale    int    `json:"scale"`
-				NovelID  uint   `json:"novel_id"`
-			}
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			if params.ImageURL == "" {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			if params.Scale <= 0 {
-				params.Scale = 2
-			}
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			newURL, err := svcs.AIService.UpscaleImage(ctx, t.TenantID, params.NovelID, params.ImageURL, params.Scale)
-			if err != nil {
-				logger.Errorf("TaskService resume image_upscale %s failed: %v", t.TaskID, err)
-				svcs.TaskService.Fail(t.TaskID, "高清处理失败: "+err.Error()) //nolint:errcheck
-				return
-			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
-		})
-	}
-
-	// lipsync: shot-level lip-sync video generation (VideoHandler.GenerateLipSync)
-	if svcs.VideoService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLipSync, func(ctx context.Context, t *model.AsyncTask) {
-			shotID := t.EntityID
-			if shotID == 0 {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			var params struct {
-				VideoID uint                   `json:"video_id"`
-				Req     service.LipSyncRequest `json:"req"`
-			}
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			if params.VideoID == 0 {
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
-				return
-			}
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.VideoService.GenerateLipSyncVideoWithReq(ctx, params.VideoID, shotID, params.Req)
-			if err != nil {
-				logger.Errorf("TaskService resume lipsync %s failed: %v", t.TaskID, err)
-				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-				return
-			}
-			svcs.TaskService.UpdateProgress(t.TaskID, 20) //nolint:errcheck
-			// 同步轮询直到完成（timeout 内部控制）
-			if pollErr := svcs.VideoService.PollLipSyncUntilDone(ctx, params.VideoID, shotID); pollErr != nil {
-				logger.Errorf("TaskService resume lipsync(poll) %s failed: %v", t.TaskID, pollErr)
-				svcs.TaskService.Fail(t.TaskID, pollErr.Error()) //nolint:errcheck
-				return
-			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"lip_sync_task_id": result.TaskID}) //nolint:errcheck
 		})
 	}
 }

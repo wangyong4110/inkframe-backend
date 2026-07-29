@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -40,7 +41,7 @@ type VideoService struct {
 	segmentRepo           *repository.ShotVoiceSegmentRepository
 	reviewRecordRepo      *repository.ReviewRecordRepository
 	ignoredSuggestionRepo *repository.IgnoredReviewIssueRepository
-	lookRepo              *repository.CharacterLookRepository
+	lookupService         *CharacterLookupService
 	itemRepo              *repository.ItemRepository
 	chapterItemRepo       *repository.ChapterItemRepository
 	worldviewRepo         *repository.WorldviewRepository
@@ -138,8 +139,8 @@ func (s *VideoService) GetNovelVideoConfig(novelID uint) *model.NovelVideoConfig
 	return novel.VideoConfig
 }
 
-func (s *VideoService) WithLookRepo(r *repository.CharacterLookRepository) *VideoService {
-	s.lookRepo = r
+func (s *VideoService) WithLookService(r *CharacterLookupService) *VideoService {
+	s.lookupService = r
 	return s
 }
 
@@ -893,7 +894,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 	// 注入到 prompt 最前面，与分镜级视频生成（GenerateShotVideo）保持一致。
 	videoPrompt := fmt.Sprintf("%s — cinematic, high quality", video.Title)
 	if artStyle := s.resolveArtStyle(video.ID); artStyle != "" {
-		videoPrompt = resolveVideoStylePrefix(artStyle) + videoPrompt
+		videoPrompt = resolveStyleCategory(artStyle) + videoPrompt
 	}
 	req := &ai.VideoGenerateRequest{
 		Prompt:      videoPrompt,
@@ -937,6 +938,7 @@ func (s *VideoService) resolveVideoProvider(tenantID uint, modelName string) (ai
 	if p, err := s.aiService.GetTenantVideoProvider(tenantID, modelName); err == nil {
 		return p, modelName, nil
 	}
+	return nil, "", errors.New("video provider not configured")
 }
 
 // hasVideoProvider 判断当前租户是否存在可用的视频生成提供商（静态或 DB）。

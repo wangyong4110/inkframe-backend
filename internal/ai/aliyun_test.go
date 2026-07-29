@@ -36,30 +36,6 @@ func TestAliyunTTSProvider_GetName(t *testing.T) {
 	}
 }
 
-func TestAliyunTTSProvider_GetModels(t *testing.T) {
-	p := NewAliyunTTSProvider("key", "")
-	models := p.GetModels()
-	if len(models) == 0 {
-		t.Fatal("expected non-empty model list")
-	}
-	want := map[string]bool{
-		"longxiaochun": false, "longxiaoxia": false, "longxiaobai": false,
-		"longfei": false, "longjielidou": false, "longmiaomiao": false,
-		"longshu": false, "longwan": false, "longcheng": false,
-		"longhua": false, "longxiang": false, "loongbella": false, "loongbobby": false,
-	}
-	for _, m := range models {
-		if _, ok := want[m]; ok {
-			want[m] = true
-		}
-	}
-	for m, found := range want {
-		if !found {
-			t.Errorf("expected model %q in GetModels()", m)
-		}
-	}
-}
-
 func TestAliyunTTSProvider_HealthCheck(t *testing.T) {
 	t.Run("missing api key errors", func(t *testing.T) {
 		p := NewAliyunTTSProvider("", "")

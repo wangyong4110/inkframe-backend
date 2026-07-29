@@ -66,7 +66,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 
 	// 确定是否有视频提供商（对整批分镜一致；slideshow 模式下无意义，不参与分支判断）
 	hasProvider := s.hasVideoProvider(s.videoTenantID(video))
-	logger.Printf("BatchGenerateShots: hasVideoProvider=%v effectiveProvider=%q", hasProvider, effectiveProvider)
+	logger.Printf("BatchGenerateShots: hasVideoProvider=%v", hasProvider)
 
 	// 并发数和队列键均从 DB 模型配置中统一获取
 	tenantID := s.videoTenantID(video)
@@ -76,13 +76,6 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	}
 	concurrency := 1
 	queueKey := fmt.Sprintf("%d:%s-gen", tenantID, providerType)
-
-	var taskQueue *ModelTaskQueue
-	if s.aiService != nil {
-		taskQueue = s.aiService.ImageQueue
-	} else {
-		taskQueue = newModelTaskQueue()
-	}
 
 	total := len(shotIDs)
 	var done atomic.Int32
@@ -271,12 +264,6 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 	tenantIDImg := s.videoTenantID(video)
 	concurrency := 1
 	queueKey := fmt.Sprintf("%d:image-gen", tenantIDImg)
-	var imageQueue *ModelTaskQueue
-	if s.aiService != nil {
-		imageQueue = s.aiService.ImageQueue
-	} else {
-		imageQueue = newModelTaskQueue()
-	}
 
 	total := len(shotIDs)
 	var done atomic.Int32
@@ -382,43 +369,41 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 
 // generateShotReferenceImage 为分镜生成参考帧图像，返回图片URL和错误。
 // ─── 参考图合成辅助函数 ─────────────────────────────────────────────────────
-
-const maxCompositeImages = 4 // 最多合成张数（角色最多3张 + 场景1张）
-
-// getCharDefaultLook 返回角色当前使用的形象：优先取 Character.DefaultLookID 指向的形象；
-// 最终兜底取第一个含三视图的形象（如老数据未设置 DefaultLookID）。
-func (s *VideoService) getCharDefaultLook(char *model.Character) *model.CharacterLook {
-	if s.lookRepo == nil {
-		return nil
-	}
-	if char.DefaultLookID != 0 {
-		if defaultLook, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil && defaultLook != nil {
-			return defaultLook
-		}
-	}
-	// 兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图的形象
-	if looks, err := s.lookRepo.ListByCharacter(char.ID); err == nil {
-		for _, l := range looks {
-			if l.ThreeViewSheet != "" {
-				logger.Printf("[getCharDefaultLook] charID=%d: DefaultLookID unset, fallback to first look with ThreeViewSheet id=%d", char.ID, l.ID)
-				return l
-			}
-		}
-	}
-	return nil
-}
+//
+//// getCharDefaultLook 返回角色当前使用的形象：优先取 Character.DefaultLookID 指向的形象；
+//// 最终兜底取第一个含三视图的形象（如老数据未设置 DefaultLookID）。
+//func (s *VideoService) getCharDefaultLook(char *model.Character) *model.CharacterLook {
+//	if s.lookRepo == nil {
+//		return nil
+//	}
+//	if char.DefaultLookID != 0 {
+//		if defaultLook, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil && defaultLook != nil {
+//			return defaultLook
+//		}
+//	}
+//	// 兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图的形象
+//	if looks, err := s.lookRepo.ListByCharacter(char.ID); err == nil {
+//		for _, l := range looks {
+//			if l.ThreeViewSheet != "" {
+//				logger.Printf("[getCharDefaultLook] charID=%d: DefaultLookID unset, fallback to first look with ThreeViewSheet id=%d", char.ID, l.ID)
+//				return l
+//			}
+//		}
+//	}
+//	return nil
+//}
 
 // charLookRefImage 返回角色形象的参考图 URL（三视图合图，含正面/侧面/背面/面部特写）。
-func (s *VideoService) charLookRefImage(look *model.CharacterLook) string {
-	if look == nil {
-		return ""
-	}
-	return normalizeMediaURL(look.ThreeViewSheet)
-}
+//func (s *VideoService) charLookRefImage(look *model.CharacterLook) string {
+//	if look == nil {
+//		return ""
+//	}
+//	return normalizeMediaURL(look.ThreeViewSheet)
+//}
 
 // ─── 分镜参考图生成 ──────────────────────────────────────────────────────────
 
-func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (string, error) {
+func (s *VideoService) generateShotReferenceImage(ctx context.Context, shot *model.StoryboardShot) (string, error) {
 	if s.aiService == nil {
 		return "", fmt.Errorf("AI service not initialized")
 	}
@@ -431,78 +416,21 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色三视图（ThreeViewSheet），最多 maxCharRefs 张
-	const maxCharRefs = maxCompositeImages - 1
+	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色三视图
 	var characterPortraits []string
-	var refSources []string
-	// portraitOwners 与 characterPortraits 严格并行：记录有参考图角色的名字和视觉描述。
-	// 用于单参考图提供商降级策略：主角用参考图，次要角色用文字描述。
-	type portraitOwner struct{ name, vp string }
-	var portraitOwners []portraitOwner
-	// noPortraitVPs：无参考图角色的视觉描述，所有提供商都只能靠文字约束。
-	var noPortraitVPs []string
 	if len(shot.CharacterIDs) > 0 {
-		ids := []uint(shot.CharacterIDs)
-		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
-		if batchErr != nil {
-			logger.Errorf("[CharRef] shot#%d ListByIDs(%v) failed: %v", shot.ShotNo, ids, batchErr)
-		} else if len(batchChars) == 0 {
-			logger.Errorf("[CharRef] shot#%d ListByIDs(%v) returned empty — characters may have been deleted", shot.ShotNo, ids)
-		} else {
-			// 按 shot.CharacterIDs 顺序处理，确保主角色（首位）的 Portrait 作为 DreamO 主参考图。
-			// ListByIDs 使用 WHERE IN 不保证顺序，必须手动按 CharacterIDs 重排。
-			charMap := make(map[uint]*model.Character, len(batchChars))
-			for _, c := range batchChars {
-				charMap[c.ID] = c
+		for _, charId := range shot.CharacterIDs {
+			activeLook, _ := s.lookupService.getCharDefaultLook(charId)
+			if activeLook == nil {
+				continue
 			}
-			for _, cid := range shot.CharacterIDs {
-				char, ok := charMap[cid]
-				if !ok {
-					continue
-				}
-				activeLook := s.getCharDefaultLook(char)
-				var refImage, vprompt string
-				if activeLook != nil {
-					refImage = s.charLookRefImage(activeLook)
-					vprompt = activeLook.VisualPrompt
-				}
-				urlType := "empty"
-				if strings.HasPrefix(refImage, "https://") || strings.HasPrefix(refImage, "http://") {
-					urlType = "absolute-url"
-				} else if strings.HasPrefix(refImage, "/") {
-					urlType = "relative-path"
-				} else if refImage != "" {
-					urlType = "other"
-				}
-				logger.Printf("[CharRef] shot#%d charID=%d name=%q activeLook=%v ref=%q urlType=%s",
-					shot.ShotNo, char.ID, char.Name, activeLook != nil, refImage, urlType)
-				charVP := vprompt
-				if charVP == "" {
-					charVP = buildCharTextAnchor(char)
-				}
-				if refImage != "" && len(characterPortraits) < maxCharRefs {
-					characterPortraits = append(characterPortraits, refImage)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
-					portraitOwners = append(portraitOwners, portraitOwner{name: char.Name, vp: charVP})
-				} else {
-					noPortraitVPs = append(noPortraitVPs, charVP)
-				}
-			}
+			characterPortraits = append(characterPortraits, activeLook.ThreeViewSheet)
 		}
-	}
-
-	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
-		shot.ShotNo, shot.CharacterIDs, refSources, len(characterPortraits))
-	if len(shot.CharacterIDs) > 0 && len(characterPortraits) == 0 {
-		logger.Errorf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
 	}
 
 	promptText := shot.Description
 
-	// 场景锚点：注入锁定词，并收集场景参考图。
-	// !! 必须在角色注入之前 prepend，这样角色信息最终排在场景描述前面。
-	// 对 Seedream 等非 IP-Adapter 模型，prompt 靠前的 token 权重更高；
-	// 若场景描述排在第一位，模型优先渲染场景而忽略角色。
+	// 场景锚点：注入锁定词，并收集场景参考图
 	var sceneRefImage string
 	var sceneAnchorName string
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
@@ -515,52 +443,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 角色外观描述注入（prepend，排在场景锚点前）：
-	// DreamO 模式（有参考图）：IP-Adapter 通过参考图保证角色外貌，注入冗长 VP 会：
-	//   ① 将场景描述（LLM image_prompt）推到 600 字截断线后被丢弃
-	//   ② 与参考图的外貌信号产生矛盾干扰
-	//   因此 DreamO 模式只注入无参考图角色的 VP（这些角色外貌无其他约束），有参考图角色跳过。
-	// Text2ImgV3 模式（无参考图）：文字是唯一外貌约束，注入全部 VP。
-	if len(noPortraitVPs) > 0 || (len(portraitOwners) > 0 && len(characterPortraits) == 0) {
-		if len(characterPortraits) > 0 {
-			// DreamO 模式：只注入无参考图角色的 VP
-			if len(noPortraitVPs) > 0 {
-				promptText = strings.Join(noPortraitVPs, ", ") + ", " + promptText
-			}
-		} else {
-			// Text2ImgV3 模式（无参考图）：文字是唯一外貌约束，注入全部 VP
-			var allVPs []string
-			for _, po := range portraitOwners {
-				allVPs = append(allVPs, po.vp)
-			}
-			allVPs = append(allVPs, noPortraitVPs...)
-			if len(allVPs) > 0 {
-				promptText = strings.Join(allVPs, ", ") + ", " + promptText
-			}
-		}
-	}
-
-	// 角色名 + 动作/姿态（最后 prepend → 最终排在 prompt 最前面）：
-	// 角色名排在 prompt 最前使 Seedream 将其识别为画面主体。
-	// DreamO 模式（有参考图）和 Text2ImgV3 模式（无参考图）均注入，确保模型知道角色在做什么。
-	hasAnyShotChars := len(characterPortraits) > 0 || len(noPortraitVPs) > 0 || len(portraitOwners) > 0
-	if hasAnyShotChars {
-		var presenceTokens []string // 人物存在性，从 portraitOwners 加载的角色名
-		for _, po := range portraitOwners {
-			if po.name != "" {
-				presenceTokens = append(presenceTokens, po.name)
-			}
-		}
-		if len(presenceTokens) > 0 {
-			promptText = strings.Join(presenceTokens, "; ") + ", " + promptText
-		}
-	}
-
-	// 道具参考图：使用分镜显式绑定的道具（shot.ItemIDs，通过"绑定道具"设置），
-	// 优先取其生成完成的道具图（ImageURL —— 与角色 ThreeViewSheet 同源语义：AI 生成/确认后的最终形象图，
-	// ItemsTab"批量生成图片"产出的就是这张），ImageURL 为空时退化为用户上传的原始参考图（ReferenceImageURL）。
-	// 有角色时（DreamO 模式）：道具图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
-	// 无角色时（Text2ImgV3 模式）：可加入道具图作为视觉参考。
+	// 道具参考图：使用分镜显式绑定的道具（shot.ItemIDs，通过"绑定道具"设置）
 	var itemRefImages []string
 	var itemRefNames []string // 与 itemRefImages 严格并行，用于参考图编号替换
 	if s.itemRepo != nil && len(shot.ItemIDs) > 0 {
@@ -590,8 +473,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 		}
 	}
-
-	ctx := context.Background()
 
 	// 获取视频的 ArtStyle、TenantID、质量档位和宽高比
 	// （提前到角色参考图截断逻辑之前，因为截断与否需要按 tenantID 判断实际生效的图片模型）
@@ -640,9 +521,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
 		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")
 
-	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
-	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s", shot.ShotNo, qualityTier, imageAspectRatio)
-
 	// Prompt 前缀策略：
 	// shot.Description 已包含画风/画质词/镜头参数（见 storyboard_generate.j2 的结构化要求），
 	// 只补充项目级调色和风格词，避免重复注入镜头参数（如 35mm vs 85mm）产生冲突，导致画面比例/构图异常。
@@ -651,28 +529,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 使用 resolveStyleIllustrationDesc（英文）而非 resolveStyleDesc（中文），
 	// 因为扩散模型对中文 token 信号弱且可能被忽略。
 	// 无条件注入：LLM 生成的分镜描述可能残留旧风格词，以项目当前设置覆盖为准。
-	styleDesc := ""
-	if artStyle != "" {
-		styleDesc = resolveStyleIllustrationDesc(artStyle)
-	}
-
-	// description 若已带了这段风格词（LLM 有时会把 ImageStyleHint 原样写进开头），
-	// 此处再无条件 prepend 一次就会导致同一段风格词在 prompt 里出现两次，
-	// 白白占用 800 字符上限的空间——见 promptText 已包含 styleDesc 时跳过注入。
-	var prefix string
-	if styleDesc != "" && !strings.Contains(promptText, styleDesc) {
-		prefix += styleDesc + ", "
-	}
-	if prefix != "" {
-		promptText = prefix + promptText
-	}
-
-	// 画质词强制注入：先移除与当前风格冲突的 realistic 质量词（防止旧分镜或 LLM 示例遗留的
-	// "photorealistic, cinematic lighting" 污染动漫/水彩/国画等风格），再追加风格匹配的质量词。
-	promptText = removeConflictingQualityTokens(promptText, artStyle)
-	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
-		promptText += ", " + resolveStyleQualityTokens(artStyle)
-	}
+	promptText += resolveStyleIllustrationDesc(artStyle)
 
 	// 参考图说明：在 prompt 最前面追加"参考图N对应角色/道具/场景名"的说明，
 	// 使模型能将参考图位置与名称对应，避免误判为同一对象的多视角导致角色重复。
@@ -703,43 +560,25 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// 场景锚点图片不加入 allRefImages：
 	// 见上方"参考图列表"注释。二次读取也同样跳过场景图，防止并发批次中后加进来。
-
 	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
-	var sceneSeed int64
-	if shot.SceneAnchorID != nil {
-		sceneSeed = int64(*shot.SceneAnchorID) * 31337
-	}
-	imageURL, err := s.aiService.GenerateImage(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, "", sceneSeed)
-	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
-		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
-		// 此类错误是确定性失败，重试相同参考图无意义。
-		// 降级为纯文生图（无参考图），但需补注入参考图角色的 VisualPrompt（原 DreamO 模式下这些 VP 被跳过，
-		// 因为参考图承担了外貌约束；纯文生图时文字是唯一外貌依据，必须补回）。
-		logger.Warnf("generateShotReferenceImage: shot %d ref image blocked by safety filter, falling back to text-only with injected char VPs", shot.ShotNo)
-		textOnlyPrompt := promptForFallback // 使用替换前版本，[图N] 在无参考图时无意义
-		if len(cappedPortraits) > 0 {
-			var fallbackVPs []string
-			for i := range cappedPortraits {
-				if i < len(portraitOwners) && portraitOwners[i].vp != "" {
-					fallbackVPs = append(fallbackVPs, portraitOwners[i].vp)
-				}
-			}
-			if len(fallbackVPs) > 0 {
-				textOnlyPrompt = strings.Join(fallbackVPs, ", ") + ", " + textOnlyPrompt
-			}
-		}
-		imageURL, err = s.aiService.GenerateImage(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, "", sceneSeed)
-	}
+	resp, err := s.aiService.GenerateImage(ctx, tenantID, &ImageGenerationOptions{
+		Prompt:          promptText,
+		NegativePrompt:  "",
+		Size:            "2048*2048",
+		ReferenceImages: allRefImages,
+		ImageStyle:      artStyle,
+	})
+
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
 	}
-	if imageURL == "" {
+	if resp.URL == "" {
 		logger.Printf("generateShotReferenceImage: image gen returned empty URL for shot %d", shot.ShotNo)
 		return "", fmt.Errorf("image provider returned empty URL")
 	}
 
-	return imageURL, nil
+	return resp.URL, nil
 }
 
 // isContentSafetyError 判断错误是否由 Volcengine 内容安全系统触发。
@@ -787,23 +626,6 @@ func buildRefAnnotation(nameToRefIdx map[string]int) string {
 	}
 	return "参考图说明：" + strings.Join(mappings, "，") +
 		"。每张参考图各对应不同的独立角色/道具/场景，每个角色只出现一次，不得重复。"
-}
-
-// buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。
-// 优先使用 AppearancePromptEN（AI 生成的时代准确形象提示词），兜底才用截断描述。
-func buildCharTextAnchor(char *model.Character) string {
-	if char.Meta.AppearancePrompt != "" {
-		return char.Meta.AppearancePrompt
-	}
-	anchor := char.Name
-	if char.Description != "" {
-		desc := char.Description
-		if runes := []rune(desc); len(runes) > 50 {
-			desc = string(runes[:50])
-		}
-		anchor += ", " + desc
-	}
-	return anchor
 }
 
 // 成功后自动更新 DB 中的 ImageURL 并返回新 URL。
@@ -1985,101 +1807,102 @@ func normalizeMediaURL(u string) string {
 	return u
 }
 
-// ─── Sequential Generation ────────────────────────────────────────────────────
-
-// SequentialGenerateShots 顺序生成分镜（高质量衔接模式）：
-// 每个分镜提交后内联等待完成，再同步提取最后一帧写入下一分镜的 ReferenceImageURL，
-// 保证所有分镜均基于前一镜头真实最后一帧做 I2V，从根本上消除割裂感。
-// 代价：无并发，速度约为并发模式的 1/N，适合对连贯性要求极高的最终输出。
-func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
-	video, err := s.videoRepo.GetByID(videoID)
-	if err != nil {
-		return nil, err
-	}
-	if qualityTierOverride != "" {
-		video.RenderConfig.QualityTier = qualityTierOverride
-	}
-	effectiveProvider := ""
-	if len(provider) > 0 {
-		effectiveProvider = provider[0]
-	}
-	aspectRatio := video.RenderConfig.AspectRatio
-	if video.NovelID > 0 && s.novelRepo != nil {
-		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
-			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
-				aspectRatio = novel.VideoConf().VideoAspectRatio
-			}
-		}
-	}
-
-	allShots, batchErr := s.storyboardRepo.BatchGetByIDs(shotIDs)
-	if batchErr != nil {
-		return nil, batchErr
-	}
-	shotMap := make(map[uint]*model.StoryboardShot, len(allShots))
-	for _, sh := range allShots {
-		shotMap[sh.ID] = sh
-	}
-	var ordered []*model.StoryboardShot
-	for _, sid := range shotIDs {
-		if sh, ok := shotMap[sid]; ok && sh.VideoID == videoID {
-			ordered = append(ordered, sh)
-		}
-	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ShotNo < ordered[j].ShotNo })
-
-	total := len(ordered)
-	var completed []*model.StoryboardShot
-	logger.Printf("SequentialGenerateShots: videoID=%d total=%d provider=%s", videoID, total, effectiveProvider)
-
-	for idx, shot := range ordered {
-		shot.Status = "generating"
-		s.refreshShotUserEditableFields(shot)
-		if e := s.storyboardRepo.Update(shot); e != nil {
-			logger.Errorf("SequentialGenerateShots: shot %d status update: %v", shot.ShotNo, e)
-		}
-
-		const maxRetries = 3
-		var genErr error
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			genErr = s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
-			if genErr == nil {
-				break
-			}
-			logger.Errorf("SequentialGenerateShots: shot %d attempt %d/%d: %v", shot.ShotNo, attempt, maxRetries, genErr)
-			if attempt < maxRetries {
-				time.Sleep(time.Duration(attempt*2) * time.Second)
-			}
-		}
-		if genErr != nil {
-			logger.Errorf("SequentialGenerateShots: shot %d failed after %d attempts: %v", shot.ShotNo, maxRetries, genErr)
-			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed"}); e != nil {
-				logger.Errorf("SequentialGenerateShots: UpdateFields shot %d: %v", shot.ID, e)
-			}
-			if progressFn != nil {
-				progressFn((idx + 1) * 99 / total)
-			}
-			continue
-		}
-		logger.Printf("SequentialGenerateShots: shot %d submitted, waiting for completion...", shot.ShotNo)
-
-		// 同步等待完成（最长 10 分钟/镜头）
-		// waitForShotCompletion 内部会调用 chainLastFrameToNextShot，
-		// 确保下一镜头的 reference_image_url 在提交前已写入 DB。
-		finishedShot, waitErr := s.waitForShotCompletion(shot, 10*time.Minute)
-		if waitErr != nil {
-			logger.Errorf("SequentialGenerateShots: shot %d wait: %v", shot.ShotNo, waitErr)
-		} else {
-			completed = append(completed, finishedShot)
-			logger.Printf("SequentialGenerateShots: shot %d completed, chained to next", shot.ShotNo)
-		}
-		if progressFn != nil {
-			progressFn((idx + 1) * 99 / total)
-		}
-	}
-	logger.Printf("SequentialGenerateShots: videoID=%d done %d/%d shots", videoID, len(completed), total)
-	return completed, nil
-}
+//
+//// ─── Sequential Generation ────────────────────────────────────────────────────
+//
+//// SequentialGenerateShots 顺序生成分镜（高质量衔接模式）：
+//// 每个分镜提交后内联等待完成，再同步提取最后一帧写入下一分镜的 ReferenceImageURL，
+//// 保证所有分镜均基于前一镜头真实最后一帧做 I2V，从根本上消除割裂感。
+//// 代价：无并发，速度约为并发模式的 1/N，适合对连贯性要求极高的最终输出。
+//func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
+//	video, err := s.videoRepo.GetByID(videoID)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if qualityTierOverride != "" {
+//		video.RenderConfig.QualityTier = qualityTierOverride
+//	}
+//	effectiveProvider := ""
+//	if len(provider) > 0 {
+//		effectiveProvider = provider[0]
+//	}
+//	aspectRatio := video.RenderConfig.AspectRatio
+//	if video.NovelID > 0 && s.novelRepo != nil {
+//		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
+//			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
+//				aspectRatio = novel.VideoConf().VideoAspectRatio
+//			}
+//		}
+//	}
+//
+//	allShots, batchErr := s.storyboardRepo.BatchGetByIDs(shotIDs)
+//	if batchErr != nil {
+//		return nil, batchErr
+//	}
+//	shotMap := make(map[uint]*model.StoryboardShot, len(allShots))
+//	for _, sh := range allShots {
+//		shotMap[sh.ID] = sh
+//	}
+//	var ordered []*model.StoryboardShot
+//	for _, sid := range shotIDs {
+//		if sh, ok := shotMap[sid]; ok && sh.VideoID == videoID {
+//			ordered = append(ordered, sh)
+//		}
+//	}
+//	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ShotNo < ordered[j].ShotNo })
+//
+//	total := len(ordered)
+//	var completed []*model.StoryboardShot
+//	logger.Printf("SequentialGenerateShots: videoID=%d total=%d provider=%s", videoID, total, effectiveProvider)
+//
+//	for idx, shot := range ordered {
+//		shot.Status = "generating"
+//		s.refreshShotUserEditableFields(shot)
+//		if e := s.storyboardRepo.Update(shot); e != nil {
+//			logger.Errorf("SequentialGenerateShots: shot %d status update: %v", shot.ShotNo, e)
+//		}
+//
+//		const maxRetries = 3
+//		var genErr error
+//		for attempt := 1; attempt <= maxRetries; attempt++ {
+//			genErr = s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
+//			if genErr == nil {
+//				break
+//			}
+//			logger.Errorf("SequentialGenerateShots: shot %d attempt %d/%d: %v", shot.ShotNo, attempt, maxRetries, genErr)
+//			if attempt < maxRetries {
+//				time.Sleep(time.Duration(attempt*2) * time.Second)
+//			}
+//		}
+//		if genErr != nil {
+//			logger.Errorf("SequentialGenerateShots: shot %d failed after %d attempts: %v", shot.ShotNo, maxRetries, genErr)
+//			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed"}); e != nil {
+//				logger.Errorf("SequentialGenerateShots: UpdateFields shot %d: %v", shot.ID, e)
+//			}
+//			if progressFn != nil {
+//				progressFn((idx + 1) * 99 / total)
+//			}
+//			continue
+//		}
+//		logger.Printf("SequentialGenerateShots: shot %d submitted, waiting for completion...", shot.ShotNo)
+//
+//		// 同步等待完成（最长 10 分钟/镜头）
+//		// waitForShotCompletion 内部会调用 chainLastFrameToNextShot，
+//		// 确保下一镜头的 reference_image_url 在提交前已写入 DB。
+//		finishedShot, waitErr := s.waitForShotCompletion(shot, 10*time.Minute)
+//		if waitErr != nil {
+//			logger.Errorf("SequentialGenerateShots: shot %d wait: %v", shot.ShotNo, waitErr)
+//		} else {
+//			completed = append(completed, finishedShot)
+//			logger.Printf("SequentialGenerateShots: shot %d completed, chained to next", shot.ShotNo)
+//		}
+//		if progressFn != nil {
+//			progressFn((idx + 1) * 99 / total)
+//		}
+//	}
+//	logger.Printf("SequentialGenerateShots: videoID=%d done %d/%d shots", videoID, len(completed), total)
+//	return completed, nil
+//}
 
 // VoiceFirstGenerateShots 配音优先模式：
 //
@@ -2088,78 +1911,78 @@ func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qua
 //	阶段3 - 调用 BatchGenerateShots 正常生成视频
 //
 // 这样视频生成时已知精确目标时长，从根本上消除配音溢出问题。
-func (s *VideoService) VoiceFirstGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
-	logger.Printf("[VoiceFirst] videoID=%d shots=%d: Phase1 TTS start", videoID, len(shotIDs))
-
-	// ── Phase 1: 并发 TTS ────────────────────────────────────────────────────
-	video, err := s.videoRepo.GetByID(videoID)
-	if err != nil {
-		return nil, err
-	}
-	allShots, err := s.storyboardRepo.BatchGetByIDs(shotIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 确定旁白音色（复用 BatchGenerateShotAudio 的默认逻辑）
-	narrationVoice := ""
-	if video.NovelID > 0 && s.novelRepo != nil {
-		if novel, ne := s.novelRepo.GetByID(video.NovelID); ne == nil {
-			narrationVoice = novel.VideoConf().NarrationVoice
-		}
-	}
-
-	var wg sync.WaitGroup
-	const ttsConc = 4
-	ttssSem := make(chan struct{}, ttsConc)
-	for _, shot := range allShots {
-		if shot.VideoID != videoID {
-			continue
-		}
-		sh := shot
-		wg.Add(1)
-		ttssSem <- struct{}{}
-		go func() {
-			defer func() { <-ttssSem; wg.Done() }()
-			if genErr := s.GenerateShotAudio(context.Background(), sh, s.videoTenantID(video), narrationVoice); genErr != nil {
-				logger.Errorf("[VoiceFirst] shot %d TTS failed: %v", sh.ShotNo, genErr)
-			}
-		}()
-	}
-	wg.Wait()
-	logger.Printf("[VoiceFirst] videoID=%d: Phase1 TTS done", videoID)
-
-	// ── Phase 2: 用配音时长更新 shot.Duration ────────────────────────────────
-	for _, shot := range allShots {
-		if shot.VideoID != videoID || s.segmentRepo == nil {
-			continue
-		}
-		segs, e := s.segmentRepo.ListByShotID(shot.ID)
-		if e != nil || len(segs) == 0 {
-			continue
-		}
-		var totalVoice float64
-		for _, seg := range segs {
-			totalVoice += seg.DurationSecs
-		}
-		if totalVoice <= 0 {
-			continue
-		}
-		const buffer = 0.3
-		target := totalVoice + buffer
-		if target > shot.Duration {
-			if ue := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": target}); ue != nil {
-				logger.Errorf("[VoiceFirst] update shot %d duration: %v", shot.ShotNo, ue)
-			} else {
-				logger.Printf("[VoiceFirst] shot %d duration %.1fs→%.1fs (voice=%.1fs)", shot.ShotNo, shot.Duration, target, totalVoice)
-			}
-		}
-	}
-
-	// ── Phase 3: 正常批量生成视频 ─────────────────────────────────────────────
-	logger.Printf("[VoiceFirst] videoID=%d: Phase3 video generation start", videoID)
-	if progressFn != nil {
-		progressFn(10) // TTS阶段已完成，标记10%进度
-	}
-	return s.BatchGenerateShots(videoID, shotIDs, qualityTierOverride, progressFn, provider...)
-}
+//func (s *VideoService) VoiceFirstGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
+//	logger.Printf("[VoiceFirst] videoID=%d shots=%d: Phase1 TTS start", videoID, len(shotIDs))
+//
+//	// ── Phase 1: 并发 TTS ────────────────────────────────────────────────────
+//	video, err := s.videoRepo.GetByID(videoID)
+//	if err != nil {
+//		return nil, err
+//	}
+//	allShots, err := s.storyboardRepo.BatchGetByIDs(shotIDs)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	// 确定旁白音色（复用 BatchGenerateShotAudio 的默认逻辑）
+//	narrationVoice := ""
+//	if video.NovelID > 0 && s.novelRepo != nil {
+//		if novel, ne := s.novelRepo.GetByID(video.NovelID); ne == nil {
+//			narrationVoice = novel.VideoConf().NarrationVoice
+//		}
+//	}
+//
+//	var wg sync.WaitGroup
+//	const ttsConc = 4
+//	ttssSem := make(chan struct{}, ttsConc)
+//	for _, shot := range allShots {
+//		if shot.VideoID != videoID {
+//			continue
+//		}
+//		sh := shot
+//		wg.Add(1)
+//		ttssSem <- struct{}{}
+//		go func() {
+//			defer func() { <-ttssSem; wg.Done() }()
+//			if genErr := s.GenerateShotAudio(context.Background(), sh, s.videoTenantID(video), narrationVoice); genErr != nil {
+//				logger.Errorf("[VoiceFirst] shot %d TTS failed: %v", sh.ShotNo, genErr)
+//			}
+//		}()
+//	}
+//	wg.Wait()
+//	logger.Printf("[VoiceFirst] videoID=%d: Phase1 TTS done", videoID)
+//
+//	// ── Phase 2: 用配音时长更新 shot.Duration ────────────────────────────────
+//	for _, shot := range allShots {
+//		if shot.VideoID != videoID || s.segmentRepo == nil {
+//			continue
+//		}
+//		segs, e := s.segmentRepo.ListByShotID(shot.ID)
+//		if e != nil || len(segs) == 0 {
+//			continue
+//		}
+//		var totalVoice float64
+//		for _, seg := range segs {
+//			totalVoice += seg.DurationSecs
+//		}
+//		if totalVoice <= 0 {
+//			continue
+//		}
+//		const buffer = 0.3
+//		target := totalVoice + buffer
+//		if target > shot.Duration {
+//			if ue := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": target}); ue != nil {
+//				logger.Errorf("[VoiceFirst] update shot %d duration: %v", shot.ShotNo, ue)
+//			} else {
+//				logger.Printf("[VoiceFirst] shot %d duration %.1fs→%.1fs (voice=%.1fs)", shot.ShotNo, shot.Duration, target, totalVoice)
+//			}
+//		}
+//	}
+//
+//	// ── Phase 3: 正常批量生成视频 ─────────────────────────────────────────────
+//	logger.Printf("[VoiceFirst] videoID=%d: Phase3 video generation start", videoID)
+//	if progressFn != nil {
+//		progressFn(10) // TTS阶段已完成，标记10%进度
+//	}
+//	return s.BatchGenerateShots(videoID, shotIDs, qualityTierOverride, progressFn, provider...)
+//}

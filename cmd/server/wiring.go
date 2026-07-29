@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
@@ -200,46 +199,43 @@ type Services struct {
 	QualityControlService *service.QualityControlService
 	VideoService          *service.VideoService
 	ModelService          *service.ModelService
-	ContinuityService     *service.ContinuityService
 	KnowledgeService      *service.KnowledgeService
 
-	ChapterVersionService       *service.ChapterVersionService
-	ForeshadowService           *service.ForeshadowService
-	TimelineService             *service.TimelineService
-	CharacterArcService         *service.CharacterArcService
-	StyleService                *service.StyleService
-	GenerationContextService    *service.GenerationContextService
-	ImageGenerationService      *service.ImageGenerationService
-	StoryboardService           *service.StoryboardService
-	FrameGeneratorService       *service.FrameGeneratorService
-	ConsistencyValidatorService *service.ConsistencyValidatorService
-	SFXService                  *service.SFXService
-	CrawlerService              *crawler.NovelCrawler
-	NovelImportService          *service.NovelImportService
-	NovelToVideoService         *service.NovelToVideoService
-	AuthService                 *service.AuthService
-	TenantService               *service.TenantService
-	SMSService                  *service.SMSService
-	OAuthService                *service.OAuthService
-	FrontendURL                 string
-	ItemService                 *service.ItemService
-	SkillService                *service.SkillService
-	PlotPointService            *service.PlotPointService
-	TaskService                 *service.TaskService
-	AIService                   *service.AIService
-	HookChainService            *service.HookChainService
-	SatisfactionPointService    *service.SatisfactionPointService
-	ConflictArcService          *service.ConflictArcService
-	PacingService               *service.PacingService
-	SceneAnchorService          *service.SceneAnchorService
-	ScreenplayService           *service.ScreenplayService
-	SceneConsistencyService     *service.SceneConsistencyService
-	RewriteService              *service.RewriteService
-	PlatformPublishService      *service.PlatformPublishService
-	AssetService                *service.AssetService
-	ReadingService              *service.ReadingService
-	NotificationService         *service.NotificationService
-	ForeshadowCRUDService       *service.ForeshadowCRUDService
+	ChapterVersionService    *service.ChapterVersionService
+	ForeshadowService        *service.ForeshadowService
+	TimelineService          *service.TimelineService
+	CharacterArcService      *service.CharacterArcService
+	StyleService             *service.StyleService
+	GenerationContextService *service.GenerationContextService
+	ImageGenerationService   *service.ImageGenerationService
+	StoryboardService        *service.StoryboardService
+	FrameGeneratorService    *service.FrameGeneratorService
+	SFXService               *service.SFXService
+	CrawlerService           *crawler.NovelCrawler
+	NovelImportService       *service.NovelImportService
+	NovelToVideoService      *service.NovelToVideoService
+	AuthService              *service.AuthService
+	TenantService            *service.TenantService
+	SMSService               *service.SMSService
+	OAuthService             *service.OAuthService
+	FrontendURL              string
+	ItemService              *service.ItemService
+	SkillService             *service.SkillService
+	PlotPointService         *service.PlotPointService
+	TaskService              *service.TaskService
+	AIService                *service.AIService
+	HookChainService         *service.HookChainService
+	SatisfactionPointService *service.SatisfactionPointService
+	ConflictArcService       *service.ConflictArcService
+	PacingService            *service.PacingService
+	SceneAnchorService       *service.SceneAnchorService
+	ScreenplayService        *service.ScreenplayService
+	SceneConsistencyService  *service.SceneConsistencyService
+	RewriteService           *service.RewriteService
+	AssetService             *service.AssetService
+	ReadingService           *service.ReadingService
+	NotificationService      *service.NotificationService
+	ForeshadowCRUDService    *service.ForeshadowCRUDService
 	// ── Webhook ──
 	WebhookService *service.WebhookService
 	// ── Audit ──
@@ -277,7 +273,6 @@ type contentSvcs struct {
 	Character         *service.CharacterService
 	Worldview         *service.WorldviewService
 	Knowledge         *service.KnowledgeService
-	Continuity        *service.ContinuityService
 	ChapterVersion    *service.ChapterVersionService
 	Foreshadow        *service.ForeshadowService
 	Timeline          *service.TimelineService
@@ -302,12 +297,11 @@ type contentSvcs struct {
 
 // videoSvcs holds video / media generation services.
 type videoSvcs struct {
-	Video                *service.VideoService
-	Storyboard           *service.StoryboardService
-	FrameGenerator       *service.FrameGeneratorService
-	ConsistencyValidator *service.ConsistencyValidatorService
-	NovelToVideo         *service.NovelToVideoService
-	SceneConsistency     *service.SceneConsistencyService
+	Video            *service.VideoService
+	Storyboard       *service.StoryboardService
+	FrameGenerator   *service.FrameGeneratorService
+	NovelToVideo     *service.NovelToVideoService
+	SceneConsistency *service.SceneConsistencyService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -368,10 +362,6 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
 		WithNovelRepos(repos.NovelRepo, repos.ChapterRepo)
 
-	// 连续性
-	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo).
-		WithReportRepo(repos.ContinuityReportRepo)
-
 	// 知识库服务：向量化走 WithAIService(aiSvc)（DB 里配置的 provider，按 tenant/类型加载）。
 	// legacy aiClient 参数传 nil——aiManager 从未被 RegisterProvider/SetDefault 过，
 	// aiManager.GetProvider("") 必然失败，之前在这里查它只会在每次启动时打印一条误导性的
@@ -410,15 +400,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithPlotPointRepo(repos.PlotPointRepo).
 		WithCharacterRepo(repos.CharacterRepo).
 		WithSnapshotRepo(repos.SnapshotRepo).
-		WithVersionRepo(repos.ChapterVersionRepo).
-		WithContinuityService(continuitySvc).
-		WithKnowledgeService(knowledgeSvc).
-		WithQualityService(core.Quality).
-		WithForeshadowRepo(repos.ForeshadowRepo).
-		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
-		WithChapterItemRepo(repos.ChapterItemRepo).
-		WithTaskService(core.Task).
-		WithRedis(redisClient) // Fix: cross-instance chapter generation dedup
+		WithVersionRepo(repos.ChapterVersionRepo)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
@@ -458,7 +440,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 
 	return &contentSvcs{
 		Novel: novelSvc, Chapter: chapterSvc, Character: characterSvc, Worldview: worldviewSvc,
-		Knowledge: knowledgeSvc, Continuity: continuitySvc,
+		Knowledge:      knowledgeSvc,
 		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
@@ -487,12 +469,13 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	// 分镜 / 视频增强 / BGM / 角色一致性
 	intelligentStoryboardSvc := service.NewIntelligentStoryboardService(aiSvc, imageSvc)
 	storyboardSvc := service.NewStoryboardService(videoSvc, aiSvc)
+	lookupSvc := service.NewCharacterLookupService(repos.CharacterRepo, repos.CharacterLookRepo, repos.SnapshotRepo)
 
 	// 将依赖注回 videoService
 	videoSvc.WithBGMSegmentRepo(repos.VideoBGMSegmentRepo)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
-	videoSvc.WithLookRepo(repos.CharacterLookRepo)
+	videoSvc.WithLookService(lookupSvc)
 	videoSvc.WithItemRepo(repos.ItemRepo)
 	videoSvc.WithChapterItemRepo(repos.ChapterItemRepo)
 	videoSvc.WithWorldviewRepo(repos.WorldviewRepo)
@@ -609,7 +592,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		CharacterService:         content.Character,
 		WorldviewService:         content.Worldview,
 		KnowledgeService:         content.Knowledge,
-		ContinuityService:        content.Continuity,
 		ChapterVersionService:    content.ChapterVersion,
 		ForeshadowService:        content.Foreshadow,
 		TimelineService:          content.Timeline,
@@ -644,12 +626,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		FrontendURL:   cfg.Server.FrontendURL,
 		// ── Rewrite ──
 		RewriteService: rewriteSvc,
-		// ── Platform publish ──
-		PlatformPublishService: service.NewPlatformPublishService(
-			repos.PlatformAccountRepo,
-			repos.VideoPublishRecordRepo,
-			core.Task,
-		).WithRedis(redisClient), // Fix: cross-instance stale record recovery dedup
 		// ── Asset Library ──
 		AssetService: service.NewAssetService(
 			repos.AssetRepo,
@@ -816,9 +792,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ChapterVersionService,
 			services.QualityControlService,
 			services.TaskService,
-		).WithNovelService(services.NovelService).
-			WithContinuityService(services.ContinuityService).
-			WithAuditService(services.AuditService),
+		).WithNovelService(services.NovelService),
 		CharacterHandler: handler.NewCharacterHandler(
 			services.CharacterService,
 			services.CharacterArcService,
@@ -828,11 +802,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
-		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
-			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
-			WithCapCutSceneAnchorRepo(repos.SceneAnchorRepo). // Excel 分镜脚本导出：场景锚点名称/描述
-			WithServerBaseURL(buildServerBaseURL(cfg)).       // 本地/DB 存储媒体 URL 解析
-			WithAuditService(services.AuditService),
+		).WithTaskService(services.TaskService).WithSFXService(services.SFXService),
 		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService).WithAIService(services.AIService).WithTaskService(services.TaskService),
 		McpHandler:     handler.NewMcpHandler(services.McpService).WithAuditService(services.AuditService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),
@@ -863,7 +833,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SystemHandler:  handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:      handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
-		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
+		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService).
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
 		AssetHandler: handler.NewAssetHandler(services.AssetService),
@@ -877,13 +847,12 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				getEnv("TENCENT_WSA_SECRET_KEY", cfg.WebSearch.SecretKey),
 			),
 		),
-		WikiSearchHandler:    handler.NewWikiSearchHandler(service.NewWikiSearcher()),
 		StoryPatternHandler:  handler.NewStoryPatternHandler(service.NewStoryPatternService()),
 		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
 		KnowledgeHandler:     handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
 		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),
 		CharacterLookupHandler: handler.NewCharacterLookupHandler(
-			service.NewCharacterLookupService(repos.CharacterRepo, repos.SnapshotRepo),
+			service.NewCharacterLookupService(repos.CharacterRepo, repos.CharacterLookRepo, repos.SnapshotRepo),
 		),
 		DramaticHandler: handler.NewDramaticHandler(
 			services.HookChainService,
@@ -905,13 +874,4 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		DramaTemplateHandler:    handler.NewDramaTemplateHandler(services.DramaTemplateService),
 		ImageStylePresetHandler: handler.NewImageStylePresetHandler(services.ImageStylePresetService),
 	}
-}
-
-// buildServerBaseURL 从 config 构造服务器自身 base URL，用于解析本地/DB 存储的相对媒体路径。
-func buildServerBaseURL(cfg *config.Config) string {
-	host := cfg.Server.Host
-	if host == "" || host == "0.0.0.0" {
-		host = "127.0.0.1"
-	}
-	return fmt.Sprintf("http://%s:%d", host, cfg.Server.Port)
 }

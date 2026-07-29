@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -16,16 +14,14 @@ import (
 type PlatformHandler struct {
 	novelService   *service.NovelService
 	videoService   *service.VideoService
-	publishService *service.PlatformPublishService
 	chapterService *service.ChapterService
 	readingService *service.ReadingService
 }
 
-func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoService, publishSvc *service.PlatformPublishService) *PlatformHandler {
+func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoService) *PlatformHandler {
 	return &PlatformHandler{
-		novelService:   novelSvc,
-		videoService:   videoSvc,
-		publishService: publishSvc,
+		novelService: novelSvc,
+		videoService: videoSvc,
 	}
 }
 
@@ -435,173 +431,6 @@ func (h *PlatformHandler) DeleteComment(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"deleted": true})
-}
-
-// ListAccounts 列出平台账号（JWT 保护）
-func (h *PlatformHandler) ListAccounts(c *gin.Context) {
-	accounts, err := h.publishService.ListAccounts(getTenantID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to list accounts")
-		return
-	}
-	respondOK(c, accounts)
-}
-
-// GetOAuthURL Fix 5: returns the OAuth authorization URL as JSON instead of a 302 redirect.
-// GET /api/v1/platform/accounts/oauth-url/:platform?redirect_uri=...
-func (h *PlatformHandler) GetOAuthURL(c *gin.Context) {
-	platform := c.Param("platform")
-	redirectURI := c.Query("redirect_uri")
-	if redirectURI == "" {
-		respondErr(c, http.StatusBadRequest, "redirect_uri is required")
-		return
-	}
-
-	// Fix 4: Generate a cryptographically random state for CSRF protection.
-	var stateBuf [16]byte
-	if _, err := rand.Read(stateBuf[:]); err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to generate state")
-		return
-	}
-	state := hex.EncodeToString(stateBuf[:])
-
-	oauthURL, err := h.publishService.GetAuthURL(platform, redirectURI, state)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	if oauthURL == "" {
-		respondErr(c, http.StatusNotImplemented, "platform not configured")
-		return
-	}
-
-	// Store state in an HttpOnly cookie so OAuthCallback can verify it (CSRF protection).
-	c.SetCookie("platform_oauth_state", state, 600, "/", "", false, true)
-	respondOK(c, gin.H{"oauth_url": oauthURL})
-}
-
-// ConnectAccount OAuth 跳转 (redirect flow — kept for backwards compatibility)
-func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
-	platform := c.Param("platform")
-	redirectURI := c.Query("redirect_uri")
-	if redirectURI == "" {
-		respondErr(c, http.StatusBadRequest, "redirect_uri is required")
-		return
-	}
-
-	// Fix 4: Generate a cryptographically random state for CSRF protection.
-	var stateBuf [16]byte
-	if _, err := rand.Read(stateBuf[:]); err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to generate state")
-		return
-	}
-	state := hex.EncodeToString(stateBuf[:])
-
-	oauthURL, err := h.publishService.GetAuthURL(platform, redirectURI, state)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	if oauthURL == "" {
-		respondErr(c, http.StatusNotImplemented, "platform not configured")
-		return
-	}
-
-	// Store state in an HttpOnly cookie so OAuthCallback can verify it (CSRF protection).
-	c.SetCookie("platform_oauth_state", state, 600, "/", "", false, true)
-	c.Redirect(http.StatusFound, oauthURL)
-}
-
-// OAuthCallback OAuth 回调
-func (h *PlatformHandler) OAuthCallback(c *gin.Context) {
-	platform := c.Param("platform")
-	code := c.Query("code")
-	redirectURI := c.Query("redirect_uri")
-	if code == "" {
-		respondErr(c, http.StatusBadRequest, "code is required")
-		return
-	}
-
-	// Fix 4: Validate state parameter against the cookie to prevent CSRF.
-	defer c.SetCookie("platform_oauth_state", "", -1, "/", "", false, true)
-	cookieState, err := c.Cookie("platform_oauth_state")
-	if err != nil || cookieState == "" || cookieState != c.Query("state") {
-		respondErr(c, http.StatusBadRequest, "invalid or expired oauth state")
-		return
-	}
-
-	account, err := h.publishService.ConnectAccount(c.Request.Context(), platform, code, redirectURI, getTenantID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, account)
-}
-
-// DisconnectAccount 解绑平台账号
-func (h *PlatformHandler) DisconnectAccount(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	if err := h.publishService.DisconnectAccount(uint(id)); err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, gin.H{"disconnected": true})
-}
-
-// PublishToExternal 向外部平台发布视频
-func (h *PlatformHandler) PublishToExternal(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	tenantID := getTenantID(c)
-	video, err := h.videoService.GetVideoByTenant(uint(id), tenantID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "video not found")
-		return
-	}
-
-	var req struct {
-		AccountIDs  []uint   `json:"account_ids"`
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		Tags        []string `json:"tags"`
-		IsPublic    bool     `json:"is_public"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.AccountIDs) == 0 {
-		respondErr(c, http.StatusBadRequest, "account_ids is required")
-		return
-	}
-
-	opts := service.PublishOptions{
-		Title:       req.Title,
-		Description: req.Description,
-		Tags:        req.Tags,
-		IsPublic:    req.IsPublic,
-	}
-	taskID, err := h.publishService.PublishToExternal(c.Request.Context(), video, req.AccountIDs, opts, tenantID)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	respondAccepted(c, taskID, "发布任务已提交")
-}
-
-// ListPublishRecords 列出视频发布记录
-func (h *PlatformHandler) ListPublishRecords(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	records, err := h.publishService.ListPublishRecords(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to list records")
-		return
-	}
-	respondOK(c, records)
 }
 
 // ─── Chapter Social: Like / Comment ──────────────────────────────────────────

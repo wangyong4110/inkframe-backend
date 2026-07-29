@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
@@ -126,7 +127,7 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 
 	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Meta.Genre)
 	// 用头尾截取保留章节的开头与结局两端，比前3000字截断更能反映真实质量
-	contentPreview, _ := truncateForRefinement(chapter.Content, 8000)
+	contentPreview := truncate(chapter.Content, 8000)
 
 	prompt, err := renderPrompt("quality_check", map[string]interface{}{
 		"NovelInfo":      novelInfo,
@@ -1432,4 +1433,21 @@ outerLoop:
 	}
 	wg.Wait()
 	return nil
+}
+
+func countDialogueChars(content string) int {
+	total := 0
+	inDialogue := false
+	for _, r := range content {
+		// “ = " (left double quotation), 「 = 「
+		// ” = " (right double quotation), 」 = 」
+		if r == '“' || r == '「' {
+			inDialogue = true
+		} else if r == '”' || r == '」' {
+			inDialogue = false
+		} else if inDialogue && !unicode.IsSpace(r) {
+			total++
+		}
+	}
+	return total
 }

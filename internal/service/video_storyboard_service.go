@@ -307,7 +307,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 
 	// 批量预加载角色默认形象 VisualPrompt（单次 IN 查询，替代 buildStoryboardPrompt 内 N_char×N_seg 次串行 GetByID）
 	charVisualPrompts := make(map[uint]string)
-	if s.lookRepo != nil && len(characters) > 0 {
+	if s.lookupService != nil && len(characters) > 0 {
 		lookIDs := make([]uint, 0, len(characters))
 		charToLook := make(map[uint]uint) // charID → lookID
 		for _, c := range characters {
@@ -317,7 +317,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 			}
 		}
 		if len(lookIDs) > 0 {
-			if looksMap, err := s.lookRepo.BatchGetLooksByIDs(lookIDs); err == nil {
+			if looksMap, err := s.lookupService.BatchGetLooksByIDs(lookIDs); err == nil {
 				for charID, lookID := range charToLook {
 					if look, ok := looksMap[lookID]; ok && look != nil && look.VisualPrompt != "" {
 						charVisualPrompts[charID] = look.VisualPrompt
@@ -839,7 +839,7 @@ func (s *VideoService) fetchSceneRegenContext(video *model.Video, chapterID uint
 	}
 
 	charVisualPrompts = make(map[uint]string)
-	if s.lookRepo != nil && len(characters) > 0 {
+	if s.lookupService != nil && len(characters) > 0 {
 		lookIDs := make([]uint, 0, len(characters))
 		charToLook := make(map[uint]uint)
 		for _, c := range characters {
@@ -849,7 +849,7 @@ func (s *VideoService) fetchSceneRegenContext(video *model.Video, chapterID uint
 			}
 		}
 		if len(lookIDs) > 0 {
-			if looksMap, err := s.lookRepo.BatchGetLooksByIDs(lookIDs); err == nil {
+			if looksMap, err := s.lookupService.BatchGetLooksByIDs(lookIDs); err == nil {
 				for charID, lookID := range charToLook {
 					if look, ok := looksMap[lookID]; ok && look != nil && look.VisualPrompt != "" {
 						charVisualPrompts[charID] = look.VisualPrompt

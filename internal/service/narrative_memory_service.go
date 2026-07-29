@@ -436,7 +436,7 @@ func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, current
 	var hooks []string
 	for _, p := range points {
 		if p.hook != "" {
-			hooks = append(hooks, fmt.Sprintf("第%d章钩子：「%s」", p.chapterNo, truncateForPrompt(p.hook, 40)))
+			hooks = append(hooks, fmt.Sprintf("第%d章钩子：「%s」", p.chapterNo, truncate(p.hook, 40)))
 		}
 	}
 
@@ -1162,7 +1162,7 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 		if count >= 25 || ch.Content == "" {
 			break
 		}
-		content := truncateForPrompt(ch.Content, 3000)
+		content := truncate(ch.Content, 3000)
 		if !strings.Contains(content, character.Name) {
 			continue
 		}
@@ -1208,22 +1208,17 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 	logger.Printf("[NarrativeMemory] RefineChapterContent: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	refineStatus := "success"
 	defer func() { metrics.ChapterRefinementTotal.WithLabelValues(refineStatus).Inc() }()
-	focusAreas := detectRefinementNeeds(chapter.Content)
-	if focusAreas == "" {
-		refineStatus = "skipped"
-		return chapter.Content, nil
-	}
 
 	// 对超长章节用头尾截取传入 prompt（覆盖开头与结局两端），避免超出 LLM context window。
 	// 护栏对照截断长度（而非原文长度）判断，防止截断导致误判。
-	contentForPrompt, wasTruncated := truncateForRefinement(chapter.Content, maxRefinementContentRunes)
+	contentForPrompt := truncate(chapter.Content, maxRefinementContentRunes)
 
 	prompt, err := renderPrompt("refinement_pass", map[string]interface{}{
 		"NovelTitle":   novelTitle,
 		"ChapterNo":    chapter.ChapterNo,
 		"ChapterTitle": chapter.Title,
 		"Content":      contentForPrompt,
-		"FocusAreas":   focusAreas,
+		//"FocusAreas":   focusAreas,
 	})
 	if err != nil {
 		return chapter.Content, err
@@ -1236,179 +1231,5 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		return chapter.Content, nil
 	}
 	refined = strings.TrimSpace(refined)
-
-	// 护栏：精修后字数不能比送入 AI 的内容少超过 20%，防止 AI 大量删减。
-	// 超长章节截断时，对照截断长度而非原文长度，避免误判。
-	baseRunes := len([]rune(contentForPrompt))
-	refinedRunes := len([]rune(refined))
-	if baseRunes > 0 && refinedRunes < baseRunes*80/100 {
-		logger.Printf("NarrativeMemory: refinement ch%d rejected — word count dropped %d→%d (>20%%)", chapter.ChapterNo, baseRunes, refinedRunes)
-		refineStatus = "rejected"
-		return chapter.Content, nil
-	}
-
-	// 超长章节：精修结果只覆盖头尾部分，中间段保留原文
-	if wasTruncated {
-		half := maxRefinementContentRunes / 2
-		origRunes := []rune(chapter.Content)
-		refinedRunes2 := []rune(refined)
-		// 用精修后的头尾替换原文对应部分，中间段保持不变
-		if len(refinedRunes2) >= half && len(origRunes) > maxRefinementContentRunes {
-			middle := origRunes[half : len(origRunes)-half]
-			merged := append(refinedRunes2[:half], middle...)
-			merged = append(merged, refinedRunes2[len(refinedRunes2)-half:]...)
-			return string(merged), nil
-		}
-		// P1-6: 合并条件不满足（AI 输出过短无法对齐头尾），保守返回原文，避免中间内容丢失
-		logger.Errorf("NarrativeMemory: refinement ch%d wasTruncated but merge failed (refinedLen=%d < half=%d) — using original",
-			chapter.ChapterNo, len(refinedRunes2), half)
-		refineStatus = "rejected"
-		return chapter.Content, nil
-	}
-
 	return refined, nil
-}
-
-// ──────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────
-
-// flatStartConnectors 顺序连接词：段首出现3+次表示平铺直叙
-var flatStartConnectors = []string{"随后", "接着", "然后", "于是", "之后", "就这样", "就在这时"}
-
-// weakEndingResolutionWords 章末平静解决词（缺少悬念时出现意味着收尾无力）
-var weakEndingResolutionWords = []string{
-	"离开了", "回去了", "离去", "皆大欢喜", "顺利", "满意地", "安心",
-	"放松了", "平静下来", "舒了口气", "微微点头", "点了点头", "心满意足",
-}
-
-// weakEndingTensionWords 章末张力词（出现则不视为无力收尾）
-var weakEndingTensionWords = []string{
-	"然而", "不对", "危险", "警觉", "皱眉", "？！", "！？",
-	"猛然", "骤然", "忽地", "突然", "难道", "怎么", "怎会",
-}
-
-// detectRefinementNeeds 检测内容质量问题，返回需要修复的问题描述（空则跳过精修）
-func detectRefinementNeeds(content string) string {
-	if content == "" {
-		return ""
-	}
-	var issues []string
-
-	for _, w := range repeatWords {
-		if cnt := strings.Count(content, w); cnt >= repeatWordThreshold {
-			issues = append(issues, fmt.Sprintf("「%s」×%d", w, cnt))
-		}
-	}
-
-	// 低频但典型的 AI 机器感短语（阈值更低）
-	for _, p := range clichePhrases {
-		if cnt := strings.Count(content, p); cnt >= clichePhraseThreshold {
-			issues = append(issues, fmt.Sprintf("套语「%s」×%d", p, cnt))
-		}
-	}
-
-	// 检测连续段落以「他」/「她」开头
-	// P1-4: 空行视为段落边界，必须重置 consecutive（否则跨段落误计）
-	consecutive := 0
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if len([]rune(line)) < 3 {
-			consecutive = 0 // 空行 = 段落边界，重置连续计数
-			continue
-		}
-		first := string([]rune(line)[:1])
-		if first == "他" || first == "她" {
-			consecutive++
-		} else {
-			consecutive = 0
-		}
-		if consecutive >= consecutivePronounThreshold {
-			issues = append(issues, "连续段落以「他/她」开头")
-			break
-		}
-	}
-
-	// P0-2a: 检测平铺直叙（连续3+段落以顺序连接词开头，叙述缺乏起伏）
-	flatCount := 0
-	maxFlatCount := 0
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if len([]rune(line)) < 10 {
-			if len([]rune(line)) == 0 {
-				flatCount = 0 // 空行重置
-			}
-			continue
-		}
-		isFlat := false
-		for _, conn := range flatStartConnectors {
-			if strings.HasPrefix(line, conn) {
-				isFlat = true
-				break
-			}
-		}
-		if isFlat {
-			flatCount++
-			if flatCount > maxFlatCount {
-				maxFlatCount = flatCount
-			}
-		} else {
-			flatCount = 0
-		}
-	}
-	if maxFlatCount >= 3 {
-		issues = append(issues, fmt.Sprintf("平铺直叙（连续%d段落以顺序连接词开头）", maxFlatCount))
-	}
-
-	// P0-2b: 检测章末收尾无力（最后200字含平静解决词但不含张力词，意味着无钩子/悬念）
-	const weakEndingWindow = 200
-	contentRunes := []rune(content)
-	if len(contentRunes) > 0 {
-		startIdx := len(contentRunes) - weakEndingWindow
-		if startIdx < 0 {
-			startIdx = 0
-		}
-		ending := strings.ReplaceAll(string(contentRunes[startIdx:]), "【章末钩子】", "")
-		hasResolution := false
-		hasTension := false
-		for _, w := range weakEndingResolutionWords {
-			if strings.Contains(ending, w) {
-				hasResolution = true
-				break
-			}
-		}
-		for _, w := range weakEndingTensionWords {
-			if strings.Contains(ending, w) {
-				hasTension = true
-				break
-			}
-		}
-		if hasResolution && !hasTension {
-			issues = append(issues, "章末收尾平淡（缺少悬念或钩子）")
-		}
-	}
-
-	return strings.Join(issues, "、")
-}
-
-// truncateForPrompt 截断文本至 maxChars 字（前向截断，适用于普通场景）
-func truncateForPrompt(s string, maxChars int) string {
-	r := []rune(s)
-	if len(r) <= maxChars {
-		return s
-	}
-	return string(r[:maxChars]) + "…"
-}
-
-// truncateForRefinement 头尾截取文本，保留开头与结局两端，适合精修场景。
-// 返回截取后内容及是否发生了截取。
-func truncateForRefinement(s string, maxChars int) (string, bool) {
-	r := []rune(s)
-	if len(r) <= maxChars {
-		return s, false
-	}
-	half := maxChars / 2
-	head := string(r[:half])
-	tail := string(r[len(r)-half:])
-	return head + "\n\n…（中间段已省略，精修时保持前后文风格一致）…\n\n" + tail, true
 }
