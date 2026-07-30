@@ -207,28 +207,6 @@ func TestOpenAICompatProvider_GenerateStream(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatProvider_Embed_NotSupported(t *testing.T) {
-	p := NewOpenAICompatProvider("xai", "key", "", "m", nil, 0)
-	_, err := p.Embed(context.Background(), "text")
-	if err == nil || !strings.Contains(err.Error(), "xai") {
-		t.Errorf("Embed() error = %v, want error mentioning provider name", err)
-	}
-}
-
-func TestOpenAICompatProvider_ImageGenerate_NotSupported(t *testing.T) {
-	p := NewOpenAICompatProvider("p", "key", "", "m", nil, 0)
-	if _, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("expected error, got nil")
-	}
-}
-
-func TestOpenAICompatProvider_AudioGenerate_NotSupported(t *testing.T) {
-	p := NewOpenAICompatProvider("p", "key", "", "m", nil, 0)
-	if _, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("expected error, got nil")
-	}
-}
-
 // ─── Concrete constructors ──────────────────────────────────────────────
 
 func TestNewXAIProvider(t *testing.T) {
@@ -343,4 +321,4 @@ func TestNewHunyuanProvider(t *testing.T) {
 	}
 }
 
-var _ ai.AIProvider = (*OpenAICompatProvider)(nil)
+var _ ai.TextProvider = (*OpenAICompatProvider)(nil)

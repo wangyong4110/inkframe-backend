@@ -189,36 +189,23 @@ func derefIfPointer(v interface{}) interface{} {
 	}
 }
 
-// fakeAIProvider implements ai.AIProvider with a configurable Embed and no-op everything else.
+// fakeAIProvider implements ai.ProviderMeta + ai.EmbeddingProvider with a configurable Embed.
 type fakeAIProvider struct {
 	embedFn func(ctx context.Context, text string) ([]float32, error)
 }
 
-func (f *fakeAIProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (f *fakeAIProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
 func (f *fakeAIProvider) Embed(ctx context.Context, text string) ([]float32, error) {
 	if f.embedFn != nil {
 		return f.embedFn(ctx, text)
 	}
 	return []float32{0.1, 0.2, 0.3}, nil
 }
-func (f *fakeAIProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (f *fakeAIProvider) AudioGenerate(ctx context.Context, req *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("not implemented")
-}
 func (f *fakeAIProvider) GetName() string                       { return "fake" }
-func (f *fakeAIProvider) GetModels() []string                   { return nil }
 func (f *fakeAIProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // newTestKnowledgeService wires a KnowledgeService directly (same package, so private fields
 // are settable) against the given repo/vector store/AI provider fakes.
-func newTestKnowledgeService(repo *mockKBRepo, vs *fakeVectorStore, aiClient ai.AIProvider) *KnowledgeService {
+func newTestKnowledgeService(repo *mockKBRepo, vs *fakeVectorStore, aiClient ai.ProviderMeta) *KnowledgeService {
 	sm := vector.NewStoreManager(nil)
 	if vs != nil {
 		sm.RegisterStore("fake", vs)

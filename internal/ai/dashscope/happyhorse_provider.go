@@ -46,6 +46,13 @@ const ProviderNameHappyHorse = "happyhorse"
 
 func (p *HappyHorseProvider) GetName() string { return ProviderNameHappyHorse }
 
+func (p *HappyHorseProvider) HealthCheck(_ context.Context) error {
+	if p.apiKey == "" {
+		return fmt.Errorf("happyhorse: api_key not configured")
+	}
+	return nil
+}
+
 func init() {
 	ai.RegisterVideoEngineTraits(ProviderNameHappyHorse, ai.VideoEngineTraits{
 		SupportsMultiImageReference: true,

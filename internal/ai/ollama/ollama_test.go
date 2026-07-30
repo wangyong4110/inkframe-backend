@@ -302,24 +302,6 @@ func TestOllamaProvider_Embed_NoData(t *testing.T) {
 	}
 }
 
-func TestOllamaProvider_ImageGenerate_NotSupported(t *testing.T) {
-	p := NewOllamaProvider("", "", 0)
-	resp, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{})
-	if err != nil {
-		t.Fatalf("ImageGenerate() unexpected error: %v", err)
-	}
-	if resp.Error == "" {
-		t.Error("expected Error to be set")
-	}
-}
-
-func TestOllamaProvider_AudioGenerate_NotSupported(t *testing.T) {
-	p := NewOllamaProvider("", "", 0)
-	if _, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("expected error")
-	}
-}
-
 func TestOllamaProvider_BuildMessages(t *testing.T) {
 	p := NewOllamaProvider("", "", 0)
 	req := &ai.GenerateRequest{
@@ -344,4 +326,4 @@ func TestOllamaProvider_BuildMessages_NoSystemPrompt(t *testing.T) {
 	}
 }
 
-var _ ai.AIProvider = (*OllamaProvider)(nil)
+var _ ai.TextProvider = (*OllamaProvider)(nil)

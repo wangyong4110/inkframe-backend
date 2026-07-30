@@ -258,18 +258,6 @@ func (p *AzureProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequ
 	return ch, nil
 }
 
-func (p *AzureProvider) Embed(_ context.Context, _ string) ([]float32, error) {
-	return nil, fmt.Errorf("azure: embedding not implemented")
-}
-
-func (p *AzureProvider) ImageGenerate(_ context.Context, _ *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("azure: image generation not implemented")
-}
-
-func (p *AzureProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("azure: audio generation not implemented")
-}
-
 func (p *AzureProvider) buildChatRequest(req *ai.GenerateRequest) map[string]interface{} {
 	messages := make([]map[string]interface{}, 0, len(req.Messages))
 	for _, m := range req.Messages {

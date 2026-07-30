@@ -84,6 +84,13 @@ func (p *KlingProvider) GetName() string {
 	return ProviderNameKling
 }
 
+func (p *KlingProvider) HealthCheck(_ context.Context) error {
+	if p.accessKey == "" || p.secretKey == "" {
+		return fmt.Errorf("kling: access_key/secret_key not configured")
+	}
+	return nil
+}
+
 func init() {
 	ai.RegisterVideoEngineTraits(ProviderNameKling, ai.VideoEngineTraits{
 		SupportsMultiImageReference: true,

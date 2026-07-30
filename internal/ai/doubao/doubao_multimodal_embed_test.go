@@ -31,7 +31,7 @@ func TestDoubaoProvider_EmbedMultimodal_UnsupportedInputType(t *testing.T) {
 // optional MultimodalEmbedder interface, as documented in doubao_multimodal_embed.go's
 // type-assertion usage example.
 func TestDoubaoProvider_ImplementsMultimodalEmbedder(t *testing.T) {
-	var p ai.AIProvider = NewDoubaoProvider("key", "", "", 0)
+	var p ai.EmbeddingProvider = NewDoubaoProvider("key", "", "", 0)
 	if _, ok := p.(ai.MultimodalEmbedder); !ok {
 		t.Fatal("DoubaoProvider does not implement ai.MultimodalEmbedder")
 	}

@@ -53,24 +53,6 @@ func TestAliyunTTSProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-func TestAliyunTTSProvider_UnsupportedMethods(t *testing.T) {
-	p := NewAliyunTTSProvider("key", "")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should return error")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should return error")
-	}
-	if _, err := p.Embed(ctx, "text"); err == nil {
-		t.Error("Embed should return error")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should return error")
-	}
-}
-
 func TestAliyunTTSProvider_AudioGenerate_MissingVoice(t *testing.T) {
 	p := NewAliyunTTSProvider("key", "")
 	_, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{Text: "hello"})

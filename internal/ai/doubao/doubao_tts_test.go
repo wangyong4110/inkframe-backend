@@ -60,23 +60,6 @@ func TestDoubaoSpeechProvider_HealthCheck(t *testing.T) {
 	}
 }
 
-func TestDoubaoSpeechProvider_UnsupportedMethods(t *testing.T) {
-	p := NewDoubaoSpeechProvider("key", "")
-	ctx := context.Background()
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should error")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should error")
-	}
-	if _, err := p.Embed(ctx, "x"); err == nil {
-		t.Error("Embed should error")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should error")
-	}
-}
-
 func TestDoubaoSpeechProvider_AudioGenerate_MissingVoice(t *testing.T) {
 	p := NewDoubaoSpeechProvider("key", "")
 	_, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{Text: "hello"})
@@ -286,23 +269,6 @@ func TestDoubaoSpeechV1Provider_HealthCheck(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
-	}
-}
-
-func TestDoubaoSpeechV1Provider_UnsupportedMethods(t *testing.T) {
-	p := NewDoubaoSpeechV1Provider("a", "b", "")
-	ctx := context.Background()
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should error")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should error")
-	}
-	if _, err := p.Embed(ctx, "x"); err == nil {
-		t.Error("Embed should error")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should error")
 	}
 }
 

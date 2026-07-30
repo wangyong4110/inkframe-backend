@@ -936,8 +936,11 @@ type VideoProvider struct {
 // preferredName 为空时按 jimeng-video→kling→seedance 顺序尝试。
 func (s *VideoService) resolveVideoProvider(tenantID uint, modelName string) (ai.VideoProvider, string, error) {
 
-	if p, err := s.aiService.GetTenantVideoProvider(tenantID, modelName); err == nil {
-		return p, modelName, nil
+	pMeta, _, err := s.aiService.getTenantProvider(tenantID, commons.Video, modelName)
+	if err == nil {
+		if vp, ok := pMeta.(ai.VideoProvider); ok {
+			return vp, modelName, nil
+		}
 	}
 	return nil, "", errors.New("video provider not configured")
 }

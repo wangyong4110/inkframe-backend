@@ -180,10 +180,19 @@ func (r *AIModelRepository) GetByID(id uint) (*model.AIModel, error) {
 	return &model, nil
 }
 
-// GetByName 按模型名称查找（如 "deepseek-chat"），返回第一个匹配的活跃模型及其提供商
+// GetByName 按模型名称查找激活的模型。
+// 通过 JOIN Provider 表过滤租户（ink_ai_model 本身无 tenant_id 列，租户归属由 Provider 传递）。
 func (r *AIModelRepository) GetByName(tenantID uint, name string) (*model.AIModel, error) {
 	var m model.AIModel
-	if err := r.db.Preload("Provider").Where("tenant_id = ? AND name = ? AND is_active = ?", tenantID, name, true).First(&m).Error; err != nil {
+	query := r.db.Preload("Provider").
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
+		Where("ink_ai_model.name = ? AND ink_ai_model.is_active = ?", name, true)
+	if tenantID > 0 {
+		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
+	} else {
+		query = query.Where("p.tenant_id = 0")
+	}
+	if err := query.First(&m).Error; err != nil {
 		return nil, err
 	}
 	return &m, nil

@@ -70,6 +70,30 @@ func (s *StyleService) ApplyPreset(name string) (interface{}, error) {
 // ModelService adapter methods
 // ============================================
 
+type ModelService struct {
+	modelRepo      *repository.AIModelRepository
+	providerRepo   *repository.ModelProviderRepository
+	experimentRepo *repository.ModelComparisonRepository
+	aiService      *AIService
+}
+
+func NewModelService(
+	modelRepo *repository.AIModelRepository,
+	providerRepo *repository.ModelProviderRepository,
+	experimentRepo *repository.ModelComparisonRepository,
+	aiService ...*AIService,
+) *ModelService {
+	svc := &ModelService{
+		modelRepo:      modelRepo,
+		providerRepo:   providerRepo,
+		experimentRepo: experimentRepo,
+	}
+	if len(aiService) > 0 {
+		svc.aiService = aiService[0]
+	}
+	return svc
+}
+
 func (s *ModelService) ListProviders(tenantID uint) (interface{}, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	return providers, err
@@ -88,27 +112,17 @@ type CapableProvider struct {
 
 // ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
 func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter commons.ModelType) ([]CapableProvider, error) {
-	//normalizedType := normalizeProviderType(typeFilter)
-	var providers []*model.ModelProvider
-	var err error
-	if s.aiService != nil {
-		providers, err = s.aiService.eligibleProviders(tenantID, typeFilter)
-	} else {
-		// aiService 未注入（可选依赖）时退回直接过滤，行为与 eligibleProviders 一致。
-		providers, err = s.providerRepo.ListByModelType(tenantID, typeFilter)
-		if err == nil {
-			var filtered []*model.ModelProvider
-			for _, p := range providers {
-				if p.IsActive {
-					filtered = append(filtered, p)
-				}
-			}
-			providers = filtered
-		}
-	}
+	providers, err := s.providerRepo.ListByModelType(tenantID, typeFilter)
 	if err != nil {
 		return nil, err
 	}
+	var filtered []*model.ModelProvider
+	for _, p := range providers {
+		if p.IsActive {
+			filtered = append(filtered, p)
+		}
+	}
+	providers = filtered
 	var result []CapableProvider
 	for _, p := range providers {
 		result = append(result, CapableProvider{

@@ -76,28 +76,10 @@ func TestElevenLabsSFXProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-func TestElevenLabsSFXProvider_UnsupportedMethods(t *testing.T) {
-	p := NewElevenLabsSFXProvider("key", "")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate: expected unsupported error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream: expected unsupported error, got nil")
-	}
-	if _, err := p.Embed(ctx, "hello"); err == nil {
-		t.Error("Embed: expected unsupported error, got nil")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate: expected unsupported error, got nil")
-	}
-}
-
 // Ensure interface compliance at the test level too (compile-time check already exists in
 // the source file, but this documents intent).
 func TestElevenLabsSFXProvider_ImplementsAIProvider(t *testing.T) {
-	var _ ai.AIProvider = NewElevenLabsSFXProvider("key", "")
+	var _ ai.AudioProvider = NewElevenLabsSFXProvider("key", "")
 }
 
 func TestElevenLabsSFXProvider_AudioGenerate_EmptyTextErrors(t *testing.T) {

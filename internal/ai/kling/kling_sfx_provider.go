@@ -86,22 +86,6 @@ func (p *KlingSFXProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *KlingSFXProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-sfx: text generation not supported")
-}
-
-func (p *KlingSFXProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-sfx: streaming not supported")
-}
-
-func (p *KlingSFXProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("kling-sfx: embeddings not supported")
-}
-
-func (p *KlingSFXProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("kling-sfx: image generation not supported")
-}
-
 // AudioGenerate 提交文生音效任务并同步等待完成，返回 MP3 URL。
 //
 // req.Text:     音效描述提示词（最多 200 字符），如 "春节烟花声"
@@ -262,5 +246,4 @@ func (p *KlingSFXProvider) doRequest(ctx context.Context, method, path string, b
 	return klingDoRequest(ctx, p.accessKey, p.secretKey, p.endpoint, p.client, method, path, body)
 }
 
-// Ensure interface compliance.
-var _ ai.AIProvider = (*KlingSFXProvider)(nil)
+var _ ai.AudioProvider = (*KlingSFXProvider)(nil)

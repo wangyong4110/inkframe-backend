@@ -63,22 +63,6 @@ func (p *ElevenLabsSFXProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *ElevenLabsSFXProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("elevenlabs-sfx: text generation not supported")
-}
-
-func (p *ElevenLabsSFXProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("elevenlabs-sfx: streaming not supported")
-}
-
-func (p *ElevenLabsSFXProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("elevenlabs-sfx: embeddings not supported")
-}
-
-func (p *ElevenLabsSFXProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("elevenlabs-sfx: image generation not supported")
-}
-
 // AudioGenerate 同步生成音效并保存为本地临时文件，返回 file:// URL。
 //
 // req.Text:     音效描述提示词（最多 450 字符），如 "fireworks on new year's eve"
@@ -165,5 +149,4 @@ func (p *ElevenLabsSFXProvider) AudioGenerate(ctx context.Context, req *ai.Audio
 	}, nil
 }
 
-// Ensure interface compliance.
-var _ ai.AIProvider = (*ElevenLabsSFXProvider)(nil)
+var _ ai.AudioProvider = (*ElevenLabsSFXProvider)(nil)

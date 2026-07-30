@@ -11,11 +11,12 @@ import (
 )
 
 type GenerateAudioOptions struct {
-	Text     string  `json:"text"`
-	Voice    string  `json:"voice"`
-	Speed    float64 `json:"speed"`
-	Emotion  string  `json:"emotion"`
-	Language string  `json:"language"`
+	Text       string  `json:"text"`
+	Voice      string  `json:"voice"`
+	VoiceModel string  `json:"voice_model"` // provider 名称，如 "doubao-speech"；空=走扫描匹配
+	Speed      float64 `json:"speed"`
+	Emotion    string  `json:"emotion"`
+	Language   string  `json:"language"`
 }
 
 // AudioGenerateWithOptions 支持语速、风格和语言/方言的 TTS 生成。
@@ -29,10 +30,14 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		return "", fmt.Errorf("provider repository not configured")
 	}
 
-	provider, err := s.loadDBVoiceProvider(tenantID, commons.Voice, opt.Voice)
+	providerMeta, _, err := s.getTenantProvider(tenantID, commons.Voice, opt.VoiceModel)
 	if err != nil {
-		logger.Errorf("[TTS] AudioGenerateWithOptions: loadDBVoiceProvider ERROR: %v", err)
+		logger.Errorf("[TTS] AudioGenerateWithOptions: getTenantProvider ERROR: %v", err)
 		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key: %w", err)
+	}
+	provider, ok := providerMeta.(ai.AudioProvider)
+	if !ok {
+		return "", fmt.Errorf("configured voice provider %q does not support audio generation", providerMeta.GetName())
 	}
 	logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", provider.GetName(), opt.Voice)
 
@@ -63,9 +68,13 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 // GenerateSFX 使用 DB 中配置的 sfx 类型提供商生成音效，返回 CDN URL 和时长（秒）。
 // prompt: 音效描述，如 "春节烟花声"；duration: 期望时长（秒，3.0~10.0）。
 func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt string, duration float64) (string, float64, error) {
-	provider, _, err := s.getTenantProvider(tenantID, commons.SFX, "")
+	providerMeta, _, err := s.getTenantProvider(tenantID, commons.SFX, "")
 	if err != nil {
 		return "", 0, err
+	}
+	provider, ok := providerMeta.(ai.AudioProvider)
+	if !ok {
+		return "", 0, fmt.Errorf("configured SFX provider %q does not support audio generation", providerMeta.GetName())
 	}
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
 		Text:     prompt,

@@ -84,7 +84,7 @@ type knowledgeBaseRepo interface {
 type KnowledgeService struct {
 	kbRepo      knowledgeBaseRepo
 	vectorStore *vector.StoreManager
-	aiClient    ai.AIProvider
+	aiClient    ai.ProviderMeta
 	aiSvc       *AIService    // optional: used for per-model concurrency-controlled embedding
 	cache       *redis.Client // optional: for cross-instance idempotency in ExtractAndStorePlotPoints
 
@@ -112,7 +112,7 @@ const (
 func NewKnowledgeService(
 	kbRepo knowledgeBaseRepo,
 	vectorStore *vector.StoreManager,
-	aiClient ai.AIProvider,
+	aiClient ai.ProviderMeta,
 ) *KnowledgeService {
 	return &KnowledgeService{
 		kbRepo:      kbRepo,
@@ -163,7 +163,9 @@ func (s *KnowledgeService) embed(ctx context.Context, tenantID uint, text string
 		return s.aiSvc.Embed(ctx, tenantID, text)
 	}
 	if s.aiClient != nil {
-		return s.aiClient.Embed(ctx, text)
+		if ep, ok := s.aiClient.(ai.EmbeddingProvider); ok {
+			return ep.Embed(ctx, text)
+		}
 	}
 	return nil, fmt.Errorf("no embedding provider available")
 }
@@ -524,7 +526,7 @@ func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID
 // ExtractAndStorePlotPoints 提取并存储剧情点
 // 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
 // aiClient 为 nil 时使用服务内部的 s.aiClient
-func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.ProviderMeta) error {
 	extractStatus := "success"
 	defer func() { metrics.KnowledgeExtractTotal.WithLabelValues(extractStatus).Inc() }()
 	// 跨实例幂等性：心跳锁（60s base TTL）防止重复写入；实例崩溃后60s内自动释放。
@@ -596,16 +598,21 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		if aiClient == nil {
 			aiClient = s.aiClient
 		}
-		req := ai.NewGenerateRequestBuilder().
-			UserMessage(prompt).
-			Temperature(0.3).
-			Build()
-		resp, genErr := aiClient.Generate(ctx, req)
-		if genErr != nil {
+		if tp, ok := aiClient.(ai.TextProvider); ok {
+			req := ai.NewGenerateRequestBuilder().
+				UserMessage(prompt).
+				Temperature(0.3).
+				Build()
+			resp, genErr := tp.Generate(ctx, req)
+			if genErr != nil {
+				extractStatus = "error"
+				return genErr
+			}
+			llmContent = resp.Content
+		} else {
 			extractStatus = "error"
-			return genErr
+			return fmt.Errorf("ExtractAndStorePlotPoints: AI provider %q does not support text generation", aiClient.GetName())
 		}
-		llmContent = resp.Content
 	}
 
 	// 解析结果

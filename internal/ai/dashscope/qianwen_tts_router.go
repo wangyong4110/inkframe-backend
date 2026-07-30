@@ -1,9 +1,8 @@
 package dashscope
 
 import (
-"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"context"
-	"fmt"
 	"net/url"
 	"strings"
 )
@@ -45,18 +44,6 @@ func (r *QianwenTTSRouter) AudioGenerate(ctx context.Context, req *ai.AudioGener
 	return r.qwen.AudioGenerate(ctx, req)
 }
 
-func (r *QianwenTTSRouter) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("QianwenTTSRouter: Generate not supported; use QianwenProvider for LLM")
-}
-func (r *QianwenTTSRouter) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("QianwenTTSRouter: GenerateStream not supported")
-}
-func (r *QianwenTTSRouter) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("QianwenTTSRouter: Embed not supported")
-}
-func (r *QianwenTTSRouter) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("QianwenTTSRouter: ImageGenerate not supported")
-}
 func (r *QianwenTTSRouter) GetName() string     { return "qianwen-tts-router" }
 func (r *QianwenTTSRouter) GetModels() []string { return nil }
 func (r *QianwenTTSRouter) HealthCheck(ctx context.Context) error {

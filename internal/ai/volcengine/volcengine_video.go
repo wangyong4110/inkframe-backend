@@ -45,7 +45,7 @@ const (
 	jimengPrefixRecamera = "recamera:"
 )
 
-// JimengVideoProvider 即梦视频3.0提供者
+// VolcengineProvider 即梦视频3.0提供者
 //
 // 鉴权：通过 volc-sdk-golang 自动完成 HMAC-SHA256 AK/SK 签名
 // API：两步异步接口
@@ -56,19 +56,29 @@ const (
 //
 //	https://www.volcengine.com/docs/85621/1785204（I2V 首帧）
 //	https://www.volcengine.com/docs/85621/1791184（I2V 首尾帧）
-type JimengVideoProvider struct {
-	svc *volcvisual.Visual
+type VolcengineProvider struct {
+	name string
+	svc  *volcvisual.Visual
 }
 
-// NewJimengVideoProvider 创建即梦视频3.0提供者
-func NewJimengVideoProvider(accessKey, secretKey string) *JimengVideoProvider {
+// NewJimengVideoProvider 创建即梦视频3.0提供者（向后兼容的包装器）
+func NewJimengVideoProvider(accessKey, secretKey string) *VolcengineProvider {
+	return newVolcengineProvider(ProviderNameJimengVideo, accessKey, secretKey)
+}
+
+// NewVolcengineVisualProvider 创建即梦AI图像生成提供者（向后兼容的包装器）
+func NewVolcengineVisualProvider(accessKey, secretKey string) *VolcengineProvider {
+	return newVolcengineProvider(ProviderNameVolcengineVisual, accessKey, secretKey)
+}
+
+func newVolcengineProvider(name, accessKey, secretKey string) *VolcengineProvider {
 	svc := volcvisual.NewInstance()
 	svc.Client.SetAccessKey(accessKey)
 	svc.Client.SetSecretKey(secretKey)
-	return &JimengVideoProvider{svc: svc}
+	return &VolcengineProvider{name: name, svc: svc}
 }
 
-func (p *JimengVideoProvider) GetName() string { return ProviderNameJimengVideo }
+func (p *VolcengineProvider) GetName() string { return p.name }
 
 // GenerateVideo 提交即梦视频生成任务（非阻塞，返回 task_id）
 //
@@ -83,7 +93,7 @@ func (p *JimengVideoProvider) GetName() string { return ProviderNameJimengVideo 
 //   - 有图片  → I2V 首帧（req_key=jimeng_ti2v_v30_pro，仅取第1张，不支持尾帧）
 //
 // Duration → frames：≤7s → 121（5s），>7s → 241（10s）
-func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *ai.VideoGenerateRequest) (*ai.VideoTask, error) {
+func (p *VolcengineProvider) GenerateVideo(ctx context.Context, req *ai.VideoGenerateRequest) (*ai.VideoTask, error) {
 	// 收集所有图片（首帧优先）
 	var allImages []string
 	if req.ImageURL != "" {
@@ -244,7 +254,7 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *ai.VideoGe
 }
 
 // GetVideoStatus 查询任务状态
-func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string) (*ai.VideoTaskStatus, error) {
+func (p *VolcengineProvider) GetVideoStatus(ctx context.Context, taskID string) (*ai.VideoTaskStatus, error) {
 	reqKey, rawID := jimengParseTaskID(taskID)
 
 	logger.Printf("[jimeng-video] GetVideoStatus: taskID=%s reqKey=%s", rawID, reqKey)
@@ -297,7 +307,7 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 }
 
 // GetVideoURL 获取已完成任务的视频URL
-func (p *JimengVideoProvider) GetVideoURL(ctx context.Context, taskID string) (string, error) {
+func (p *VolcengineProvider) GetVideoURL(ctx context.Context, taskID string) (string, error) {
 	reqKey, rawID := jimengParseTaskID(taskID)
 
 	logger.Printf("[jimeng-video] GetVideoURL: taskID=%s reqKey=%s", rawID, reqKey)
@@ -345,7 +355,7 @@ func (p *JimengVideoProvider) GetVideoURL(ctx context.Context, taskID string) (s
 //
 // 必填：单张图片（image_url 或 binary_data_base64[0]）、template_id
 // 选填：camera_strength（weak/medium/strong，默认 medium）、prompt
-func (p *JimengVideoProvider) submitRecameraTask(ctx context.Context, req *ai.VideoGenerateRequest, images []string, prefix string) (*ai.VideoTask, error) {
+func (p *VolcengineProvider) submitRecameraTask(ctx context.Context, req *ai.VideoGenerateRequest, images []string, prefix string) (*ai.VideoTask, error) {
 	templateID := req.CameraMovement
 	if templateID == "" {
 		return nil, fmt.Errorf("jimeng-video: 运镜模式需要指定 template_id（CameraMovement 字段）")

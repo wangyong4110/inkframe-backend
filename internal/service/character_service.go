@@ -486,10 +486,10 @@ func inferGenderFromText(text string) string {
 }
 
 // suggestVoiceForCharacter 根据角色性别/描述/标签从可用音色中自动选择合适的音色 ID。
-// gender 为显式性别（male/female/neutral），优先于从文本推断；若无可用音色返回空字符串。
-func suggestVoiceForCharacter(description, gender string, personalityTags []string, role string, voices []*model.AIModel) string {
+// 返回 (voiceID, providerName)；gender 为显式性别，优先于从文本推断；若无可用音色返回空字符串。
+func suggestVoiceForCharacter(description, gender string, personalityTags []string, role string, voices []*model.AIModel) (string, string) {
 	if len(voices) == 0 {
-		return ""
+		return "", ""
 	}
 
 	// 优先使用显式 gender，否则从描述/标签推断
@@ -527,14 +527,24 @@ func suggestVoiceForCharacter(description, gender string, personalityTags []stri
 	switch gender {
 	case "female":
 		if len(femaleVoices) > 0 {
-			return femaleVoices[0].Name
+			v := femaleVoices[0]
+			return v.Name, providerNameOf(v)
 		}
 	case "male":
 		if len(maleVoices) > 0 {
-			return maleVoices[0].Name
+			v := maleVoices[0]
+			return v.Name, providerNameOf(v)
 		}
 	}
-	return voices[0].Name
+	return voices[0].Name, providerNameOf(voices[0])
+}
+
+// providerNameOf 安全提取 AIModel 的 provider 名称。
+func providerNameOf(v *model.AIModel) string {
+	if v != nil && v.Provider != nil {
+		return v.Provider.Name
+	}
+	return ""
 }
 
 // suggestVoiceStyle 根据性别、年龄感、角色定位和性格标签推断最合适的语音风格。
@@ -604,8 +614,10 @@ func suggestVoiceLanguage() string {
 
 // suggestVoiceConfig 根据角色信息一次性推荐完整配音配置。
 func suggestVoiceConfig(description, gender, age, role string, personalityTags []string, voiceModels []*model.AIModel) model.CharacterVoiceConfig {
+	voiceID, voiceModel := suggestVoiceForCharacter(description, gender, personalityTags, role, voiceModels)
 	return model.CharacterVoiceConfig{
-		VoiceID:       suggestVoiceForCharacter(description, gender, personalityTags, role, voiceModels),
+		VoiceID:       voiceID,
+		VoiceModel:    voiceModel,
 		VoiceStyle:    suggestVoiceStyle(gender, age, role, personalityTags, description),
 		VoiceLanguage: suggestVoiceLanguage(),
 	}
@@ -630,6 +642,9 @@ func applyProfileToCharacter(char *model.Character, description, gender, age, ro
 	}
 	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, cfg.VoiceID); ok {
 		char.VoiceConfig.VoiceID = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceModel, cfg.VoiceModel); ok {
+		char.VoiceConfig.VoiceModel = v
 	}
 	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, cfg.VoiceStyle); ok {
 		char.VoiceConfig.VoiceStyle = v
@@ -859,8 +874,13 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	}
 	if req.VoiceID != "" {
 		character.VoiceConfig.VoiceID = req.VoiceID
-		// When updating voice, also sync style (allow clearing to empty/default)
+		// When updating voice, also sync model and style (allow clearing to empty/default)
+		if req.VoiceModel != "" {
+			character.VoiceConfig.VoiceModel = req.VoiceModel
+		}
 		character.VoiceConfig.VoiceStyle = req.VoiceStyle
+	} else if req.VoiceModel != "" {
+		character.VoiceConfig.VoiceModel = req.VoiceModel
 	} else if req.VoiceStyle != "" {
 		character.VoiceConfig.VoiceStyle = req.VoiceStyle
 	}
@@ -1275,6 +1295,9 @@ func (s *CharacterService) ReanalyzeCharacter(ctx context.Context, tenantID, cha
 	voiceCfg := suggestVoiceConfig(char.Description, char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, voiceModels)
 	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, voiceCfg.VoiceID); ok {
 		char.VoiceConfig.VoiceID = v
+	}
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceModel, voiceCfg.VoiceModel); ok {
+		char.VoiceConfig.VoiceModel = v
 	}
 	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, voiceCfg.VoiceStyle); ok {
 		char.VoiceConfig.VoiceStyle = v

@@ -124,22 +124,6 @@ func (p *MinimaxTTSProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *MinimaxTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("minimax-tts: text generation not supported")
-}
-
-func (p *MinimaxTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("minimax-tts: streaming not supported")
-}
-
-func (p *MinimaxTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("minimax-tts: embeddings not supported")
-}
-
-func (p *MinimaxTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("minimax-tts: image generation not supported")
-}
-
 // AudioGenerate 调用 MiniMax T2A V2 语音合成，返回 MP3 文件路径。
 //
 // req.Voice:   音色 ID（见音色列表），留空默认 "female-shaonv"
@@ -334,4 +318,4 @@ func normalizeMinimaxEmotion(e string) string {
 }
 
 // Ensure interface compliance.
-var _ ai.AIProvider = (*MinimaxTTSProvider)(nil)
+var _ ai.AudioProvider = (*MinimaxTTSProvider)(nil)

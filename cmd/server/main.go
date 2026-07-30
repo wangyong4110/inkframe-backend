@@ -127,7 +127,7 @@ func main() {
 	}
 
 	// 5. 初始化AI模块（含图像生成提供者注册）
-	aiManager := initAIModule(cfg)
+	initAIModule(cfg)
 
 	// 6. 初始化向量存储
 	vectorStore := initVectorStore(cfg)
@@ -142,7 +142,7 @@ func main() {
 	service.SeedBuiltinImageStylePresets(repos.ImageStylePresetRepo)
 
 	// 8. 初始化服务层
-	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
+	services := initServices(db, repos, vectorStore, cfg, redisClient)
 
 	// SeedAllProviders 已在 initServices/wiring.go 中调用，此处不重复执行
 

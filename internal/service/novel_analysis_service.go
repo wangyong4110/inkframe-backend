@@ -977,7 +977,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			finalDesc = strings.Join(descParts, "\n")
 		}
 		// 自动推荐配音设置
-		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, role, voiceModels)
+		suggestedVoice, suggestedModel := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, role, voiceModels)
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
 		suggestedLang := suggestVoiceLanguage()
 		char := &model.Character{
@@ -992,6 +992,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			},
 			VoiceConfig: model.CharacterVoiceConfig{
 				VoiceID:       suggestedVoice,
+				VoiceModel:    suggestedModel,
 				VoiceStyle:    suggestedStyle,
 				VoiceLanguage: suggestedLang,
 			},

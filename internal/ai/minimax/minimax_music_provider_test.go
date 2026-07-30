@@ -59,24 +59,6 @@ func TestMinimaxMusicProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-func TestMinimaxMusicProvider_UnsupportedMethods(t *testing.T) {
-	p := NewMinimaxMusicProvider("key")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate: expected unsupported error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream: expected unsupported error, got nil")
-	}
-	if _, err := p.Embed(ctx, "hello"); err == nil {
-		t.Error("Embed: expected unsupported error, got nil")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate: expected unsupported error, got nil")
-	}
-}
-
 func TestMinimaxMusicProvider_AudioGenerate_RejectsUnsupportedModel(t *testing.T) {
 	p := NewMinimaxMusicProvider("key")
 	_, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{
@@ -89,7 +71,7 @@ func TestMinimaxMusicProvider_AudioGenerate_RejectsUnsupportedModel(t *testing.T
 }
 
 func TestMinimaxMusicProvider_ImplementsAIProvider(t *testing.T) {
-	var _ ai.AIProvider = NewMinimaxMusicProvider("key")
+	var _ ai.AudioProvider = NewMinimaxMusicProvider("key")
 }
 
 // TestMinimaxMusicProvider_AudioGenerate_RealCall hits the live MiniMax music generation API.

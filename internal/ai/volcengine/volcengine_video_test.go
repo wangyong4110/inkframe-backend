@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-func TestNewJimengVideoProvider(t *testing.T) {
+func TestNewVolcengineProvider(t *testing.T) {
 	p := NewJimengVideoProvider("ak", "sk")
 	if p == nil {
-		t.Fatal("NewJimengVideoProvider returned nil")
+		t.Fatal("NewVolcengineProvider returned nil")
 	}
 	if p.svc == nil {
 		t.Fatal("expected non-nil underlying volcengine visual service")
 	}
 }
 
-func TestJimengVideoProvider_GetName(t *testing.T) {
+func TestVolcengineProvider_GetName(t *testing.T) {
 	p := NewJimengVideoProvider("ak", "sk")
 	if got := p.GetName(); got != ProviderNameJimengVideo {
 		t.Errorf("GetName() = %q, want %q", got, ProviderNameJimengVideo)
@@ -116,9 +116,9 @@ func jimengTestCredentials(t *testing.T) (accessKey, secretKey string) {
 	return accessKey, secretKey
 }
 
-// TestJimengVideoProvider_GenerateVideo_RealCall submits a real
+// TestVolcengineProvider_GenerateVideo_RealCall submits a real
 // text-to-video (T2V) task against the Volcengine visual (即梦) API.
-func TestJimengVideoProvider_GenerateVideo_RealCall(t *testing.T) {
+func TestVolcengineProvider_GenerateVideo_RealCall(t *testing.T) {
 	accessKey, secretKey := jimengTestCredentials(t)
 	p := NewJimengVideoProvider(accessKey, secretKey)
 

@@ -8,8 +8,6 @@ import (
 	"math"
 	"strings"
 	"time"
-
-	volcvisual "github.com/volcengine/volc-sdk-golang/service/visual"
 )
 
 // ProviderNameVolcengineVisual is the canonical name for the Volcengine Visual AI provider.
@@ -40,27 +38,7 @@ const (
 	VolcModelJimengI2Iv30 = "jimeng_i2i_v30"
 )
 
-// VolcengineVisualProvider 火山引擎即梦AI图像生成提供者
-//
-// 鉴权：通过 volc-sdk-golang 自动完成 HMAC-SHA256 AK/SK 签名
-// API：两步异步接口（CVSync2AsyncSubmitTask → CVSync2AsyncGetResult）
-//
-// 文档：https://www.volcengine.com/docs/86081/1804546
-type VolcengineVisualProvider struct {
-	svc *volcvisual.Visual
-}
-
-// NewVolcengineVisualProvider 创建即梦AI图像提供者
-func NewVolcengineVisualProvider(accessKey, secretKey string) *VolcengineVisualProvider {
-	svc := volcvisual.NewInstance()
-	svc.Client.SetAccessKey(accessKey)
-	svc.Client.SetSecretKey(secretKey)
-	return &VolcengineVisualProvider{svc: svc}
-}
-
-func (p *VolcengineVisualProvider) GetName() string { return ProviderNameVolcengineVisual }
-
-func (p *VolcengineVisualProvider) GetModels() []string {
+func (p *VolcengineProvider) GetModels() []string {
 	return []string{
 		VolcModelJimengSeedream46, // 即梦4.6-人像写真/平面设计/风格化（旗舰）
 		VolcModelJimengT2Iv40,     // 即梦4.0-文生图/图像编辑
@@ -75,7 +53,7 @@ func (p *VolcengineVisualProvider) GetModels() []string {
 	}
 }
 
-func (p *VolcengineVisualProvider) HealthCheck(ctx context.Context) error {
+func (p *VolcengineProvider) HealthCheck(ctx context.Context) error {
 	probe := map[string]interface{}{
 		"req_key":  VolcModelText2ImgV3,
 		"task_id":  "health_check_probe",
@@ -98,7 +76,7 @@ func (p *VolcengineVisualProvider) HealthCheck(ctx context.Context) error {
 //   - CFGScale       → scale（SeedEdit3.0/DreamO）
 //   - Seed           → seed
 //   - Size           → width x height（格式 "1024x1024"）
-func (p *VolcengineVisualProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
+func (p *VolcengineProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
 	start := time.Now()
 
 	reqKey := req.Model
@@ -118,7 +96,7 @@ func (p *VolcengineVisualProvider) ImageGenerate(ctx context.Context, req *ai.Im
 }
 
 // buildSubmitParams 根据模型类型构建提交参数
-func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ai.ImageGenerateRequest) map[string]interface{} {
+func (p *VolcengineProvider) buildSubmitParams(reqKey string, req *ai.ImageGenerateRequest) map[string]interface{} {
 	seed := int64(-1)
 	if req.Seed != 0 {
 		seed = req.Seed
@@ -353,7 +331,7 @@ func pickMultiRef(urls, images []string) []string {
 	return images
 }
 
-func (p *VolcengineVisualProvider) setImageInput(params map[string]interface{}, image, urlField, b64Field string) {
+func (p *VolcengineProvider) setImageInput(params map[string]interface{}, image, urlField, b64Field string) {
 	if image == "" {
 		return
 	}
@@ -364,7 +342,7 @@ func (p *VolcengineVisualProvider) setImageInput(params map[string]interface{}, 
 	}
 }
 
-func (p *VolcengineVisualProvider) setMultiImageInput(params map[string]interface{}, images []string, urlField, b64Field string) {
+func (p *VolcengineProvider) setMultiImageInput(params map[string]interface{}, images []string, urlField, b64Field string) {
 	var urls, b64s []string
 	for _, img := range images {
 		if img == "" {
@@ -385,7 +363,7 @@ func (p *VolcengineVisualProvider) setMultiImageInput(params map[string]interfac
 }
 
 // submitTask 通过 SDK 提交异步任务，返回 task_id
-func (p *VolcengineVisualProvider) submitTask(params map[string]interface{}) (string, error) {
+func (p *VolcengineProvider) submitTask(params map[string]interface{}) (string, error) {
 	log.Printf("[volcengine-visual] submitTask params=%v", ai.RedactBase64Fields(params, "binary_data_base64"))
 
 	resp, _, err := p.svc.CVSync2AsyncSubmitTask(params)
@@ -411,7 +389,7 @@ func (p *VolcengineVisualProvider) submitTask(params map[string]interface{}) (st
 }
 
 // pollResult 轮询任务结果，最多等待 5 分钟（或父 context 更早超时时以父为准）
-func (p *VolcengineVisualProvider) pollResult(ctx context.Context, reqKey, taskID string, start time.Time) (*ai.ImageResponse, error) {
+func (p *VolcengineProvider) pollResult(ctx context.Context, reqKey, taskID string, start time.Time) (*ai.ImageResponse, error) {
 	getParams := map[string]interface{}{
 		"req_key":  reqKey,
 		"task_id":  taskID,
@@ -547,21 +525,6 @@ func truncatePromptRunes(s string, maxRunes int) string {
 	}
 	log.Printf("[volcengine-visual] prompt exceeds %d chars (actual %d), truncating", maxRunes, len(runes))
 	return string(runes[:maxRunes])
-}
-
-// ─── AIProvider 接口的剩余方法（不支持）─────────────────────────────────────
-
-func (p *VolcengineVisualProvider) Generate(_ context.Context, _ *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("volcengine-visual 不支持文本生成")
-}
-func (p *VolcengineVisualProvider) GenerateStream(_ context.Context, _ *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("volcengine-visual 不支持流式生成")
-}
-func (p *VolcengineVisualProvider) Embed(_ context.Context, _ string) ([]float32, error) {
-	return nil, fmt.Errorf("volcengine-visual 不支持向量嵌入")
-}
-func (p *VolcengineVisualProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("volcengine-visual 不支持音频生成")
 }
 
 func init() {

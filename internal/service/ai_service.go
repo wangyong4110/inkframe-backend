@@ -3,19 +3,16 @@ package service
 import (
 	"sync"
 
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 type AIService struct {
 	modelRepo     *repository.AIModelRepository
-	aiManager     *ai.ModelManager
 	providerRepo  *repository.ModelProviderRepository
 	storageSvc    storage.Service
 	modelLimiters sync.Map      // key: "tenantID:modelName" → *modelCallLimiter (shared per-model concurrency+rate)
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
-	encKey        string        // AES-256-GCM key for decrypting stored API credentials
 	// ImageQueue 是按模型隔离的图片生成任务队列。
 	// Worker 数量 = AIModel.Concurrency（DB 配置），确保不超出 API 并发限额。
 	// 替代"goroutine+信号量"模式：调用方提交任务后立即返回 TaskFuture，
@@ -25,12 +22,10 @@ type AIService struct {
 
 func NewAIService(
 	modelRepo *repository.AIModelRepository,
-	aiManager *ai.ModelManager,
 	providerRepo ...*repository.ModelProviderRepository,
 ) *AIService {
 	svc := &AIService{
 		modelRepo: modelRepo,
-		aiManager: aiManager,
 		stopCh:    make(chan struct{}),
 		//ImageQueue: newModelTaskQueue(),
 	}
@@ -39,12 +34,6 @@ func NewAIService(
 	}
 	//svc.startProviderHealthCheck()
 	return svc
-}
-
-// WithEncryptionKey sets the AES-256-GCM key used to decrypt API credentials stored in the DB.
-func (s *AIService) WithEncryptionKey(key string) *AIService {
-	s.encKey = key
-	return s
 }
 
 // Shutdown stops background goroutines (call on server exit).

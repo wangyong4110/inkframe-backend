@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
 // DefaultProviderTimeout 是 provider HTTP client 的默认超时时间。
@@ -26,26 +23,40 @@ func ResolveTimeout(seconds int) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// AIProvider AI提供者接口
-type AIProvider interface {
+// TextProvider 文本生成接口
+type TextProvider interface {
+	ProviderMeta
 	// Generate 生成文本
 	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
-
 	// GenerateStream 流式生成文本
 	GenerateStream(ctx context.Context, req *GenerateRequest) (<-chan *GenerateResponse, error)
+}
 
+// EmbeddingProvider 向量生成接口
+type EmbeddingProvider interface {
+	ProviderMeta
 	// Embed 生成向量
 	Embed(ctx context.Context, text string) ([]float32, error)
+}
 
+// ImageProvider 图像生成接口
+type ImageProvider interface {
+	ProviderMeta
 	// ImageGenerate 生成图像
 	ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error)
+}
 
+// AudioProvider 音频生成接口
+type AudioProvider interface {
+	ProviderMeta
 	// AudioGenerate 生成音频
 	AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error)
+}
 
+// ProviderMeta 所有 AI 提供者必须实现的元数据接口
+type ProviderMeta interface {
 	// GetName 获取提供者名称
 	GetName() string
-
 	// HealthCheck 健康检查
 	HealthCheck(ctx context.Context) error
 }
@@ -85,6 +96,8 @@ type GenerateResponse struct {
 	// Fix 4: 实际执行的模型 DB ID（fallback 时与 PrimaryModelID 不同，用于 usage log 精确记录）
 	ActualModelID uint `json:"actual_model_id,omitempty"`
 }
+
+func (r *GenerateResponse) GetError() string { return r.Error }
 
 // ImageGenerateRequest 图像生成请求
 type ImageGenerateRequest struct {
@@ -138,6 +151,8 @@ type ImageResponse struct {
 	Error     string   `json:"error,omitempty"`
 }
 
+func (r *ImageResponse) GetError() string { return r.Error }
+
 // AudioGenerateRequest 音频生成请求
 type AudioGenerateRequest struct {
 	Model           string  `json:"model"`
@@ -182,6 +197,8 @@ type AudioResponse struct {
 	Subtitles []TTSSubtitle `json:"subtitles,omitempty"` // 时间戳（EnableSubtitle=true 时填充）
 	Error     string        `json:"error,omitempty"`
 }
+
+func (r *AudioResponse) GetError() string { return r.Error }
 
 // MultimodalEmbedItem 多模态 Embedding 输入元素
 type MultimodalEmbedItem struct {
@@ -247,78 +264,6 @@ type ImageProviderEntry struct {
 	ProviderName string
 	Model        string
 	Size         string
-}
-
-// ModelManager 模型管理器
-type ModelManager struct {
-	mu              sync.RWMutex
-	providers       map[string]AIProvider
-	defaultProvider string
-	imageProviders  []ImageProviderEntry
-}
-
-func NewModelManager() *ModelManager {
-	return &ModelManager{
-		providers: make(map[string]AIProvider),
-	}
-}
-
-// RegisterImageProvider 注册图像生成提供者候选列表（按调用顺序尝试）。
-// provider 不需要在注册时已存在；实际可用性在请求时由 GetProvider 决定。
-func (m *ModelManager) RegisterImageProvider(name, model, size string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.imageProviders = append(m.imageProviders, ImageProviderEntry{name, model, size})
-}
-
-// GetImageProviders 返回已注册的图像生成提供者列表
-func (m *ModelManager) GetImageProviders() []ImageProviderEntry {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.imageProviders
-}
-
-// RegisterProvider 注册AI提供者
-func (m *ModelManager) RegisterProvider(name string, provider AIProvider) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.providers[name] = provider
-}
-
-// SetDefault 设置默认提供者
-func (m *ModelManager) SetDefault(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.providers[name]; !ok {
-		return fmt.Errorf("provider not found: %s", name)
-	}
-	m.defaultProvider = name
-	return nil
-}
-
-// GetProvider 获取提供者
-func (m *ModelManager) GetProvider(name string) (AIProvider, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if name == "" {
-		name = m.defaultProvider
-	}
-	provider, ok := m.providers[name]
-	if !ok {
-		return nil, fmt.Errorf("provider not found: %s", name)
-	}
-	return provider, nil
-}
-
-// ListProviders 列出所有提供者
-func (m *ModelManager) ListProviders() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	names := []string{}
-	for name := range m.providers {
-		names = append(names, name)
-	}
-	return names
 }
 
 // GenerateRequestBuilder 生成请求构建器
@@ -502,7 +447,7 @@ type UsageStats struct {
 // ModelHealthChecker 模型健康检查器
 type ModelHealthChecker struct {
 	mu            sync.RWMutex
-	providers     map[string]AIProvider
+	providers     map[string]ProviderMeta
 	checkInterval time.Duration
 	lastCheck     map[string]*HealthStatus
 }
@@ -516,13 +461,13 @@ type HealthStatus struct {
 
 func NewModelHealthChecker() *ModelHealthChecker {
 	return &ModelHealthChecker{
-		providers:     make(map[string]AIProvider),
+		providers:     make(map[string]ProviderMeta),
 		checkInterval: 5 * time.Minute,
 		lastCheck:     make(map[string]*HealthStatus),
 	}
 }
 
-func (h *ModelHealthChecker) Register(name string, provider AIProvider) {
+func (h *ModelHealthChecker) Register(name string, provider ProviderMeta) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.providers[name] = provider
@@ -608,36 +553,6 @@ func (f *FallbackManager) GetNext(current string) string {
 	return "" // 没有更多fallback
 }
 
-// JSON格式化工具
-func FormatJSON(v interface{}) string {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	return string(b)
-}
-
-// RetryProvider 带指数退避重试的 AI Provider 包装器
-type RetryProvider struct {
-	provider   AIProvider
-	maxRetries int
-	baseDelay  time.Duration // 基础等待时间，默认 500ms
-	cb         *CircuitBreaker
-}
-
-// NewRetryProvider 创建重试包装器（最多重试 maxRetries 次，基础延迟 baseDelay）
-func NewRetryProvider(provider AIProvider, maxRetries int, baseDelay time.Duration) *RetryProvider {
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-	if baseDelay <= 0 {
-		baseDelay = 500 * time.Millisecond
-	}
-	return &RetryProvider{
-		provider:   provider,
-		maxRetries: maxRetries,
-		baseDelay:  baseDelay,
-		cb:         NewCircuitBreaker(provider.GetName(), 5, 30*time.Second),
-	}
-}
-
 // IsTimeoutError 判断错误是否为客户端超时（HTTP Client.Timeout / context deadline）。
 // 超时代表 AI 服务处理时间超过 HTTP client 设定值，重试只会让情况更糟；应 fail-fast。
 func IsTimeoutError(err error) bool {
@@ -650,327 +565,10 @@ func IsTimeoutError(err error) bool {
 		strings.Contains(msg, "request timed out")
 }
 
-// isRetryable 判断错误是否值得重试。
-// 只重试网络临时故障和服务端过载，不重试客户端超时（重试超时只会叠加等待时间）。
-func isRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	// 客户端超时不重试
-	if IsTimeoutError(err) {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	// 包含并发/限速信号的错误均值得重试：429（Too Many Requests）、上游 concurrent limit、
-	// 即梦AI code=50430（视频并发限制）、或 code=429 等。
-	retryKeywords := []string{
-		"connection refused", "temporary", "429", "502", "503",
-		"rate limit", "overloaded", "concurrent limit", "50430", "too many",
-	}
-	for _, kw := range retryKeywords {
-		if strings.Contains(msg, kw) {
-			return true
-		}
-	}
-	return false
+// JSON格式化工具
+func FormatJSON(v interface{}) string {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return string(b)
 }
 
-// isConcurrentLimitError 判断是否为 API 并发名额耗尽错误（即梦AI code=50430）。
-// 此类错误需要比普通限速更长的等待时间，才能等到服务端释放并发槽位。
-func isConcurrentLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "50430") || strings.Contains(msg, "concurrent limit")
-}
 
-// shouldPenalizeCB reports whether an error should count toward the circuit breaker threshold.
-// Timeouts and rate limits indicate request-level slowness or throttling — the provider is
-// still reachable. Only connection failures and server errors indicate true unavailability.
-func shouldPenalizeCB(err error) bool {
-	if err == nil {
-		return false
-	}
-	if IsTimeoutError(err) {
-		return false // slow request, not a downed provider
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "context canceled") || isConcurrentLimitError(err) {
-		return false // throttled, concurrent-limit, or caller-canceled — not a provider fault
-	}
-	return true
-}
-
-// isRetryableStatus 判断 HTTP 状态码是否值得重试
-func isRetryableStatus(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests ||
-		statusCode == http.StatusBadGateway ||
-		statusCode == http.StatusServiceUnavailable ||
-		statusCode == http.StatusGatewayTimeout
-}
-
-func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
-	if err := p.cb.Err(); err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < p.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			if delay > 32*time.Second {
-				delay = 32 * time.Second
-			}
-			logger.Printf("RetryProvider.Generate: attempt %d, waiting %v", attempt+1, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		resp, err := p.provider.Generate(ctx, req)
-		if err != nil {
-			if isRetryable(err) {
-				lastErr = err
-				continue // 可重试：不计入 CB，等所有重试耗尽再计一次
-			}
-			if shouldPenalizeCB(err) {
-				logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker: %v", p.provider.GetName(), err)
-				p.cb.RecordFailure()
-			}
-			return nil, err
-		}
-		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf("%s", resp.Error)) {
-				lastErr = fmt.Errorf("%s", resp.Error)
-				continue
-			}
-			// Non-retryable provider-level error (e.g. 400 bad request): don't count as success or failure.
-			return resp, nil
-		}
-		p.cb.RecordSuccess()
-		return resp, nil
-	}
-	if shouldPenalizeCB(lastErr) {
-		logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker after %d attempts: %v", p.provider.GetName(), p.maxRetries, lastErr)
-		p.cb.RecordFailure()
-	}
-	return nil, fmt.Errorf("RetryProvider.Generate failed after %d attempts: %w", p.maxRetries, lastErr)
-}
-
-func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest) (<-chan *GenerateResponse, error) {
-	if err := p.cb.Err(); err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < p.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			if delay > 32*time.Second {
-				delay = 32 * time.Second
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		ch, err := p.provider.GenerateStream(ctx, req)
-		if err != nil {
-			if isRetryable(err) {
-				lastErr = err
-				continue
-			}
-			if shouldPenalizeCB(err) {
-				logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker (stream): %v", p.provider.GetName(), err)
-				p.cb.RecordFailure()
-			}
-			return nil, err
-		}
-		p.cb.RecordSuccess()
-		return ch, nil
-	}
-	if shouldPenalizeCB(lastErr) {
-		logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker (stream) after %d attempts: %v", p.provider.GetName(), p.maxRetries, lastErr)
-		p.cb.RecordFailure()
-	}
-	return nil, fmt.Errorf("RetryProvider.GenerateStream failed after %d attempts: %w", p.maxRetries, lastErr)
-}
-
-func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	if err := p.cb.Err(); err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < p.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			if delay > 32*time.Second {
-				delay = 32 * time.Second
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		result, err := p.provider.Embed(ctx, text)
-		if err != nil {
-			if isRetryable(err) {
-				lastErr = err
-				continue
-			}
-			if shouldPenalizeCB(err) {
-				p.cb.RecordFailure()
-			}
-			return nil, err
-		}
-		p.cb.RecordSuccess()
-		return result, nil
-	}
-	if shouldPenalizeCB(lastErr) {
-		p.cb.RecordFailure()
-	}
-	return nil, fmt.Errorf("RetryProvider.Embed failed after %d attempts: %w", p.maxRetries, lastErr)
-}
-
-func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
-	if err := p.cb.Err(); err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < p.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			// 即梦AI 并发限制（50430）需要等服务端释放并发槽位，通常需要 5-10s；
-			// 普通指数退避不够，对此类错误强制使用更长的基础延迟。
-			if isConcurrentLimitError(lastErr) {
-				concurrentLimitDelay := 6 * time.Second * time.Duration(attempt)
-				if concurrentLimitDelay > delay {
-					delay = concurrentLimitDelay
-				}
-			}
-			if delay > 32*time.Second {
-				delay = 32 * time.Second
-			}
-			logger.Printf("RetryProvider.ImageGenerate: attempt %d, waiting %v", attempt+1, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		resp, err := p.provider.ImageGenerate(ctx, req)
-		if err != nil {
-			if isRetryable(err) {
-				lastErr = err
-				continue
-			}
-			if shouldPenalizeCB(err) {
-				p.cb.RecordFailure()
-			}
-			return nil, err
-		}
-		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf("%s", resp.Error)) {
-				lastErr = fmt.Errorf("%s", resp.Error)
-				continue
-			}
-			p.cb.RecordSuccess()
-			return resp, nil
-		}
-		p.cb.RecordSuccess()
-		return resp, nil
-	}
-	if shouldPenalizeCB(lastErr) {
-		p.cb.RecordFailure()
-	}
-	return nil, fmt.Errorf("RetryProvider.ImageGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
-}
-
-func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
-	if err := p.cb.Err(); err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < p.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			if delay > 32*time.Second {
-				delay = 32 * time.Second
-			}
-			logger.Printf("RetryProvider.AudioGenerate: attempt %d, waiting %v", attempt+1, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		resp, err := p.provider.AudioGenerate(ctx, req)
-		if err != nil {
-			if isRetryable(err) {
-				lastErr = err
-				continue
-			}
-			if shouldPenalizeCB(err) {
-				p.cb.RecordFailure()
-			}
-			return nil, err
-		}
-		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf("%s", resp.Error)) {
-				lastErr = fmt.Errorf("%s", resp.Error)
-				continue
-			}
-			p.cb.RecordSuccess()
-			return resp, nil
-		}
-		p.cb.RecordSuccess()
-		return resp, nil
-	}
-	if shouldPenalizeCB(lastErr) {
-		p.cb.RecordFailure()
-	}
-	return nil, fmt.Errorf("RetryProvider.AudioGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
-}
-
-func (p *RetryProvider) GetName() string                       { return p.provider.GetName() }
-func (p *RetryProvider) GetModels() []string {
-	if gp, ok := p.provider.(interface{ GetModels() []string }); ok {
-		return gp.GetModels()
-	}
-	return nil
-}
-func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provider.HealthCheck(ctx) }
-
-// ResetCircuit force-closes the circuit breaker. Call after a successful health check to
-// immediately unblock requests that were stalled by a previously open circuit.
-func (p *RetryProvider) ResetCircuit() { p.cb.Reset() }
-
-// SwitchProvider 在 ModelManager 中动态切换某个任务类型的默认 Provider
-func (m *ModelManager) SwitchProvider(providerName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.providers[providerName]; !ok {
-		return fmt.Errorf("provider not found: %s", providerName)
-	}
-	m.defaultProvider = providerName
-	return nil
-}
-
-// WrapWithRetry 将已注册的 Provider 包装为 RetryProvider
-func (m *ModelManager) WrapWithRetry(name string, maxRetries int, baseDelay time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	provider, ok := m.providers[name]
-	if !ok {
-		return fmt.Errorf("provider not found: %s", name)
-	}
-	// 避免重复包装
-	if _, already := provider.(*RetryProvider); already {
-		return nil
-	}
-	m.providers[name] = NewRetryProvider(provider, maxRetries, baseDelay)
-	return nil
-}

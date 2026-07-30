@@ -116,8 +116,8 @@ func TestPickMultiRef(t *testing.T) {
 
 // ─── setImageInput / setMultiImageInput ────────────────────────────────────
 
-func TestVolcengineVisualProvider_SetImageInput(t *testing.T) {
-	p := &VolcengineVisualProvider{}
+func TestVolcengineProvider_SetImageInput(t *testing.T) {
+	p := &VolcengineProvider{}
 
 	t.Run("empty image is a no-op", func(t *testing.T) {
 		params := map[string]interface{}{}
@@ -161,8 +161,8 @@ func TestVolcengineVisualProvider_SetImageInput(t *testing.T) {
 	})
 }
 
-func TestVolcengineVisualProvider_SetMultiImageInput(t *testing.T) {
-	p := &VolcengineVisualProvider{}
+func TestVolcengineProvider_SetMultiImageInput(t *testing.T) {
+	p := &VolcengineProvider{}
 
 	t.Run("mixed urls and base64 split correctly", func(t *testing.T) {
 		params := map[string]interface{}{}
@@ -198,8 +198,8 @@ func TestVolcengineVisualProvider_SetMultiImageInput(t *testing.T) {
 
 // ─── buildSubmitParams (per-model request building; no network) ───────────
 
-func TestVolcengineVisualProvider_BuildSubmitParams(t *testing.T) {
-	p := &VolcengineVisualProvider{}
+func TestVolcengineProvider_BuildSubmitParams(t *testing.T) {
+	p := &VolcengineProvider{}
 
 	t.Run("Text2ImgV3 basic fields", func(t *testing.T) {
 		req := &ai.ImageGenerateRequest{
@@ -451,24 +451,7 @@ func TestVolcengineVisualProvider_BuildSubmitParams(t *testing.T) {
 
 // ─── GetName / GetModels / constructor ─────────────────────────────────────
 
-func TestNewVolcengineVisualProvider(t *testing.T) {
-	p := NewVolcengineVisualProvider("ak", "sk")
-	if p == nil {
-		t.Fatal("expected non-nil provider")
-	}
-	if p.svc == nil {
-		t.Fatal("expected non-nil underlying SDK client")
-	}
-}
-
-func TestVolcengineVisualProvider_GetName(t *testing.T) {
-	p := NewVolcengineVisualProvider("ak", "sk")
-	if got := p.GetName(); got != ProviderNameVolcengineVisual {
-		t.Errorf("GetName() = %q, want %q", got, ProviderNameVolcengineVisual)
-	}
-}
-
-func TestVolcengineVisualProvider_GetModels(t *testing.T) {
+func TestVolcengineProvider_GetModels(t *testing.T) {
 	p := NewVolcengineVisualProvider("ak", "sk")
 	models := p.GetModels()
 	if len(models) == 0 {
@@ -497,26 +480,6 @@ func TestVolcengineVisualProvider_GetModels(t *testing.T) {
 	}
 }
 
-// ─── Unsupported AIProvider methods ────────────────────────────────────────
-
-func TestVolcengineVisualProvider_UnsupportedMethods(t *testing.T) {
-	p := NewVolcengineVisualProvider("ak", "sk")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate() expected error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream() expected error, got nil")
-	}
-	if _, err := p.Embed(ctx, "text"); err == nil {
-		t.Error("Embed() expected error, got nil")
-	}
-	if _, err := p.AudioGenerate(ctx, &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("AudioGenerate() expected error, got nil")
-	}
-}
-
 // ─── ImageEngineTraits registration ────────────────────────────────────────
 
 func TestVolcengineVisual_ImageEngineTraitsRegistered(t *testing.T) {
@@ -535,11 +498,11 @@ func TestVolcengineVisual_ImageEngineTraitsRegistered(t *testing.T) {
 
 // ─── Real network call (env-gated) ─────────────────────────────────────────
 
-// TestVolcengineVisualProvider_RealCall exercises ImageGenerate end-to-end
+// TestVolcengineProvider_RealCall exercises ImageGenerate end-to-end
 // against the live Volcengine API. Requires VOLCENGINE_ACCESS_KEY and
 // VOLCENGINE_SECRET_KEY (or VOLC_ACCESS_KEY/VOLC_SECRET_KEY) to be set; skips
 // otherwise.
-func TestVolcengineVisualProvider_RealCall(t *testing.T) {
+func TestVolcengineProvider_RealCall(t *testing.T) {
 	ak := firstNonEmptyEnv("VOLCENGINE_ACCESS_KEY", "VOLC_ACCESS_KEY")
 	sk := firstNonEmptyEnv("VOLCENGINE_SECRET_KEY", "VOLC_SECRET_KEY")
 	if ak == "" || sk == "" {

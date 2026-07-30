@@ -245,28 +245,4 @@ func TestDeepSeekProvider_GenerateStream(t *testing.T) {
 	}
 }
 
-func TestDeepSeekProvider_Embed_NotSupported(t *testing.T) {
-	p := NewDeepSeekProvider("key", "", "", 0)
-	_, err := p.Embed(context.Background(), "text")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-}
-
-func TestDeepSeekProvider_ImageGenerate_NotSupported(t *testing.T) {
-	p := NewDeepSeekProvider("key", "", "", 0)
-	_, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-}
-
-func TestDeepSeekProvider_AudioGenerate_NotSupported(t *testing.T) {
-	p := NewDeepSeekProvider("key", "", "", 0)
-	_, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-}
-
-var _ ai.AIProvider = (*DeepSeekProvider)(nil)
+var _ ai.TextProvider = (*DeepSeekProvider)(nil)

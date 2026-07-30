@@ -95,22 +95,6 @@ func (p *KlingTTSProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *KlingTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-tts: text generation not supported")
-}
-
-func (p *KlingTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-tts: streaming not supported")
-}
-
-func (p *KlingTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("kling-tts: embeddings not supported")
-}
-
-func (p *KlingTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("kling-tts: image generation not supported")
-}
-
 // AudioGenerate 提交语音合成任务并同步等待完成，返回音频 URL。
 //
 // req.Text:     待合成文本（最多 1000 字符）
@@ -278,5 +262,4 @@ func (p *KlingTTSProvider) doRequest(ctx context.Context, method, path string, b
 	return klingDoRequest(ctx, p.accessKey, p.secretKey, p.endpoint, p.client, method, path, body)
 }
 
-// Ensure interface compliance.
-var _ ai.AIProvider = (*KlingTTSProvider)(nil)
+var _ ai.AudioProvider = (*KlingTTSProvider)(nil)

@@ -53,22 +53,6 @@ func (p *QwenTTSProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *QwenTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("qwen-tts: text generation not supported")
-}
-
-func (p *QwenTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("qwen-tts: streaming not supported")
-}
-
-func (p *QwenTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("qwen-tts: embeddings not supported")
-}
-
-func (p *QwenTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("qwen-tts: image generation not supported")
-}
-
 // AudioGenerate 调用千问 TTS 语音合成（非流式），返回音频 URL。
 //
 // req.Voice:  音色名称（如 Cherry、Ethan），留空默认 "Cherry"
@@ -158,4 +142,4 @@ func (p *QwenTTSProvider) AudioGenerate(ctx context.Context, req *ai.AudioGenera
 	}, nil
 }
 
-var _ ai.AIProvider = (*QwenTTSProvider)(nil)
+var _ ai.AudioProvider = (*QwenTTSProvider)(nil)

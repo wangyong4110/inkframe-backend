@@ -474,4 +474,4 @@ func TestQianwenProvider_SaveTTSToTemp(t *testing.T) {
 	_ = os.Remove(strings.TrimPrefix(resp.URL, "file://"))
 }
 
-var _ ai.AIProvider = (*QianwenProvider)(nil)
+var _ ai.TextProvider = (*QianwenProvider)(nil)

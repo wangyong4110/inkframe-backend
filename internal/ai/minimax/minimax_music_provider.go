@@ -62,22 +62,6 @@ func (p *MinimaxMusicProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *MinimaxMusicProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("minimax-music: text generation not supported")
-}
-
-func (p *MinimaxMusicProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("minimax-music: streaming not supported")
-}
-
-func (p *MinimaxMusicProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("minimax-music: embeddings not supported")
-}
-
-func (p *MinimaxMusicProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("minimax-music: image generation not supported")
-}
-
 // AudioGenerate 调用 MiniMax 文生音乐（非流式，output_format=url），返回音频 URL。
 //
 // req.Text:         音乐描述 prompt（风格/情绪/场景）
@@ -179,4 +163,4 @@ func (p *MinimaxMusicProvider) AudioGenerate(ctx context.Context, req *ai.AudioG
 	}, nil
 }
 
-var _ ai.AIProvider = (*MinimaxMusicProvider)(nil)
+var _ ai.AudioProvider = (*MinimaxMusicProvider)(nil)

@@ -193,22 +193,6 @@ func (p *TencentTTSProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *TencentTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("tencent-tts: text generation not supported")
-}
-
-func (p *TencentTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("tencent-tts: streaming not supported")
-}
-
-func (p *TencentTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("tencent-tts: embeddings not supported")
-}
-
-func (p *TencentTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("tencent-tts: image generation not supported")
-}
-
 // AudioGenerate 调用腾讯云语音合成，返回音频临时文件路径。
 //
 // req.Voice:         音色 ID（如 "101002"）；一句话复刻填 "200000000"，同时设置 req.FastVoiceType
@@ -441,4 +425,4 @@ func normalizeTencentEmotion(e string) string {
 }
 
 // Ensure interface compliance.
-var _ ai.AIProvider = (*TencentTTSProvider)(nil)
+var _ ai.AudioProvider = (*TencentTTSProvider)(nil)

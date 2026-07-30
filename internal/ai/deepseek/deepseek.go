@@ -220,14 +220,3 @@ func (p *DeepSeekProvider) GenerateStream(ctx context.Context, req *ai.GenerateR
 	return ch, nil
 }
 
-func (p *DeepSeekProvider) Embed(_ context.Context, _ string) ([]float32, error) {
-	return nil, fmt.Errorf("DeepSeek 暂不支持 Embedding")
-}
-
-func (p *DeepSeekProvider) ImageGenerate(_ context.Context, _ *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("DeepSeek 暂不支持图像生成")
-}
-
-func (p *DeepSeekProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("DeepSeek 暂不支持音频生成")
-}

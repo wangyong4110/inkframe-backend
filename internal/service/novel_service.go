@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -1407,12 +1406,6 @@ func (s *NovelService) SyncCharacterSnapshots(
 		}
 	}
 	return nil
-}
-
-// providerCacheEntry 提供商缓存条目
-type providerCacheEntry struct {
-	provider  ai.AIProvider
-	expiresAt time.Time
 }
 
 // TaskRouting specifies which provider to prefer for each task type.

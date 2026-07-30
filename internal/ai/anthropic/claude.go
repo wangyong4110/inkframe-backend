@@ -295,25 +295,6 @@ func (p *AnthropicProvider) GenerateStream(ctx context.Context, req *ai.Generate
 	return ch, nil
 }
 
-func (p *AnthropicProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	// Anthropic 不提供 embedding API，需要使用其他服务
-	return nil, fmt.Errorf("Anthropic does not provide embedding API")
-}
-
-func (p *AnthropicProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	// Anthropic 不提供图像生成 API
-	return &ai.ImageResponse{
-		Error: "Anthropic does not provide image generation API",
-	}, nil
-}
-
-func (p *AnthropicProvider) AudioGenerate(ctx context.Context, req *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	// Anthropic 不提供语音生成 API
-	return &ai.AudioResponse{
-		Error: "Anthropic does not provide audio generation API",
-	}, nil
-}
-
 // Claude API 响应结构
 type ClaudeResponse struct {
 	ID      string `json:"id"`
@@ -666,18 +647,6 @@ func (p *GoogleProvider) Embed(ctx context.Context, text string) ([]float32, err
 	return embedResp.Embedding.Values, nil
 }
 
-func (p *GoogleProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	// Gemini Pro Vision 支持图像生成
-	return &ai.ImageResponse{
-		Error: "Use Gemini Pro Vision for image generation",
-	}, nil
-}
-
-func (p *GoogleProvider) AudioGenerate(ctx context.Context, req *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return &ai.AudioResponse{
-		Error: "Google does not provide standalone TTS API",
-	}, nil
-}
 
 // Gemini API 响应结构
 type GeminiResponse struct {

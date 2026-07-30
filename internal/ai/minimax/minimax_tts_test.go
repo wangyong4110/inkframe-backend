@@ -73,23 +73,6 @@ func TestMinimaxTTSProvider_HealthCheck(t *testing.T) {
 	}
 }
 
-func TestMinimaxTTSProvider_UnsupportedMethods(t *testing.T) {
-	p := NewMinimaxTTSProvider("key", "group1")
-	ctx := context.Background()
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should error")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should error")
-	}
-	if _, err := p.Embed(ctx, "x"); err == nil {
-		t.Error("Embed should error")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should error")
-	}
-}
-
 func TestMinimaxTTSProvider_AudioGenerate_MissingVoice(t *testing.T) {
 	p := NewMinimaxTTSProvider("key", "group1")
 	_, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{Text: "hello"})

@@ -9,6 +9,7 @@ import (
 // CharacterVoiceConfig 配音配置（JSON存储）
 type CharacterVoiceConfig struct {
 	VoiceID       string  `json:"voice_id"`
+	VoiceModel    string  `json:"voice_model,omitempty"` // provider 名称，如 "doubao-speech" / "qianwen"
 	VoiceSpeed    float64 `json:"voice_speed"`
 	VoiceStyle    string  `json:"voice_style"`
 	VoiceLanguage string  `json:"voice_language"`
@@ -192,6 +193,7 @@ type UpdateCharacterRequest struct {
 	CoreDesire    string `json:"core_desire"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
 	// 配音设置
 	VoiceID       string   `json:"voice_id"`
+	VoiceModel    string   `json:"voice_model"`      // provider 名称，空=不更新
 	VoiceSpeed    *float64 `json:"voice_speed"`    // nil = absent (don't update)
 	VoiceStyle    string   `json:"voice_style"`
 	VoiceLanguage string   `json:"voice_language"` // 语言+方言（如 zh / zh-yue / en / ja）

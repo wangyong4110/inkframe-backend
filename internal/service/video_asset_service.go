@@ -285,6 +285,7 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 	// 确定 TTS 声音与基准风格：段落级 voice > 角色配置 > 默认
 	// style 查找与 voice 查找解耦：即使段落已有 VoiceID，也要读角色风格作为基准情感
 	voice := seg.VoiceID
+	voiceModel := ""
 	speed := 1.0
 	style := ""
 	if seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
@@ -301,9 +302,12 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 							speed = c.VoiceConfig.VoiceSpeed
 						}
 					}
+					if voiceModel == "" && c.VoiceConfig.VoiceModel != "" {
+						voiceModel = c.VoiceConfig.VoiceModel
+					}
 					style = c.VoiceConfig.VoiceStyle // 角色静态风格始终作为基准情感
-					logger.Printf("[TTS] GenerateSegmentAudio: segID=%d matched character %q voiceID=%q speed=%.2f style=%q",
-						segID, c.Name, voice, speed, style)
+					logger.Printf("[TTS] GenerateSegmentAudio: segID=%d matched character %q voiceID=%q voiceModel=%q speed=%.2f style=%q",
+						segID, c.Name, voice, voiceModel, speed, style)
 					break
 				}
 			}
@@ -322,11 +326,12 @@ func (s *VideoService) GenerateSegmentAudio(ctx context.Context, segID uint, ten
 	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d calling TTS voice=%q speed=%.2f style=%q language=%q", segID, voice, speed, style, seg.Language)
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, GenerateAudioOptions{
-		Text:     text,
-		Voice:    voice,
-		Speed:    speed,
-		Emotion:  style,
-		Language: seg.Language,
+		Text:       text,
+		Voice:      voice,
+		VoiceModel: voiceModel,
+		Speed:      speed,
+		Emotion:    style,
+		Language:   seg.Language,
 	})
 	if err != nil {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
@@ -492,15 +497,16 @@ func (s *VideoService) GenerateShotAudio(ctx context.Context, shot *model.Storyb
 		}
 	}
 
-	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
-	logger.Printf("[TTS] GenerateShotAudio: shotID=%d resolved voice=%q speed=%.2f style=%q", shot.ID, voice, speed, style)
+	voice, voiceModel, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
+	logger.Printf("[TTS] GenerateShotAudio: shotID=%d resolved voice=%q voiceModel=%q speed=%.2f style=%q", shot.ID, voice, voiceModel, speed, style)
 
 	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, GenerateAudioOptions{
-		Text:     text,
-		Voice:    voice,
-		Speed:    speed,
-		Emotion:  style,
-		Language: "",
+		Text:       text,
+		Voice:      voice,
+		VoiceModel: voiceModel,
+		Speed:      speed,
+		Emotion:    style,
+		Language:   "",
 	})
 	if err != nil {
 		logger.Errorf("[TTS] GenerateShotAudio: shotID=%d TTS FAILED voice=%q textLen=%d error: %v",
@@ -835,11 +841,11 @@ func fetchAudioToLocal(dir, audioURL string, id int) (string, error) {
 	return "", fmt.Errorf("unsupported URL scheme: %s", audioURL)
 }
 
-// resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
+// resolveVoiceForShot 解析分镜对应角色的配音设置（voice, voiceModel, speed, style）。
 // 优先级：① 对话文本「角色名：」前缀精确匹配 → ② narrationVoice（全局旁白音色或空串）。
 // 不按 CharacterIDs 兜底：画面在场角色 ≠ 说话角色，兜底会导致音色混乱。
 // novelID 由调用方提供（避免此函数重复查询 video 记录）。
-func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string, novelID uint) (voice string, speed float64, style string) {
+func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string, novelID uint) (voice string, voiceModel string, speed float64, style string) {
 	voice = narrationVoice // 空串 = 由 TTS Provider 自选默认音色
 	speed = 1.0
 
@@ -852,6 +858,9 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		applyCharVoice := func(c *model.Character) {
 			if c.VoiceConfig.VoiceID != "" {
 				voice = c.VoiceConfig.VoiceID
+			}
+			if c.VoiceConfig.VoiceModel != "" {
+				voiceModel = c.VoiceConfig.VoiceModel
 			}
 			// 角色无显式 voice_id 时保持 narrationVoice（全局旁白音色），
 			// 不使用 OpenAI 专用内置音色名（alloy/echo 等），避免 qianwen/doubao 等 provider 返回 InvalidVoice 错误。

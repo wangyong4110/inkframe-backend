@@ -71,22 +71,6 @@ func (p *AliyunTTSProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *AliyunTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("aliyun-tts: text generation not supported")
-}
-
-func (p *AliyunTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("aliyun-tts: streaming not supported")
-}
-
-func (p *AliyunTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("aliyun-tts: embeddings not supported")
-}
-
-func (p *AliyunTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("aliyun-tts: image generation not supported")
-}
-
 // AudioGenerate 调用阿里云 CosyVoice 语音合成（非流式），返回音频 URL。
 //
 // req.Voice:  音色名称（见音色列表），留空默认 "longxiaochun"
@@ -224,4 +208,4 @@ func emotionToAliyunInstruction(emotion string) string {
 	return emotion
 }
 
-var _ ai.AIProvider = (*AliyunTTSProvider)(nil)
+var _ ai.AudioProvider = (*AliyunTTSProvider)(nil)

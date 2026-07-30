@@ -229,18 +229,6 @@ func (p *OpenAICompatProvider) GenerateStream(ctx context.Context, req *ai.Gener
 	return ch, nil
 }
 
-func (p *OpenAICompatProvider) Embed(_ context.Context, _ string) ([]float32, error) {
-	return nil, fmt.Errorf("%s 暂不支持 Embedding", p.name)
-}
-
-func (p *OpenAICompatProvider) ImageGenerate(_ context.Context, _ *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("%s 暂不支持图像生成", p.name)
-}
-
-func (p *OpenAICompatProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("%s 暂不支持音频生成", p.name)
-}
-
 // ─── 各 Provider 的具体构造器 ──────────────────────────────────────────────
 
 // NewXAIProvider 创建 xAI (Grok) provider。

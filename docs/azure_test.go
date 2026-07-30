@@ -298,27 +298,6 @@ func TestAzureProvider_GenerateStream_NoDeploymentError(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_Embed_NotImplemented(t *testing.T) {
-	p := NewAzureProvider("key", "https://foo", "dep", "", 0)
-	if _, err := p.Embed(context.Background(), "text"); err == nil {
-		t.Error("expected not-implemented error")
-	}
-}
-
-func TestAzureProvider_ImageGenerate_NotImplemented(t *testing.T) {
-	p := NewAzureProvider("key", "https://foo", "dep", "", 0)
-	if _, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("expected not-implemented error")
-	}
-}
-
-func TestAzureProvider_AudioGenerate_NotImplemented(t *testing.T) {
-	p := NewAzureProvider("key", "https://foo", "dep", "", 0)
-	if _, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("expected not-implemented error")
-	}
-}
-
 func TestAzureProvider_BuildChatRequest(t *testing.T) {
 	p := NewAzureProvider("key", "https://foo", "dep", "", 0)
 	req := &ai.GenerateRequest{
@@ -358,4 +337,4 @@ func TestAzureProvider_BuildChatRequest_OmitsZeroValues(t *testing.T) {
 	}
 }
 
-var _ ai.AIProvider = (*AzureProvider)(nil)
+var _ ai.TextProvider = (*AzureProvider)(nil)

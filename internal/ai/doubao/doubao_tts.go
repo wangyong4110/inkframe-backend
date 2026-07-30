@@ -88,22 +88,6 @@ func (p *DoubaoSpeechProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *DoubaoSpeechProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("doubao-speech: text generation not supported")
-}
-
-func (p *DoubaoSpeechProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("doubao-speech: streaming not supported")
-}
-
-func (p *DoubaoSpeechProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("doubao-speech: embeddings not supported")
-}
-
-func (p *DoubaoSpeechProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("doubao-speech: image generation not supported")
-}
-
 // AudioGenerate 调用豆包 Seed-TTS v3 流式合成 API，收集所有 chunk 后返回 MP3 文件路径。
 //
 // 字段映射：
@@ -520,22 +504,6 @@ func (p *DoubaoSpeechV1Provider) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("doubao-speech-v1: appid or access_token not configured")
 	}
 	return nil
-}
-
-func (p *DoubaoSpeechV1Provider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("doubao-speech-v1: text generation not supported")
-}
-
-func (p *DoubaoSpeechV1Provider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("doubao-speech-v1: streaming not supported")
-}
-
-func (p *DoubaoSpeechV1Provider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("doubao-speech-v1: embeddings not supported")
-}
-
-func (p *DoubaoSpeechV1Provider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("doubao-speech-v1: image generation not supported")
 }
 
 // AudioGenerate 调用豆包 TTS V1 HTTP 一次性合成接口，返回 MP3 音频文件路径。

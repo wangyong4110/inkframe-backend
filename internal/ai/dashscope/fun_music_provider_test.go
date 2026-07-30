@@ -60,26 +60,8 @@ func TestFunMusicProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-func TestFunMusicProvider_UnsupportedMethods(t *testing.T) {
-	p := NewFunMusicProvider("key")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate: expected unsupported error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream: expected unsupported error, got nil")
-	}
-	if _, err := p.Embed(ctx, "hello"); err == nil {
-		t.Error("Embed: expected unsupported error, got nil")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate: expected unsupported error, got nil")
-	}
-}
-
 func TestFunMusicProvider_ImplementsAIProvider(t *testing.T) {
-	var _ ai.AIProvider = NewFunMusicProvider("key")
+	var _ ai.AudioProvider = NewFunMusicProvider("key")
 }
 
 // TestFunMusicProvider_AudioGenerate_RealCall hits the live Aliyun DashScope Fun-Music API.

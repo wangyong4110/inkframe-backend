@@ -96,26 +96,6 @@ func TestKlingImageProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-// ─── Unsupported AIProvider methods ────────────────────────────────────────
-
-func TestKlingImageProvider_UnsupportedMethods(t *testing.T) {
-	p := NewKlingImageProvider("ak", "sk", "")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate() expected error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream() expected error, got nil")
-	}
-	if _, err := p.Embed(ctx, "text"); err == nil {
-		t.Error("Embed() expected error, got nil")
-	}
-	if _, err := p.AudioGenerate(ctx, &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("AudioGenerate() expected error, got nil")
-	}
-}
-
 // ─── ImageGenerate validation (no network required) ────────────────────────
 
 func TestKlingImageProvider_ImageGenerate_RequiresPrompt(t *testing.T) {
@@ -141,7 +121,7 @@ func TestKlingImage_ImageEngineTraitsRegistered(t *testing.T) {
 // ─── Interface compliance ──────────────────────────────────────────────────
 
 func TestKlingImageProvider_ImplementsAIProvider(t *testing.T) {
-	var _ ai.AIProvider = (*KlingImageProvider)(nil)
+	var _ ai.ImageProvider = (*KlingImageProvider)(nil)
 }
 
 // ─── Real network call (env-gated) ─────────────────────────────────────────

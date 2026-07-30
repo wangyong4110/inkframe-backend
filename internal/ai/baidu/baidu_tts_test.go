@@ -63,24 +63,6 @@ func TestBaiduTTSProvider_HealthCheck_MissingCredentials(t *testing.T) {
 	}
 }
 
-func TestBaiduTTSProvider_UnsupportedMethods(t *testing.T) {
-	p := NewBaiduTTSProvider("ak", "sk")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should return error")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should return error")
-	}
-	if _, err := p.Embed(ctx, "text"); err == nil {
-		t.Error("Embed should return error")
-	}
-	if _, err := p.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should return error")
-	}
-}
-
 func TestBaiduTTSProvider_AudioGenerate_MissingVoice(t *testing.T) {
 	// getAccessToken is called before voice validation, so without real credentials
 	// this will fail at the token fetch stage (network call to baiduTokenURL) rather

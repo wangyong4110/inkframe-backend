@@ -73,30 +73,10 @@ func TestHunyuanImageProvider_HealthCheck(t *testing.T) {
 	})
 }
 
-// ─── Unsupported AIProvider methods ────────────────────────────────────────
-
-func TestHunyuanImageProvider_UnsupportedMethods(t *testing.T) {
-	p := NewHunyuanImageProvider("key", "")
-	ctx := context.Background()
-
-	if _, err := p.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate() expected error, got nil")
-	}
-	if _, err := p.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream() expected error, got nil")
-	}
-	if _, err := p.Embed(ctx, "text"); err == nil {
-		t.Error("Embed() expected error, got nil")
-	}
-	if _, err := p.AudioGenerate(ctx, &ai.AudioGenerateRequest{}); err == nil {
-		t.Error("AudioGenerate() expected error, got nil")
-	}
-}
-
 // ─── Interface compliance ──────────────────────────────────────────────────
 
 func TestHunyuanImageProvider_ImplementsAIProvider(t *testing.T) {
-	var _ ai.AIProvider = (*HunyuanImageProvider)(nil)
+	var _ ai.ImageProvider = (*HunyuanImageProvider)(nil)
 }
 
 // ─── ImageGenerate model dispatch + request/response handling via mock server ─

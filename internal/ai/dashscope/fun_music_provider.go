@@ -48,22 +48,6 @@ func (p *FunMusicProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *FunMusicProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("fun-music: text generation not supported")
-}
-
-func (p *FunMusicProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("fun-music: streaming not supported")
-}
-
-func (p *FunMusicProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("fun-music: embeddings not supported")
-}
-
-func (p *FunMusicProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("fun-music: image generation not supported")
-}
-
 // AudioGenerate 调用 Fun-Music 音乐生成（非流式），返回音频 URL。
 //
 // req.Text:  音乐描述 prompt（如"夏日清新民谣，木吉他与口琴"）
@@ -155,4 +139,4 @@ func (p *FunMusicProvider) AudioGenerate(ctx context.Context, req *ai.AudioGener
 	}, nil
 }
 
-var _ ai.AIProvider = (*FunMusicProvider)(nil)
+var _ ai.AudioProvider = (*FunMusicProvider)(nil)

@@ -242,36 +242,7 @@ func TestAnthropicProvider_Generate_NoContent(t *testing.T) {
 	}
 }
 
-func TestAnthropicProvider_Embed_NotSupported(t *testing.T) {
-	p := NewAnthropicProvider("key", "", "", 0)
-	if _, err := p.Embed(context.Background(), "text"); err == nil {
-		t.Error("expected error, Anthropic has no embedding API")
-	}
-}
-
-func TestAnthropicProvider_ImageGenerate_NotSupported(t *testing.T) {
-	p := NewAnthropicProvider("key", "", "", 0)
-	resp, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{})
-	if err != nil {
-		t.Fatalf("ImageGenerate() unexpected error: %v", err)
-	}
-	if resp.Error == "" {
-		t.Error("expected Error to be set")
-	}
-}
-
-func TestAnthropicProvider_AudioGenerate_NotSupported(t *testing.T) {
-	p := NewAnthropicProvider("key", "", "", 0)
-	resp, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{})
-	if err != nil {
-		t.Fatalf("AudioGenerate() unexpected error: %v", err)
-	}
-	if resp.Error == "" {
-		t.Error("expected Error to be set")
-	}
-}
-
-var _ ai.AIProvider = (*AnthropicProvider)(nil)
+var _ ai.TextProvider = (*AnthropicProvider)(nil)
 
 // ─── GoogleProvider ─────────────────────────────────────────────────────
 
@@ -511,26 +482,4 @@ func TestGoogleProvider_Embed_ErrorStatus(t *testing.T) {
 	}
 }
 
-func TestGoogleProvider_ImageGenerate(t *testing.T) {
-	p := NewGoogleProvider("key", "", "", 0)
-	resp, err := p.ImageGenerate(context.Background(), &ai.ImageGenerateRequest{})
-	if err != nil {
-		t.Fatalf("ImageGenerate() unexpected error: %v", err)
-	}
-	if resp.Error == "" {
-		t.Error("expected Error to be set")
-	}
-}
-
-func TestGoogleProvider_AudioGenerate(t *testing.T) {
-	p := NewGoogleProvider("key", "", "", 0)
-	resp, err := p.AudioGenerate(context.Background(), &ai.AudioGenerateRequest{})
-	if err != nil {
-		t.Fatalf("AudioGenerate() unexpected error: %v", err)
-	}
-	if resp.Error == "" {
-		t.Error("expected Error to be set")
-	}
-}
-
-var _ ai.AIProvider = (*GoogleProvider)(nil)
+var _ ai.TextProvider = (*GoogleProvider)(nil)

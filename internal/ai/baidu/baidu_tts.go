@@ -79,22 +79,6 @@ func (p *BaiduTTSProvider) HealthCheck(ctx context.Context) error {
 	return err
 }
 
-func (p *BaiduTTSProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("baidu-tts: text generation not supported")
-}
-
-func (p *BaiduTTSProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("baidu-tts: streaming not supported")
-}
-
-func (p *BaiduTTSProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("baidu-tts: embeddings not supported")
-}
-
-func (p *BaiduTTSProvider) ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return nil, fmt.Errorf("baidu-tts: image generation not supported")
-}
-
 // AudioGenerate 调用百度短文本语音合成 API，返回 MP3 文件路径。
 //
 // req.Voice:   音色编号字符串（"0"~"111"，见音色列表），留空默认 "0"（度小美）
@@ -258,4 +242,4 @@ func (p *BaiduTTSProvider) getAccessToken(ctx context.Context) (string, error) {
 	return p.accessToken, nil
 }
 
-var _ ai.AIProvider = (*BaiduTTSProvider)(nil)
+var _ ai.AudioProvider = (*BaiduTTSProvider)(nil)

@@ -1,19 +1,29 @@
 package main
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/vector"
+
+	// 注册所有 AI 供应商工厂到 ai.Registry，init() 自动执行。
+	_ "github.com/inkframe/inkframe-backend/docs"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/anthropic"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/dashscope"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/deepseek"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/doubao"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/elevenlabs"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/hunyuan"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/kling"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/minimax"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/openai"
+	_ "github.com/inkframe/inkframe-backend/internal/ai/volcengine"
 )
 
-// initAIModule 返回空 ModelManager。
-// 所有 AI 提供商均通过"模型管理"页面由租户配置，从数据库按需加载；
+// initAIModule 初始化 AI 模块。
+// 所有 AI 提供商均通过“模型管理”页面由租户配置，从数据库按需加载；
 // 不再从 config.yaml 或环境变量静态注册提供商。
-func initAIModule(_ *config.Config) *ai.ModelManager {
-	manager := ai.NewModelManager()
+func initAIModule(_ *config.Config) {
 	logger.Println("initAIModule: all providers loaded from DB per-tenant (no static registration)")
-	return manager
 }
 
 // initVectorStore 初始化向量存储

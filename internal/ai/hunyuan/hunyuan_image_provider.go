@@ -60,19 +60,6 @@ func (p *HunyuanImageProvider) HealthCheck(_ context.Context) error {
 	return nil
 }
 
-func (p *HunyuanImageProvider) Generate(_ context.Context, _ *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("hunyuan-image: text generation not supported")
-}
-func (p *HunyuanImageProvider) GenerateStream(_ context.Context, _ *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("hunyuan-image: streaming not supported")
-}
-func (p *HunyuanImageProvider) Embed(_ context.Context, _ string) ([]float32, error) {
-	return nil, fmt.Errorf("hunyuan-image: embeddings not supported")
-}
-func (p *HunyuanImageProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("hunyuan-image: audio generation not supported")
-}
-
 // ImageGenerate 根据 req.Model 选择极速版（lite）或高质量版（v3.0）。
 //
 // req.Model:          "hy-image-lite"（默认）或 "hy-image-v3.0"
@@ -273,4 +260,4 @@ func (p *HunyuanImageProvider) post(ctx context.Context, url string, body map[st
 	return respBody, nil
 }
 
-var _ ai.AIProvider = (*HunyuanImageProvider)(nil)
+var _ ai.ImageProvider = (*HunyuanImageProvider)(nil)

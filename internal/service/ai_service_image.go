@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -28,9 +29,13 @@ func resolveStyleCategory(styleID string) string {
 // 按 tenantID 加载已配置的 IMAGE 类型 provider，依次尝试直到成功；无 providerRepo 时退回静态
 // aiManager（config.yaml/env 静态注册场景）。
 func (s *AIService) GenerateImage(ctx context.Context, tenantID uint, options *ImageGenerationOptions) (*GeneratedImage, error) {
-	p, m, err := s.getTenantProvider(tenantID, commons.Image, "")
+	pMeta, m, err := s.getTenantProvider(tenantID, commons.Image, "")
 	if err != nil {
 		return nil, err
+	}
+	p, ok := pMeta.(ai.ImageProvider)
+	if !ok {
+		return nil, fmt.Errorf("configured provider %q does not support image generation", pMeta.GetName())
 	}
 
 	category := resolveStyleCategory(options.ImageStyle)

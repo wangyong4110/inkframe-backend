@@ -514,4 +514,4 @@ func TestSeedreamDetectMime(t *testing.T) {
 	}
 }
 
-var _ ai.AIProvider = (*DoubaoProvider)(nil)
+var _ ai.TextProvider = (*DoubaoProvider)(nil)

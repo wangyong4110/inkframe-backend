@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/handler"
@@ -308,8 +307,8 @@ type videoSvcs struct {
 // Group initializers
 // ──────────────────────────────────────────────────────────────
 
-func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config, redisClient *redis.Client) *coreSvcs {
-	aiSvc := service.NewAIService(repos.AIModelRepo, aiManager, repos.ModelProviderRepo)
+func initCoreServiceGroup(repos *Repositories, cfg *config.Config, redisClient *redis.Client) *coreSvcs {
+	aiSvc := service.NewAIService(repos.AIModelRepo, repos.ModelProviderRepo)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.ModelComparisonRepo, aiSvc)
@@ -337,7 +336,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }
 
-func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *contentSvcs {
+func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *contentSvcs {
 	aiSvc := core.AI
 
 	// 小说服务
@@ -504,10 +503,10 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 }
 
 // initServices 初始化服务层
-func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
-	core := initCoreServiceGroup(repos, aiManager, cfg, redisClient)
+func initServices(db *gorm.DB, repos *Repositories, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
+	core := initCoreServiceGroup(repos, cfg, redisClient)
 	core.Task.WithDB(db)
-	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore, cfg, redisClient)
+	content := initContentServiceGroup(db, repos, core, vectorStore, cfg, redisClient)
 	video := initVideoServiceGroup(repos, core, content, cfg, redisClient)
 
 	// Cross-instance tenant subscription cache invalidation via Redis Pub/Sub.

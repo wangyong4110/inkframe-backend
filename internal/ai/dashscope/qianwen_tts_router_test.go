@@ -72,27 +72,6 @@ func TestQianwenTTSRouter_HealthCheck(t *testing.T) {
 	}
 }
 
-func TestQianwenTTSRouter_UnsupportedMethods(t *testing.T) {
-	r := NewQianwenTTSRouter("key", "")
-	ctx := context.Background()
-
-	if _, err := r.Generate(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("Generate should error")
-	} else if !strings.Contains(err.Error(), "QianwenProvider") {
-		t.Errorf("Generate error = %q, want mention of QianwenProvider", err.Error())
-	}
-
-	if _, err := r.GenerateStream(ctx, &ai.GenerateRequest{}); err == nil {
-		t.Error("GenerateStream should error")
-	}
-	if _, err := r.Embed(ctx, "x"); err == nil {
-		t.Error("Embed should error")
-	}
-	if _, err := r.ImageGenerate(ctx, &ai.ImageGenerateRequest{}); err == nil {
-		t.Error("ImageGenerate should error")
-	}
-}
-
 // TestQianwenTTSRouter_AudioGenerate_Routing verifies voice-ID-prefix-based dispatch
 // without making any real network call: both sub-providers reject an empty voice with
 // their "未指定音色" validation error before ever reaching HTTP, so we instead confirm

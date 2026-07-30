@@ -28,9 +28,13 @@ func (s *AIService) Embed(ctx context.Context, tenantID uint, text string) ([]fl
 	if s.providerRepo == nil {
 		return nil, fmt.Errorf("provider repository not configured")
 	}
-	provider, model, err := s.getTenantProvider(tenantID, commons.Embedding, "")
-	if err != nil || provider == nil {
+	providerMeta, model, err := s.getTenantProvider(tenantID, commons.Embedding, "")
+	if err != nil || providerMeta == nil {
 		return nil, fmt.Errorf("no embedding provider configured")
+	}
+	provider, ok := providerMeta.(ai.EmbeddingProvider)
+	if !ok {
+		return nil, fmt.Errorf("configured embedding provider %q does not support embedding", providerMeta.GetName())
 	}
 	release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, model.Name)
 	if acquireErr != nil {
@@ -107,12 +111,13 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 // Unlike GenerateWithProviderCtx which takes a single prompt string, this method passes
 // the complete message thread natively so the model sees proper role-based multi-turn context.
 func (s *AIService) GenerateWithMessagesCtx(ctx context.Context, tenantID uint, taskType string, messages []ai.ChatMessage, systemPrompt string) (string, error) {
-	if s.aiManager == nil {
-		return "", fmt.Errorf("AI manager not initialized")
-	}
-	provider, m, err := s.getTenantProvider(tenantID, commons.LLM, "")
+	providerMeta, m, err := s.getTenantProvider(tenantID, commons.LLM, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to get AI provider: %w", err)
+	}
+	provider, ok := providerMeta.(ai.TextProvider)
+	if !ok {
+		return "", fmt.Errorf("configured provider %q does not support text generation", providerMeta.GetName())
 	}
 	if provider == nil {
 		return "", fmt.Errorf("AI provider resolved to nil for %q", provider.GetName())
@@ -160,12 +165,13 @@ func (s *AIService) GenerateWithMessagesCtx(ctx context.Context, tenantID uint, 
 // It returns a channel that emits content chunks; the caller must drain the channel fully.
 // The last item may carry an empty Content with a non-empty Error field.
 func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, messages []ai.ChatMessage, systemPrompt string) (<-chan *ai.GenerateResponse, error) {
-	if s.aiManager == nil {
-		return nil, fmt.Errorf("AI manager not initialized")
-	}
-	provider, m, err := s.getTenantProvider(tenantID, commons.LLM, "")
+	providerMeta, m, err := s.getTenantProvider(tenantID, commons.LLM, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AI provider: %w", err)
+	}
+	provider, ok := providerMeta.(ai.TextProvider)
+	if !ok {
+		return nil, fmt.Errorf("configured provider %q does not support streaming", providerMeta.GetName())
 	}
 
 	req := &ai.GenerateRequest{
@@ -202,18 +208,18 @@ func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, me
 }
 
 func (s *AIService) callAIWithProviderSys(ctx context.Context, tenantID uint, prompt string, config *taskConfig, modelOverride ...string) (*ai.GenerateResponse, error) {
-	if s.aiManager == nil {
-		return nil, fmt.Errorf("AI manager not initialized")
-	}
-
 	var modelName string
 	if len(modelOverride) > 0 {
 		modelName = modelOverride[0]
 	}
-	provider, m, err := s.getTenantProvider(tenantID, commons.LLM, modelName)
+	providerMeta, m, err := s.getTenantProvider(tenantID, commons.LLM, modelName)
 	if err != nil {
 		logger.Errorf("callAIWithProvider: getTenantProvider failed (tenant=%d): %v", tenantID, err)
 		return nil, fmt.Errorf("failed to get AI provider: %w", err)
+	}
+	provider, ok := providerMeta.(ai.TextProvider)
+	if !ok {
+		return nil, fmt.Errorf("configured provider %q does not support text generation", providerMeta.GetName())
 	}
 	release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
 	if err != nil {

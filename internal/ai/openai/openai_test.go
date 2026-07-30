@@ -435,4 +435,4 @@ func TestNewSSEReader_DoneSentinel(t *testing.T) {
 	}
 }
 
-var _ ai.AIProvider = (*OpenAIProvider)(nil)
+var _ ai.TextProvider = (*OpenAIProvider)(nil)

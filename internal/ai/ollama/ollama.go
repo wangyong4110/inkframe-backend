@@ -275,16 +275,6 @@ func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 	return embedResp.Data[0].Embedding, nil
 }
 
-// ImageGenerate Ollama 不支持图像生成
-func (p *OllamaProvider) ImageGenerate(_ context.Context, _ *ai.ImageGenerateRequest) (*ai.ImageResponse, error) {
-	return &ai.ImageResponse{Error: "ollama does not support image generation"}, nil
-}
-
-// AudioGenerate Ollama 不支持音频生成
-func (p *OllamaProvider) AudioGenerate(_ context.Context, _ *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("ollama does not support audio generation")
-}
-
 // buildMessages 将 GenerateRequest 转换为 OpenAI 格式 messages 列表
 func (p *OllamaProvider) buildMessages(req *ai.GenerateRequest) []map[string]interface{} {
 	msgs := make([]map[string]interface{}, 0, len(req.Messages)+1)

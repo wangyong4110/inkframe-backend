@@ -75,6 +75,13 @@ func NewDoubaoVideoProvider(apiKey, endpoint string) *DoubaoVideoProvider {
 
 func (p *DoubaoVideoProvider) GetName() string { return ProviderNameDoubaoVideo }
 
+func (p *DoubaoVideoProvider) HealthCheck(_ context.Context) error {
+	if p.apiKey == "" {
+		return fmt.Errorf("doubao-video: api_key not configured")
+	}
+	return nil
+}
+
 func (p *DoubaoVideoProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
 	var reqBody io.Reader
 	if body != nil {

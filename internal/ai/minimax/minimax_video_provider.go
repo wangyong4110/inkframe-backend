@@ -69,6 +69,13 @@ func NewMinimaxVideoProvider(apiKey string) *MinimaxVideoProvider {
 
 func (p *MinimaxVideoProvider) GetName() string { return ProviderNameMinimaxVideo }
 
+func (p *MinimaxVideoProvider) HealthCheck(_ context.Context) error {
+	if p.apiKey == "" {
+		return fmt.Errorf("minimax-video: api_key not configured")
+	}
+	return nil
+}
+
 func (p *MinimaxVideoProvider) doRequest(ctx context.Context, method, path string, query url.Values, body interface{}) ([]byte, int, error) {
 	var reqBody io.Reader
 	if body != nil {

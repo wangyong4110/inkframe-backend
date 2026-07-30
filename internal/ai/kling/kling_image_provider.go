@@ -86,22 +86,6 @@ func (p *KlingImageProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *KlingImageProvider) Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-image: text generation not supported")
-}
-
-func (p *KlingImageProvider) GenerateStream(ctx context.Context, req *ai.GenerateRequest) (<-chan *ai.GenerateResponse, error) {
-	return nil, fmt.Errorf("kling-image: streaming not supported")
-}
-
-func (p *KlingImageProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("kling-image: embeddings not supported")
-}
-
-func (p *KlingImageProvider) AudioGenerate(ctx context.Context, req *ai.AudioGenerateRequest) (*ai.AudioResponse, error) {
-	return nil, fmt.Errorf("kling-image: audio generation not supported")
-}
-
 // ImageGenerate 提交图像生成任务并同步等待完成，返回第一张图片的 URL。
 //
 // req.Model:          模型名称（kling-v1/kling-v1-5/kling-v2/kling-v2-1/kling-v3），默认 kling-v1
@@ -344,5 +328,4 @@ func parseKlingAspectRatio(size string) string {
 	return klingImageDefaultAspect
 }
 
-// Ensure interface compliance.
-var _ ai.AIProvider = (*KlingImageProvider)(nil)
+var _ ai.ImageProvider = (*KlingImageProvider)(nil)
