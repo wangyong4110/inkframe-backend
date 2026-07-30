@@ -191,7 +191,7 @@ func (s *PlotPointService) ExtractFromChapter(ctx context.Context, tenantID uint
 	// 优先用摘要（已浓缩，token 少，速度快），无摘要则截断正文，减少 prompt 体积
 	textForAI := chapter.Summary
 	if textForAI == "" {
-		textForAI = truncateForPrompt(chapter.Content, 3000)
+		textForAI = truncate(chapter.Content, 3000)
 	}
 
 	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，以如下JSON对象格式返回，不要输出任何其他内容：

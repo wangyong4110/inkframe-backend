@@ -6,7 +6,8 @@ import (
 
 // TestLipSyncProvider_InterfaceSatisfiedByAllImplementations pins the
 // LipSyncProvider interface's implementors at compile time.
-var _ LipSyncProvider = (*KlingLipSyncProvider)(nil)
+// NOTE: Compile-time interface check for KlingLipSyncProvider has been
+// moved to the kling sub-package.
 
 func TestLipSyncRequest_Fields(t *testing.T) {
 	req := &LipSyncRequest{

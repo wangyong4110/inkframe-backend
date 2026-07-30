@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -21,7 +22,7 @@ import (
 type AnalysisTask struct {
 	NovelID        uint               `json:"novel_id"`
 	cancel         context.CancelFunc `json:"-"`
-	taskSvc        *TaskService       `json:"-"` // 统一任务服务（可为 nil，降级为纯内存模式）
+	taskSvc        *async.TaskService       `json:"-"` // 统一任务服务（可为 nil，降级为纯内存模式）
 	externalTaskID string             `json:"-"` // TaskService 分配的 task_id
 
 	mu       sync.RWMutex `json:"-"`
@@ -71,7 +72,7 @@ type NovelAnalysisService struct {
 	plotPointService   *PlotPointService
 	sceneAnchorService *SceneAnchorService
 	foreshadowSvc      *ForeshadowCRUDService
-	taskSvc            *TaskService
+	taskSvc            *async.TaskService
 	modelRepo          *repository.AIModelRepository       // optional, for voice auto-suggestion
 	lookRepo           *repository.CharacterLookRepository // optional, auto-create default look
 	cleanupStop        chan struct{}                       // closed by Shutdown() to stop background goroutines
@@ -107,7 +108,7 @@ func (s *NovelAnalysisService) Shutdown() {
 }
 
 // WithTaskService 注入统一任务服务（可选，注入后任务状态持久化到 DB）
-func (s *NovelAnalysisService) WithTaskService(svc *TaskService) *NovelAnalysisService {
+func (s *NovelAnalysisService) WithTaskService(svc *async.TaskService) *NovelAnalysisService {
 	s.taskSvc = svc
 	return s
 }
@@ -164,7 +165,7 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 	// 优先使用 TaskService（持久化，执行权交给任务引擎——见 cmd/server/task_resume.go 里
 	// TaskTypeNovelAnalysis 注册的 ResumeAnalysis）；若未注入则降级为随机 UUID + 立即本地执行。
 	if s.taskSvc != nil {
-		dbTask, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID, map[string]interface{}{
+		dbTask, err := s.taskSvc.CreateWithParams(tenantID, async.TaskTypeNovelAnalysis, "小说分析", "novel", novelID, map[string]interface{}{
 			"create_outlines": createOutlines,
 		})
 		if err != nil {
@@ -479,7 +480,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 								text = ch.Summary
 							}
 							if text == "" {
-								text = truncateForPrompt(ch.Outline, 500)
+								text = truncate(ch.Outline, 500)
 							}
 							if text == "" || count >= 10 {
 								continue
@@ -737,16 +738,16 @@ func buildChapterSummariesText(chapters []*model.Chapter, maxChapters, maxLen in
 		ch := chapters[i]
 		summary := ch.Summary
 		if summary == "" {
-			summary = truncateForPrompt(ch.Content, 500)
+			summary = truncate(ch.Content, 500)
 		}
 		if summary == "" {
-			summary = truncateForPrompt(ch.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
+			summary = truncate(ch.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
 		}
 		if summary != "" {
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, summary))
 		}
 	}
-	return truncateForPrompt(sb.String(), maxLen)
+	return truncate(sb.String(), maxLen)
 }
 
 // stepSummarizeChapters 为每章生成摘要（复用 chapter_summary.tmpl）。
@@ -792,7 +793,7 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 				"NovelTitle":   novel.Title,
 				"ChapterNo":    ch.ChapterNo,
 				"ChapterTitle": ch.Title,
-				"Content":      truncateForPrompt(ch.Content, 6000),
+				"Content":      truncate(ch.Content, 6000),
 			})
 			if pErr != nil {
 				logger.Errorf("NovelAnalysis: chapter %d render prompt: %v", ch.ChapterNo, pErr)
@@ -847,7 +848,7 @@ func (s *NovelAnalysisService) summarizeChaptersBackground(
 				"NovelTitle":   novel.Title,
 				"ChapterNo":    ch.ChapterNo,
 				"ChapterTitle": ch.Title,
-				"Content":      truncateForPrompt(ch.Content, 6000),
+				"Content":      truncate(ch.Content, 6000),
 			})
 			if err != nil {
 				logger.Errorf("NovelAnalysis[bg][%d]: chapter %d render prompt failed: %v", novel.ID, ch.ChapterNo, err)
@@ -1192,7 +1193,7 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline GenerateOutline failed: %v", novel.ID, err)
 		return nil, fmt.Errorf("GenerateOutline: %w", err)
 	}
-	logger.Printf("NovelAnalysis[%d]: stepGenerateOutline done: %d chapters summary=%q", novel.ID, len(outline.Chapters), truncateForPrompt(outline.Summary, 80))
+	logger.Printf("NovelAnalysis[%d]: stepGenerateOutline done: %d chapters summary=%q", novel.ID, len(outline.Chapters), truncate(outline.Summary, 80))
 
 	// 保存完整大纲 JSON 到 novel.Outline，供章节生成时使用
 	updateFields := map[string]interface{}{}
@@ -1364,7 +1365,7 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 			text = ch.Summary
 		}
 		if text == "" {
-			text = truncateForPrompt(ch.Outline, 500)
+			text = truncate(ch.Outline, 500)
 		}
 		if text != "" {
 			candidates = append(candidates, chapterText{ch: ch, text: text})
@@ -1540,7 +1541,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	sampleContent := ""
 	for _, ch := range chapters {
 		if ch.Content != "" {
-			sampleContent = truncateForPrompt(ch.Content, 2000)
+			sampleContent = truncate(ch.Content, 2000)
 			break
 		}
 	}
@@ -1548,7 +1549,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	if sampleContent == "" {
 		for _, ch := range chapters {
 			if ch.Summary != "" {
-				sampleContent = truncateForPrompt(ch.Summary, 2000)
+				sampleContent = truncate(ch.Summary, 2000)
 				break
 			}
 		}
@@ -1601,7 +1602,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 			cleaned := extractJSON(strings.TrimSpace(resp))
 			jsonErr := json.Unmarshal([]byte(cleaned), &res)
 			if jsonErr != nil {
-				logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings parse JSON failed: %v (resp=%q)", novel.ID, jsonErr, truncateForPrompt(resp, 200))
+				logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings parse JSON failed: %v (resp=%q)", novel.ID, jsonErr, truncate(resp, 200))
 			}
 			if jsonErr == nil {
 				if needGenre && res.Genre != "" {

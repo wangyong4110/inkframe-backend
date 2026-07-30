@@ -1184,7 +1184,7 @@ func (h *ChapterHandler) ChapterChatStream(c *gin.Context) {
 	msgs := buildChatMessages(req.Messages)
 
 	aiSvc := h.novelService.GetAIService()
-	ch, streamErr := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", msgs, systemPrompt)
+	ch, streamErr := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, msgs, systemPrompt)
 	if streamErr != nil {
 		reqLogger(c).Errorf("[ChapterChatStream] chapterID=%d err=%v", id, streamErr)
 		respondErr(c, http.StatusInternalServerError, "AI 响应失败: "+streamErr.Error())

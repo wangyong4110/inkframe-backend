@@ -20,6 +20,12 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
+// portraitOwner 记录有参考图角色的名字和视觉描述（VP），与 characterPortraits 严格并行。
+type portraitOwner struct {
+	name string
+	vp   string
+}
+
 // downloadHTTPClient 用于下载生成的图片/视频文件。
 // 设置 5 分钟超时，防止 CDN 接受连接后挂起导致 goroutine 永久阻塞（批量生成卡在 99% 的根本原因）。
 var downloadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
@@ -67,6 +73,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	// 确定是否有视频提供商（对整批分镜一致；slideshow 模式下无意义，不参与分支判断）
 	hasProvider := s.hasVideoProvider(s.videoTenantID(video))
 	logger.Printf("BatchGenerateShots: hasVideoProvider=%v", hasProvider)
+
+	// 任务队列：用于并发限制和任务调度
+	taskQueue := newModelTaskQueue()
 
 	// 并发数和队列键均从 DB 模型配置中统一获取
 	tenantID := s.videoTenantID(video)
@@ -260,6 +269,9 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 		return si.ShotNo < sj.ShotNo
 	})
 
+	// 任务队列：用于图片生成并发限制
+	imageQueue := newModelTaskQueue()
+
 	// 并发数统一从图片提供商的 AIModel.Concurrency（DB 配置）读取
 	tenantIDImg := s.videoTenantID(video)
 	concurrency := 1
@@ -370,36 +382,22 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 // generateShotReferenceImage 为分镜生成参考帧图像，返回图片URL和错误。
 // ─── 参考图合成辅助函数 ─────────────────────────────────────────────────────
 //
-//// getCharDefaultLook 返回角色当前使用的形象：优先取 Character.DefaultLookID 指向的形象；
-//// 最终兜底取第一个含三视图的形象（如老数据未设置 DefaultLookID）。
-//func (s *VideoService) getCharDefaultLook(char *model.Character) *model.CharacterLook {
-//	if s.lookRepo == nil {
-//		return nil
-//	}
-//	if char.DefaultLookID != 0 {
-//		if defaultLook, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil && defaultLook != nil {
-//			return defaultLook
-//		}
-//	}
-//	// 兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图的形象
-//	if looks, err := s.lookRepo.ListByCharacter(char.ID); err == nil {
-//		for _, l := range looks {
-//			if l.ThreeViewSheet != "" {
-//				logger.Printf("[getCharDefaultLook] charID=%d: DefaultLookID unset, fallback to first look with ThreeViewSheet id=%d", char.ID, l.ID)
-//				return l
-//			}
-//		}
-//	}
-//	return nil
-//}
+// getCharDefaultLook 返回角色当前使用的形象：委托给 CharacterLookupService。
+func (s *VideoService) getCharDefaultLook(char *model.Character) *model.CharacterLook {
+	if s.lookupService == nil {
+		return nil
+	}
+	look, _ := s.lookupService.getCharDefaultLook(char.ID)
+	return look
+}
 
 // charLookRefImage 返回角色形象的参考图 URL（三视图合图，含正面/侧面/背面/面部特写）。
-//func (s *VideoService) charLookRefImage(look *model.CharacterLook) string {
-//	if look == nil {
-//		return ""
-//	}
-//	return normalizeMediaURL(look.ThreeViewSheet)
-//}
+func (s *VideoService) charLookRefImage(look *model.CharacterLook) string {
+	if look == nil {
+		return ""
+	}
+	return normalizeMediaURL(look.ThreeViewSheet)
+}
 
 // ─── 分镜参考图生成 ──────────────────────────────────────────────────────────
 
@@ -418,6 +416,7 @@ func (s *VideoService) generateShotReferenceImage(ctx context.Context, shot *mod
 
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色三视图
 	var characterPortraits []string
+	var portraitOwners []portraitOwner // 与 characterPortraits 严格并行：记录有参考图角色的名字和视觉描述
 	if len(shot.CharacterIDs) > 0 {
 		for _, charId := range shot.CharacterIDs {
 			activeLook, _ := s.lookupService.getCharDefaultLook(charId)
@@ -425,8 +424,27 @@ func (s *VideoService) generateShotReferenceImage(ctx context.Context, shot *mod
 				continue
 			}
 			characterPortraits = append(characterPortraits, activeLook.ThreeViewSheet)
+			// 尝试加载角色名称和视觉描述
+			charName := ""
+			charVP := ""
+			if s.characterRepo != nil {
+				if ch, e := s.characterRepo.GetByID(charId); e == nil && ch != nil {
+					charName = ch.Name
+					charVP = ch.Description
+				}
+			}
+			portraitOwners = append(portraitOwners, portraitOwner{name: charName, vp: charVP})
 		}
 	}
+
+	// 角色参考图截断：当前无单 IP 模型检测，直接使用全部角色参考图
+	cappedPortraits := characterPortraits
+	if len(cappedPortraits) > 0 {
+		logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
+	}
+
+	// 负向提示词：基础解剖/物理规律排除词
+	negPrompt := "deformed, ugly, bad anatomy, blurry, low quality, watermark"
 
 	promptText := shot.Description
 
@@ -479,6 +497,7 @@ func (s *VideoService) generateShotReferenceImage(ctx context.Context, shot *mod
 	artStyle := ""
 	var tenantID uint
 	qualityTier := "production" // 默认质量档位（preview=768px 对视频参考帧质量不够）
+	_ = qualityTier
 	var imageAspectRatio string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.RenderConfig.ArtStyle
@@ -536,6 +555,7 @@ func (s *VideoService) generateShotReferenceImage(ctx context.Context, shot *mod
 	// 不改写 prompt 正文中的原始名称，仅前置说明文本。
 	// promptForFallback 保留追加说明前的版本，用于无参考图降级（此时参考图序号说明无意义）。
 	promptForFallback := promptText
+	_ = promptForFallback // 保留用于无参考图降级场景
 	if len(allRefImages) > 0 {
 		nameToRefIdx := make(map[string]int)
 		for i, po := range portraitOwners {
@@ -641,7 +661,7 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 		shotCopy.Description = shot.Description + ". Modification: " + suggestion
 	}
 
-	newURL, err := s.generateShotReferenceImage(&shotCopy)
+	newURL, err := s.generateShotReferenceImage(context.Background(), &shotCopy)
 	if err != nil {
 		return "", fmt.Errorf("refine image for shot %d: %w", shotID, err)
 	}
@@ -852,6 +872,10 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
 		tenantID = s.videoTenantID(video)
 	}
+	preferredProvider := ""
+	if len(providerOverride) > 0 {
+		preferredProvider = providerOverride[0]
+	}
 	provider, modelName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
 	if provErr != nil {
 		logger.Errorf("GenerateShotVideo: shot %d 找不到视频提供商 preferred=%s tenantID=%d: %v", shot.ShotNo, preferredProvider, tenantID, provErr)
@@ -906,7 +930,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	videoPromptFinal = applyRefIndexAnnotation(shot, videoPromptFinal, absRef, refLabel, extraRefLabels)
+	videoPromptFinal := applyRefIndexAnnotation(shot, videoPrompt, absRef, refLabel, extraRefLabels)
 	videoPromptFinal = applyPerImageAnnotation(videoTraits, videoPromptFinal, absRef, refLabel, extraRefLabels, absExtras)
 
 	// HappyHorse 分辨率：HD 模式用 1080P，否则 720P；Seedance/Doubao：使用 vidResolution 设置
@@ -918,6 +942,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	// Seedance 多模态时序链接：查找前一分镜的完成视频 URL 作为运动参考
 	prevVideoURLs := s.resolvePrevVideoURLs(shot, videoTraits)
 
+	negativePrompt := ""
 	req := buildVideoGenerateRequest(shot, videoPromptFinal, negativePrompt, shotDuration, videoAspectRatio, videoResolution, absRef, absExtras, prevVideoURLs, klingCFG, renderCfg, videoTraits)
 
 	logger.Printf("GenerateShotVideo: shot %d submitting to %s(%s) (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, modelName, provider.GetName(), referenceImage != "", len(extraRefImages), renderCfg.klingMode, klingCFG, videoPromptFinal)
@@ -976,7 +1001,7 @@ func (s *VideoService) resolveShotReferenceImage(shot *model.StoryboardShot) (st
 	// generateShotReferenceImage 内部已处理角色三视图/场景锚点参考，
 	// 确保 shot.ImageURL（分镜图）与视频首帧严格一致。
 	logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating storyboard first frame before video", shot.ShotNo)
-	frameURL, frameErr := s.generateShotReferenceImage(shot)
+	frameURL, frameErr := s.generateShotReferenceImage(context.Background(), shot)
 	if frameErr != nil {
 		logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
 	}
@@ -1422,7 +1447,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
 	}
 
-	imageURL, imgErr := s.generateShotReferenceImage(shot)
+	imageURL, imgErr := s.generateShotReferenceImage(context.Background(), shot)
 	if imageURL == "" {
 		errMsg := "image provider returned empty URL"
 		if imgErr != nil {
@@ -1570,7 +1595,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	}
 
 	// 1. 生成图片
-	imageURL, imgErr := s.generateShotReferenceImage(shot)
+	imageURL, imgErr := s.generateShotReferenceImage(context.Background(), shot)
 	if imageURL == "" {
 		errMsg := "image provider returned empty URL"
 		if imgErr != nil {
@@ -1986,3 +2011,44 @@ func normalizeMediaURL(u string) string {
 //	}
 //	return s.BatchGenerateShots(videoID, shotIDs, qualityTierOverride, progressFn, provider...)
 //}
+
+// resolveVideoStylePrefix 根据风格 ID 返回视频生成 prompt 的风格前缀描述词。
+// 与 resolveStyleIllustrationDesc（图像生成用）平行，但针对视频模型优化措辞。
+func resolveVideoStylePrefix(style string) string {
+	switch style {
+	case "cyberpunk":
+		return "cyberpunk neon-lit city, rain-soaked reflective streets, holographic advertisements, synthetic digital glow, dark near-future dystopia, "
+	case "steampunk":
+		return "steampunk industrial scene, brass gears and steam pipes, Victorian mechanical aesthetic, amber gaslight, "
+	case "gothic_dark":
+		return "gothic dark fantasy scene, dramatic shadows, macabre atmosphere, deep jewel tones, "
+	case "anime", "chinese_animation":
+		return "anime visual style, vibrant cel-shaded colors, clean dynamic linework, "
+	case "ink_painting":
+		return "Chinese ink wash painting style, flowing brush strokes, monochrome ink atmosphere, "
+	case "xianxia_style":
+		return "Chinese xianxia fantasy style, ethereal mist and spiritual energy, flowing silk robes, "
+	case "oil_painting":
+		return "oil painting visual style, rich painterly brushwork, impasto texture, "
+	case "watercolor":
+		return "watercolor visual style, soft translucent washes, wet-on-wet color blending, "
+	case "pixel_art":
+		return "pixel art style, crisp retro 16-bit aesthetic, limited color palette, "
+	case "ukiyo_e":
+		return "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period aesthetic, "
+	case "game_concept":
+		return "game concept art style, professional fantasy character design, detailed rendering, "
+	case "sketch":
+		return "pencil sketch style, graphite linework, monochrome drawing aesthetic, "
+	case "realistic", "real_person":
+		return "" // 写实风格：视频模型默认即为写实，无需额外前缀
+	default:
+		if style == "" {
+			return ""
+		}
+		if desc := resolveStyleIllustrationDesc(style); desc != "" {
+			return desc + ", "
+		}
+		return ""
+	}
+}

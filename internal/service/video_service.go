@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -46,7 +47,7 @@ type VideoService struct {
 	chapterItemRepo       *repository.ChapterItemRepository
 	worldviewRepo         *repository.WorldviewRepository
 	shotVersionRepo       *repository.StoryboardShotVersionRepository // optional：注入后整视频重新生成分镜前会落一条历史快照
-	taskSvc               *TaskService
+	taskSvc               *async.TaskService
 	charListCache         sync.Map // novelID → *charListEntry (short-lived cache for batch voice gen)
 	// 广场社交
 	videoLikeRepo    *repository.VideoLikeRepository
@@ -174,7 +175,7 @@ func (s *VideoService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository)
 	return s
 }
 
-func (s *VideoService) WithTaskService(svc *TaskService) *VideoService {
+func (s *VideoService) WithTaskService(svc *async.TaskService) *VideoService {
 	s.taskSvc = svc
 	return s
 }
@@ -948,6 +949,24 @@ func (s *VideoService) hasVideoProvider(tenantID uint) bool {
 		return err == nil
 	}
 	return false
+}
+
+// ListVideoProviders 返回当前可用的视频提供商名称列表
+func (s *VideoService) ListVideoProviders() []string {
+	if s.aiService == nil || s.aiService.providerRepo == nil {
+		return []string{}
+	}
+	providers, err := s.aiService.providerRepo.List()
+	if err != nil {
+		return []string{}
+	}
+	var names []string
+	for _, p := range providers {
+		if p.IsActive {
+			names = append(names, p.Name)
+		}
+	}
+	return names
 }
 
 // GetStoryboard 获取分镜列表

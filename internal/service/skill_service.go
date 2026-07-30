@@ -269,3 +269,37 @@ func (s *SkillService) GenerateSkills(ctx context.Context, tenantID, novelID uin
 	}
 	return upserted, nil
 }
+
+// GenerateSkillEffect 使用 AI 为单个技能生成/增强效果描述
+func (s *SkillService) GenerateSkillEffect(tenantID, skillID uint, provider string) (*model.Skill, error) {
+	skill, err := s.skillRepo.GetByID(skillID)
+	if err != nil {
+		return nil, fmt.Errorf("skill not found: %w", err)
+	}
+	novelTitle := "本小说"
+	if s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(skill.NovelID); err == nil {
+			novelTitle = novel.Title
+		}
+	}
+	prompt := fmt.Sprintf(
+		`你是一名专业的玄幻小说设计师。请为以下技能生成详细的效果描述：
+小说：《%s》
+技能名称：%s
+技能类型：%s
+技能等级：%d
+当前描述：%s
+
+请返回一段简洁有力的效果描述（100字以内），突出技能的独特性和实战价值。`,
+		novelTitle, skill.Name, skill.SkillType, skill.Level, skill.Description,
+	)
+	aiResult, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, "skill_effect", prompt)
+	if err != nil {
+		return nil, fmt.Errorf("AI generation failed: %w", err)
+	}
+	skill.Effect = strings.TrimSpace(aiResult)
+	if err := s.skillRepo.Update(skill); err != nil {
+		return nil, fmt.Errorf("update failed: %w", err)
+	}
+	return skill, nil
+}

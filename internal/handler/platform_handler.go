@@ -761,3 +761,40 @@ func (h *PlatformHandler) GetChapterIsLiked(c *gin.Context) {
 	liked := h.readingService.IsChapterLiked(chapter.ID, uid)
 	respondOK(c, gin.H{"liked": liked})
 }
+
+// ─── 外部平台发布 & 账号管理（stub） ─────────────────────────────────────────
+
+// ListPublishRecords GET /:id/publish-records
+func (h *PlatformHandler) ListPublishRecords(c *gin.Context) {
+	respondOK(c, gin.H{"items": []any{}, "total": 0})
+}
+
+// PublishToExternal POST /:id/publish-external
+func (h *PlatformHandler) PublishToExternal(c *gin.Context) {
+	respondErr(c, http.StatusNotImplemented, "not implemented")
+}
+
+// ListAccounts GET /accounts
+func (h *PlatformHandler) ListAccounts(c *gin.Context) {
+	respondOK(c, gin.H{"items": []any{}, "total": 0})
+}
+
+// ConnectAccount GET /accounts/oauth/:platform
+func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
+	respondErr(c, http.StatusNotImplemented, "not implemented")
+}
+
+// GetOAuthURL GET /accounts/oauth-url/:platform
+func (h *PlatformHandler) GetOAuthURL(c *gin.Context) {
+	respondErr(c, http.StatusNotImplemented, "not implemented")
+}
+
+// OAuthCallback GET /accounts/callback/:platform
+func (h *PlatformHandler) OAuthCallback(c *gin.Context) {
+	respondErr(c, http.StatusNotImplemented, "not implemented")
+}
+
+// DisconnectAccount DELETE /accounts/:id
+func (h *PlatformHandler) DisconnectAccount(c *gin.Context) {
+	respondErr(c, http.StatusNotImplemented, "not implemented")
+}

@@ -2,10 +2,21 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/docs"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/ai/anthropic"
+	"github.com/inkframe/inkframe-backend/internal/ai/dashscope"
+	"github.com/inkframe/inkframe-backend/internal/ai/deepseek"
+	"github.com/inkframe/inkframe-backend/internal/ai/doubao"
+	"github.com/inkframe/inkframe-backend/internal/ai/elevenlabs"
+	"github.com/inkframe/inkframe-backend/internal/ai/hunyuan"
+	"github.com/inkframe/inkframe-backend/internal/ai/kling"
+	"github.com/inkframe/inkframe-backend/internal/ai/minimax"
+	"github.com/inkframe/inkframe-backend/internal/ai/openai"
+	"github.com/inkframe/inkframe-backend/internal/ai/volcengine"
 	"github.com/inkframe/inkframe-backend/internal/commons"
 	"github.com/inkframe/inkframe-backend/internal/crypto"
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -50,57 +61,57 @@ func (s *AIService) toAIProvider(m *model.AIModel) (ai.AIProvider, error) {
 
 	var provider ai.AIProvider
 	switch m.Provider.Name {
-	case ai.ProviderNameVolcengineVisual:
-		provider = ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
+	case volcengine.ProviderNameVolcengineVisual:
+		provider = volcengine.NewVolcengineVisualProvider(apiKey, apiSecretKey)
 	case "kling-sfx":
-		provider = ai.NewKlingSFXProvider(apiKey, apiSecretKey, endpoint)
+		provider = kling.NewKlingSFXProvider(apiKey, apiSecretKey, endpoint)
 	case "kling-tts":
-		provider = ai.NewKlingTTSProvider(apiKey, apiSecretKey, endpoint)
+		provider = kling.NewKlingTTSProvider(apiKey, apiSecretKey, endpoint)
 	case "kling-image":
-		provider = ai.NewKlingImageProvider(apiKey, apiSecretKey, endpoint)
+		provider = kling.NewKlingImageProvider(apiKey, apiSecretKey, endpoint)
 	case "elevenlabs-sfx":
-		provider = ai.NewElevenLabsSFXProvider(apiKey, endpoint)
+		provider = elevenlabs.NewElevenLabsSFXProvider(apiKey, endpoint)
 	case "aliyun-tts":
-		provider = ai.NewAliyunTTSProvider(apiKey, endpoint)
+		provider = dashscope.NewAliyunTTSProvider(apiKey, endpoint)
 	case "qwen-tts":
-		provider = ai.NewQwenTTSProvider(apiKey, endpoint)
+		provider = dashscope.NewQwenTTSProvider(apiKey, endpoint)
 	case "fun-music":
-		provider = ai.NewFunMusicProvider(apiKey)
+		provider = dashscope.NewFunMusicProvider(apiKey)
 	case "minimax-music":
-		provider = ai.NewMinimaxMusicProvider(apiKey)
+		provider = minimax.NewMinimaxMusicProvider(apiKey)
 	case "openai", "openai-image":
-		provider = ai.NewOpenAIProvider(apiKey, endpoint, modelName, timeout)
+		provider = openai.NewOpenAIProvider(apiKey, endpoint, modelName, timeout)
 	case "anthropic":
-		provider = ai.NewAnthropicProvider(apiKey, endpoint, modelName, timeout)
+		provider = anthropic.NewAnthropicProvider(apiKey, endpoint, modelName, timeout)
 	case "google":
-		provider = ai.NewGoogleProvider(apiKey, endpoint, modelName, timeout)
+		provider = anthropic.NewGoogleProvider(apiKey, endpoint, modelName, timeout)
 	case "doubao", "volcengine-ark-img":
 		// "volcengine-ark-img" 是 DB 中 Seedream 图片模型的自定义名称，使用相同的 DoubaoProvider
 		logger.Printf("getTenantProvider: provider %q → DoubaoProvider endpoint=%s model=%s", matched.Name, matched.APIEndpoint, modelName)
-		provider = ai.NewDoubaoProvider(apiKey, endpoint, modelName, timeout)
+		provider = doubao.NewDoubaoProvider(apiKey, endpoint, modelName, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
-		provider = ai.NewDoubaoSpeechProvider(apiKey, matched.APIVersion)
+		provider = doubao.NewDoubaoSpeechProvider(apiKey, matched.APIVersion)
 	case "doubao-speech-v1":
 		// APIKey = appID, APISecretKey = access_token, APIVersion = cluster（默认 volcano_tts）
-		provider = ai.NewDoubaoSpeechV1Provider(apiKey, apiSecretKey, matched.APIVersion)
+		provider = doubao.NewDoubaoSpeechV1Provider(apiKey, apiSecretKey, matched.APIVersion)
 	case "deepseek":
-		provider = ai.NewDeepSeekProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+		provider = deepseek.NewDeepSeekProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "qianwen":
 		switch m.Type {
 		case "voice":
-			provider = ai.NewQianwenTTSRouter(apiKey, matched.APIEndpoint)
+			provider = dashscope.NewQianwenTTSRouter(apiKey, matched.APIEndpoint)
 		case "video":
 			return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 		default:
-			provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+			provider = dashscope.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		}
 	case "hunyuan":
 		// TokenHub 新一代混元 API：LLM 用 OpenAI 兼容接口，图像用专属接口
 		if m.Type == "image" {
-			provider = ai.NewHunyuanImageProvider(apiKey, matched.APIEndpoint)
+			provider = hunyuan.NewHunyuanImageProvider(apiKey, matched.APIEndpoint)
 		} else {
-			provider = ai.NewHunyuanProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+			provider = openai.NewHunyuanProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		}
 	case "azure":
 		// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
@@ -134,10 +145,6 @@ func (s *AIService) eligibleProviders(tenantID uint, modelType commons.ModelType
 	for _, p := range providers {
 		if !p.IsActive {
 			logger.Printf("eligibleProviders: skip %s provider %q (inactive)", modelType, p.Name)
-			continue
-		}
-		if !providerHasCredentials(p) {
-			logger.Printf("eligibleProviders: skip %s provider %q (missing credentials)", modelType, p.Name)
 			continue
 		}
 		result = append(result, p)
@@ -232,20 +239,47 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, modelName string) (ai.
 	switch p.Name {
 	case "volcengine-visual":
 		// volcengine-visual 合并了 jimeng-video（即梦视频）
-		return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
+		return volcengine.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 	case "jimeng-video":
-		return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
+		return volcengine.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 	case "kling":
-		return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
+		return kling.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 	case "seedance", "doubao":
-		return ai.NewDoubaoVideoProvider(apiKey, p.APIEndpoint), nil
+		return doubao.NewDoubaoVideoProvider(apiKey, p.APIEndpoint), nil
 	case "minimax-video":
-		return ai.NewMinimaxVideoProvider(apiKey), nil
+		return minimax.NewMinimaxVideoProvider(apiKey), nil
 	case "happyhorse":
-		return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
+		return dashscope.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 	case "qianwen":
 		// qianwen 合并了 happyhorse（DashScope 视频生成）
-		return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
+		return dashscope.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 	}
 	return nil, fmt.Errorf("no video provider configured for tenant %d", tenantID)
+}
+
+// GetActiveVideoModelName 从数据库查询指定 provider 的第一个激活视频模型名。
+func (s *AIService) GetActiveVideoModelName(tenantID uint, providerName string) (string, error) {
+	if s.providerRepo == nil || s.modelRepo == nil {
+		return "", fmt.Errorf("repos not available")
+	}
+	providers, err := s.eligibleProviders(tenantID, commons.ModelType("video"))
+	if err != nil {
+		return "", err
+	}
+	pnameLower := strings.ToLower(providerName)
+	for _, p := range providers {
+		if strings.ToLower(p.Name) != pnameLower {
+			continue
+		}
+		models, mErr := s.modelRepo.List(&p.ID, tenantID)
+		if mErr != nil {
+			return "", mErr
+		}
+		for _, m := range models {
+			if m.Type == "video" && m.IsActive {
+				return m.Name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no active video model for provider %q", providerName)
 }

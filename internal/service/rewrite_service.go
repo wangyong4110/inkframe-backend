@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -24,7 +25,7 @@ type RewriteService struct {
 	chapterRepo        *repository.ChapterRepository
 	novelRepo          *repository.NovelRepository
 	aiSvc              *AIService
-	taskSvc            *TaskService
+	taskSvc            *async.TaskService
 	continuityRepo     *repository.RewriteContinuityIndexRepository // optional; nil = no continuity index
 	summaryRepo        *repository.RewriteChapterSummaryRepository  // optional; nil = use excerpt fallback
 	chapterVersionRepo *repository.ChapterVersionRepository         // optional; nil = skip version backup
@@ -105,7 +106,7 @@ func NewRewriteService(
 	}
 }
 
-func (s *RewriteService) WithTaskService(svc *TaskService) *RewriteService {
+func (s *RewriteService) WithTaskService(svc *async.TaskService) *RewriteService {
 	s.taskSvc = svc
 	return s
 }
@@ -734,8 +735,8 @@ func (s *RewriteService) GetProjectForTenant(id, tenantID uint) (*model.RewriteP
 
 func (s *RewriteService) DeleteProject(id uint) error {
 	if s.taskSvc != nil {
-		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteAnalysis)
-		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteChapters)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", id, async.TaskTypeRewriteAnalysis)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", id, async.TaskTypeRewriteChapters)
 	}
 	// Cascade-delete all derived data to avoid orphaned records
 	s.analysisRepo.DeleteByProjectID(id)
@@ -766,9 +767,9 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 		return "", fmt.Errorf("cannot re-run analysis on a project in status %q; delete and recreate the project to start fresh", project.Status)
 	}
 	if s.taskSvc != nil {
-		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, async.TaskTypeRewriteAnalysis)
 	}
-	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteAnalysis,
+	task, err := s.taskSvc.Create(tenantID, async.TaskTypeRewriteAnalysis,
 		"文学分析 & 改写圣经生成", "rewrite_project", projectID)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
@@ -1006,10 +1007,10 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	}
 
 	if s.taskSvc != nil {
-		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteChapters)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, async.TaskTypeRewriteChapters)
 	}
 
-	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteChapters,
+	task, err := s.taskSvc.Create(tenantID, async.TaskTypeRewriteChapters,
 		"章节改写", "rewrite_project", projectID)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
@@ -1574,8 +1575,8 @@ func (s *RewriteService) ApplyRewriteToChapter(taskID uint) error {
 // CancelRewrite cancels active rewrite tasks for a project and marks it cancelled.
 func (s *RewriteService) CancelRewrite(projectID uint) error {
 	if s.taskSvc != nil {
-		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
-		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteChapters)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, async.TaskTypeRewriteAnalysis)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, async.TaskTypeRewriteChapters)
 	}
 	return s.projectRepo.UpdateStatus(projectID, "cancelled", "user cancelled")
 }

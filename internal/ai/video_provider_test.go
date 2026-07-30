@@ -7,12 +7,9 @@ import (
 // TestVideoProvider_InterfaceSatisfiedByAllImplementations pins the
 // VideoProvider interface's implementors at compile time. If any of these
 // providers drift from the interface shape, this file fails to compile.
-var (
-	_ VideoProvider = (*KlingProvider)(nil)
-	_ VideoProvider = (*DoubaoVideoProvider)(nil)
-	_ VideoProvider = (*JimengVideoProvider)(nil)
-	_ VideoProvider = (*HappyHorseProvider)(nil)
-)
+// NOTE: Compile-time interface checks for VideoProvider implementations
+// (KlingProvider, DoubaoVideoProvider, etc.) have been moved to their
+// respective sub-packages.
 
 // TestVideoGenerateRequest_ZeroValue documents the zero-value shape of
 // VideoGenerateRequest used across provider tests (no special behavior,

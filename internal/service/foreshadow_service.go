@@ -49,7 +49,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		if fallback == "" {
 			return nil, fmt.Errorf("no chapter content available for extraction")
 		}
-		summariesText = "【小说简介/大纲】\n" + truncateForPrompt(fallback, 3000)
+		summariesText = "【小说简介/大纲】\n" + truncate(fallback, 3000)
 	}
 	chapterNoToID := make(map[int]uint, len(chapters))
 	for _, ch := range chapters {

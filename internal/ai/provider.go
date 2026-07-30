@@ -15,6 +15,9 @@ import (
 // DefaultProviderTimeout 是 provider HTTP client 的默认超时时间。
 const DefaultProviderTimeout = 300 * time.Second
 
+// ErrVideoConcurrentLimit 视频 API 并发限制错误（由 volcengine 等 provider 返回）。
+var ErrVideoConcurrentLimit = fmt.Errorf("video API concurrent limit reached")
+
 // ResolveTimeout 将秒数配置转换为 time.Duration；0 或负数返回默认值。
 func ResolveTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
@@ -109,6 +112,9 @@ type ImageGenerateRequest struct {
 	Watermark *bool `json:"watermark,omitempty"`
 	// ResponseFormat：返回格式，"url"（默认）或 "b64_json"
 	ResponseFormat string `json:"response_format,omitempty"`
+
+	// CFGScale 图像生成引导比例（仅部分 volcengine/jimeng 接口使用）
+	CFGScale float64 `json:"cfg_scale,omitempty"`
 }
 
 // ControlNet 控制网
@@ -736,8 +742,8 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 			return nil, err
 		}
 		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf(resp.Error)) {
-				lastErr = fmt.Errorf(resp.Error)
+			if isRetryable(fmt.Errorf("%s", resp.Error)) {
+				lastErr = fmt.Errorf("%s", resp.Error)
 				continue
 			}
 			// Non-retryable provider-level error (e.g. 400 bad request): don't count as success or failure.
@@ -867,8 +873,8 @@ func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateReq
 			return nil, err
 		}
 		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf(resp.Error)) {
-				lastErr = fmt.Errorf(resp.Error)
+			if isRetryable(fmt.Errorf("%s", resp.Error)) {
+				lastErr = fmt.Errorf("%s", resp.Error)
 				continue
 			}
 			p.cb.RecordSuccess()
@@ -913,8 +919,8 @@ func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateReq
 			return nil, err
 		}
 		if resp != nil && resp.Error != "" {
-			if isRetryable(fmt.Errorf(resp.Error)) {
-				lastErr = fmt.Errorf(resp.Error)
+			if isRetryable(fmt.Errorf("%s", resp.Error)) {
+				lastErr = fmt.Errorf("%s", resp.Error)
 				continue
 			}
 			p.cb.RecordSuccess()
@@ -930,6 +936,12 @@ func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateReq
 }
 
 func (p *RetryProvider) GetName() string                       { return p.provider.GetName() }
+func (p *RetryProvider) GetModels() []string {
+	if gp, ok := p.provider.(interface{ GetModels() []string }); ok {
+		return gp.GetModels()
+	}
+	return nil
+}
 func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provider.HealthCheck(ctx) }
 
 // ResetCircuit force-closes the circuit breaker. Call after a successful health check to

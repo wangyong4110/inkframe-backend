@@ -140,3 +140,7 @@ func (s *CharacterLookupService) getCharDefaultLook(charId uint) (*model.Charact
 	return nil, errors.New("no character look found")
 
 }
+
+func (s *CharacterLookupService) BatchGetLooksByIDs(lookIDs []uint) (map[uint]*model.CharacterLook, error) {
+	return s.lookRepo.BatchGetLooksByIDs(lookIDs)
+}

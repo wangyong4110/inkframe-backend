@@ -378,7 +378,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	anchorPrompt, err := renderPrompt("scene_anchor_extract", map[string]interface{}{
 		"NovelTitle":      novelTitle,
 		"ExistingAnchors": existingEntries,
-		"ChapterContent":  truncateForPrompt(chapterContent, 8000),
+		"ChapterContent":  truncate(chapterContent, 8000),
 		"UserPrompt":      userPrompt,
 	})
 	if err != nil {
@@ -544,9 +544,9 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 	prompt, err := renderPrompt("scene_anchor_analyze", map[string]interface{}{
 		"AnchorName":          anchor.Name,
 		"NovelTitle":          novelTitle,
-		"NovelDesc":           truncateForPrompt(novelDesc+novelGenre, 400),
+		"NovelDesc":           truncate(novelDesc+novelGenre, 400),
 		"ChapterExcerpts":     excerpts,
-		"ExistingDescription": truncateForPrompt(anchor.Description, 400),
+		"ExistingDescription": truncate(anchor.Description, 400),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render scene_anchor_analyze: %w", err)

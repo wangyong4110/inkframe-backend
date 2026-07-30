@@ -31,6 +31,13 @@ func (p *ConcurrentProvider) release() { <-p.sem }
 
 func (p *ConcurrentProvider) GetName() string { return p.inner.GetName() }
 
+func (p *ConcurrentProvider) GetModels() []string {
+	if gp, ok := p.inner.(interface{ GetModels() []string }); ok {
+		return gp.GetModels()
+	}
+	return nil
+}
+
 func (p *ConcurrentProvider) HealthCheck(ctx context.Context) error {
 	return p.inner.HealthCheck(ctx)
 }

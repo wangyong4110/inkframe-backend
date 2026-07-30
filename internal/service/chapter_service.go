@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -73,7 +74,7 @@ type ChapterService struct {
 	chapterItemRepo      *repository.ChapterItemRepository      // 可选：章节道具级联清理
 
 	cache   *redis.Client // optional: cross-instance chapter generation lock
-	taskSvc *TaskService  // optional: tracks postProcessChapter as a persisted, resumable task
+	taskSvc *async.TaskService  // optional: tracks postProcessChapter as a persisted, resumable task
 
 	// genLocks 进程内去重（无 Redis 或 Redis 出错时的兜底）
 	genLocks sync.Map
@@ -191,7 +192,7 @@ func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *
 
 // WithTaskService 注入 TaskService（可选），使 postProcessChapter 能作为持久化、可恢复的
 // "安静"任务运行，而不是完全脱离追踪的裸 goroutine。未注入时行为保持原样（裸 goroutine）。
-func (s *ChapterService) WithTaskService(svc *TaskService) *ChapterService {
+func (s *ChapterService) WithTaskService(svc *async.TaskService) *ChapterService {
 	s.taskSvc = svc
 	return s
 }
@@ -1050,7 +1051,7 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 			} `json:"chapters"`
 		}
 		if parseErr := json.Unmarshal([]byte(outlineJSON), &outline); parseErr != nil {
-			logger.Errorf("[extractChapterMeta] JSON parse error: %v (preview=%q)", parseErr, truncateForPrompt(outlineJSON, 200))
+			logger.Errorf("[extractChapterMeta] JSON parse error: %v (preview=%q)", parseErr, truncate(outlineJSON, 200))
 		} else {
 			logger.Printf("[extractChapterMeta] outline parsed: %d chapters total", len(outline.Chapters))
 			found := false
@@ -1135,7 +1136,7 @@ func (s *ChapterService) ensureProtagonistExtracted(tenantID uint, novel *model.
 [{"name":"角色名","role":"protagonist","description":"角色核心特征一句话描述"}]
 role只能是：protagonist / antagonist / supporting
 注意：必须有且仅有一个protagonist`,
-		novel.Title, novel.Meta.Genre, truncateForPrompt(desc, 800))
+		novel.Title, novel.Meta.Genre, truncate(desc, 800))
 
 	result, aiErr := s.aiService.GenerateWithProvider(tenantID, "character_extract_mini", prompt)
 	if aiErr != nil {
@@ -1436,7 +1437,7 @@ func (s *ChapterService) generateSceneOutline(
 		PlotCoverage []plotCoverageEntry `json:"plot_coverage"`
 	}
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err != nil {
-		return "", "", fmt.Errorf("generateSceneOutline: parse outline JSON: %w (raw=%q)", err, truncateForPrompt(resp, 200))
+		return "", "", fmt.Errorf("generateSceneOutline: parse outline JSON: %w (raw=%q)", err, truncate(resp, 200))
 	}
 	suggestedTitle = outlineResult.ChapterTitle
 
@@ -2502,7 +2503,7 @@ func (s *ChapterService) runPostProcessChapter(ctx context.Context, tenantID uin
 		go s.postProcessChapter(ctx, tenantID, chapter, novel)
 		return
 	}
-	if _, err := s.taskSvc.Create(tenantID, TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID); err != nil {
+	if _, err := s.taskSvc.Create(tenantID, async.TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID); err != nil {
 		logger.Errorf("[ChapterService] failed to create chapter_post_process task for chapter %d: %v", chapter.ID, err)
 		go s.postProcessChapter(ctx, tenantID, chapter, novel) // 建任务失败也不能把这段工作直接丢掉
 	}
@@ -3248,7 +3249,7 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 			sb.WriteString("主题：" + novel.Meta.CoreTheme + "\n")
 		}
 		if novel.Meta.Description != "" {
-			sb.WriteString("故事核心：" + truncateForPrompt(novel.Meta.Description, 200) + "\n")
+			sb.WriteString("故事核心：" + truncate(novel.Meta.Description, 200) + "\n")
 		}
 		sb.WriteString("→ 本章必须给出这一矛盾的最终答案（圆满/震撼/余韵均可，但不能回避）\n\n")
 	}
@@ -3484,7 +3485,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 	for _, cov := range complianceResult.Coverage {
 		if !cov.Covered {
 			uncovered++
-			logger.Printf("[checkAndPatchMissingPlotPoints] ch%d MISSING plot point: %s", chapter.ChapterNo, truncateForPrompt(cov.PlotPoint, 50))
+			logger.Printf("[checkAndPatchMissingPlotPoints] ch%d MISSING plot point: %s", chapter.ChapterNo, truncate(cov.PlotPoint, 50))
 		}
 	}
 	if uncovered == 0 || len(complianceResult.Patches) == 0 {
@@ -3553,7 +3554,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 			}
 		}
 		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d patched missing plot point: %s",
-			chapter.ChapterNo, truncateForPrompt(p.PlotPoint, 50))
+			chapter.ChapterNo, truncate(p.PlotPoint, 50))
 	}
 
 	if patched != chapter.Content {

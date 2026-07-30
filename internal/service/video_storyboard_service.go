@@ -3380,6 +3380,23 @@ func voiceLangToDialogueLang(vl string) string {
 	}
 }
 
+func resolveStyleQualityTokens(styleID string) string {
+	switch resolveStyleCategory(styleID) {
+	case "realistic":
+		return "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+	case "render_3d":
+		return "masterpiece, best quality, ultra-detailed, 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+	case "pixel":
+		return "masterpiece, best quality, crisp pixel art, clean sharp pixels, retro game aesthetic"
+	case "classic_illustration":
+		return "masterpiece, best quality, ultra-detailed, exquisite brushwork, vibrant colors, professional illustration"
+	case "dark_stylized":
+		return "masterpiece, best quality, ultra-detailed, dramatic atmosphere, vibrant colors, professional digital art"
+	default: // anime, unknown
+		return "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+	}
+}
+
 // ─── Ensure unused imports are satisfied ─────────────────────────────────────
 
 var _ *repository.PlotPointRepository // force import of repository package

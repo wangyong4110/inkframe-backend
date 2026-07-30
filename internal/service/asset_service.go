@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -40,7 +41,7 @@ type AssetService struct {
 	searchLogRepo  *repository.SearchLogRepository
 	quotaRepo      *repository.AssetStorageQuotaRepository
 	storageSvc     storage.Service
-	taskSvc        *TaskService
+	taskSvc        *async.TaskService
 	aiSvc          *AIService
 	crawlProxyURL  string
 	unsplashKey    string
@@ -103,7 +104,7 @@ func NewAssetService(
 	searchLogRepo *repository.SearchLogRepository,
 	quotaRepo *repository.AssetStorageQuotaRepository,
 
-	taskSvc *TaskService,
+	taskSvc *async.TaskService,
 ) *AssetService {
 	return &AssetService{
 		assetRepo: assetRepo, tagRepo: tagRepo,
@@ -704,7 +705,7 @@ func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, l
 	if err := s.crawlRepo.Create(job); err != nil {
 		return nil, err
 	}
-	task, err := s.taskSvc.Create(tenantID, TaskTypeCrawlJob, source+": "+query, "crawl_job", job.ID)
+	task, err := s.taskSvc.Create(tenantID, async.TaskTypeCrawlJob, source+": "+query, "crawl_job", job.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -729,7 +730,7 @@ func (s *AssetService) RetryCrawlJob(id uint) (*model.CrawlJob, error) {
 	job.Stats.ErrorMsg = ""
 	job.Stats.StartedAt, job.Stats.CompletedAt = nil, nil
 
-	task, err := s.taskSvc.Create(job.TenantID, TaskTypeCrawlJob, job.Source+": "+job.Query, "crawl_job", job.ID)
+	task, err := s.taskSvc.Create(job.TenantID, async.TaskTypeCrawlJob, job.Source+": "+job.Query, "crawl_job", job.ID)
 	if err != nil {
 		return nil, err
 	}

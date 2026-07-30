@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/async"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -810,7 +811,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		return taskID, nil
 	}
 
-	task, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeVideoSynthesis, "视频合成", "video", videoID, map[string]interface{}{
+	task, err := s.taskSvc.CreateWithParams(tenantID, async.TaskTypeVideoSynthesis, "视频合成", "video", videoID, map[string]interface{}{
 		"video_id": videoID,
 	})
 	if err != nil {
