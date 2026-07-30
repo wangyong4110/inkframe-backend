@@ -610,59 +610,53 @@ func (s *WorldviewService) UpdateSection(worldviewID uint, tenantID uint, sectio
 
 // GenerateWorldview AI生成世界观
 func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre string, hints []string) (*model.Worldview, error) {
-	prompt := fmt.Sprintf(`请为【%s】类型的小说生成一个完整、详细的世界观设定。`, genre)
+	ctx := map[string]interface{}{
+		"Genre": genre,
+	}
 
 	// 若传入 novelID，优先从小说数据构建上下文
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			prompt = fmt.Sprintf("请根据以下小说信息，为该小说生成一个完整、详细且与之高度契合的世界观设定。\n")
-			prompt += fmt.Sprintf("【小说名称】%s\n", novel.Title)
-			prompt += fmt.Sprintf("【题材类型】%s\n", novel.Meta.Genre)
+			ctx["NovelTitle"] = novel.Title
+			ctx["Genre"] = novel.Meta.Genre
+			genre = novel.Meta.Genre
 			if novel.Meta.Description != "" {
-				prompt += fmt.Sprintf("【小说简介】%s\n", novel.Meta.Description)
+				ctx["Description"] = novel.Meta.Description
 			}
 			if novel.AIConfig.StylePrompt != "" {
-				prompt += fmt.Sprintf("【写作风格】%s\n", novel.AIConfig.StylePrompt)
+				ctx["StylePrompt"] = novel.AIConfig.StylePrompt
 			}
-			genre = novel.Meta.Genre
 			// 附加前几章内容摘要作为上下文
 			if s.chapterRepo != nil {
 				if chapters, err := s.chapterRepo.ListByNovel(novelID); err == nil && len(chapters) > 0 {
-					limit := 3
-					if len(chapters) < limit {
-						limit = len(chapters)
-					}
-					prompt += "【已有章节摘要】\n"
+					limit := min(3, len(chapters))
+					var chapterContexts []string
 					for i := 0; i < limit; i++ {
 						ch := chapters[i]
 						if ch.Summary != "" {
-							prompt += fmt.Sprintf("第%d章《%s》摘要：%s\n", ch.ChapterNo, ch.Title, ch.Summary)
+							chapterContexts = append(chapterContexts, fmt.Sprintf("第%d章《%s》摘要：%s", ch.ChapterNo, ch.Title, ch.Summary))
 						} else if ch.Content != "" {
 							content := ch.Content
 							if runes := []rune(content); len(runes) > 300 {
 								content = string(runes[:300]) + "..."
 							}
-							prompt += fmt.Sprintf("第%d章《%s》内容节选：%s\n", ch.ChapterNo, ch.Title, content)
+							chapterContexts = append(chapterContexts, fmt.Sprintf("第%d章《%s》内容节选：%s", ch.ChapterNo, ch.Title, content))
 						}
+					}
+					if len(chapterContexts) > 0 {
+						ctx["ChapterContexts"] = chapterContexts
 					}
 				}
 			}
 		}
 	} else if len(hints) > 0 {
-		prompt += fmt.Sprintf("\n背景参考：%s", strings.Join(hints, "\n"))
+		ctx["Hints"] = strings.Join(hints, "\n")
 	}
-	prompt += `
 
-请严格按以下 JSON 格式返回，所有字段均需填写，内容尽量详实（每字段不少于50字）：
-{
-  "name": "世界观名称（富有特色的专有名词，非类型名）",
-  "description": "世界观总体概述：核心世界观念、整体氛围、故事将面对的主要张力",
-  "magic_system": "修炼/魔法/异能体系：力量来源、境界划分（列出各级名称）、修炼方式、天花板设定、突破代价",
-  "geography": "关键地点（只列出故事实际会发生的场景，3-6处）：每处说明控制方、叙事意义、进入难度",
-  "history": "背景矛盾（只写仍在影响当前故事的过去事件）：每条说明该历史如何制造了当前的紧张局势",
-  "rules": "世界核心规则与禁忌（每行一条）：天道法则、不可违背的世界规律、违反后果",
-  "glossary": "世界专属术语表（每行一条，格式：词语 — 含义）：重要专有名词、境界名称、地名缩写等"
-}`
+	prompt, err := renderPrompt("worldview_generate", ctx)
+	if err != nil {
+		return nil, fmt.Errorf("render worldview prompt: %w", err)
+	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, "worldview", prompt)
 	if err != nil {
