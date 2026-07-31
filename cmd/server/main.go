@@ -111,7 +111,7 @@ func main() {
 	seedStoryPatternMcpTool(db, cfg)
 	seedImageRefSearchMcpTool(db, cfg)
 	removeRetiredMcpTool(db, "color_palette")
-	seedKnowledgeSearchMcpTool(db, cfg)
+	removeRetiredMcpTool(db, "knowledge_search")
 	seedCharacterLookupMcpTool(db, cfg)
 	removeRetiredMcpTool(db, "prompt_enhance")
 
@@ -250,8 +250,6 @@ func main() {
 		StoryPatternHandler:     handlers.StoryPatternHandler,
 		ImageRefSearchHandler:   handlers.ImageRefSearchHandler,
 		NotificationHandler:     handlers.NotificationHandler,
-		KnowledgeHandler:        handlers.KnowledgeHandler,
-		KnowledgeToolHandler:    handlers.KnowledgeToolHandler,
 		CharacterLookupHandler:  handlers.CharacterLookupHandler,
 		DramaticHandler:         handlers.DramaticHandler,
 		DashboardHandler:        handlers.DashboardHandler,

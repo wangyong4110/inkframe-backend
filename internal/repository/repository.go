@@ -7,7 +7,6 @@
 //   - worldview.go   — WorldviewRepository, ItemRepository, SkillRepository
 //   - video.go       — VideoRepository, VideoLikeRepository, VideoCommentRepository
 //   - storyboard.go  — StoryboardRepository, ShotVoiceSegmentRepository, ShotSFXItemRepository, VideoBGMSegmentRepository, StoryboardReviewRecordRepository
-//   - knowledge.go   — KnowledgeBaseRepository
 //   - scene_anchor.go — SceneAnchorRepository, SceneConsistencyLogRepository
 //   - model_provider.go — ModelProviderRepository, AIModelRepository, TaskModelConfigRepository, ModelComparisonRepository
 //   - system.go      — SystemSettingRepository, HookChainRepository, SatisfactionPointRepository, ConflictArcRepository

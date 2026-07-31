@@ -1296,13 +1296,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 						fmt.Sprintf("/novel/%d/chapter/%d", chapter.NovelID, chapter.ChapterNo),
 					)
 				}
-				if svcs.ForeshadowService != nil {
-					go func(ch *model.Chapter, tid uint) {
-						if _, err := svcs.ForeshadowService.ExtractForeshadows(ch, tid, ch.NovelID); err != nil {
-							logger.Errorf("TaskService resume chapter_gen(chapter,new) %s: foreshadow extraction failed (ch %d): %v", t.TaskID, ch.ID, err)
-						}
-					}(chapter, tenantID)
-				}
 				if svcs.QualityControlService != nil {
 					go func(chID uint) {
 						if _, err := svcs.QualityControlService.CheckChapter(chID); err != nil {

@@ -682,7 +682,7 @@ type ForeshadowMeta struct {
 	Description           string `json:"description"`
 }
 
-// Foreshadow 伏笔/预兆（专用表，替代通过 KnowledgeBase tag 存储的方案）
+// Foreshadow 伏笔/预兆（专用表）
 type Foreshadow struct {
 	gorm.Model
 	NovelID          uint   `json:"novel_id" gorm:"not null;index"`

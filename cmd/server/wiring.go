@@ -26,7 +26,6 @@ type Repositories struct {
 	AIModelRepo         *repository.AIModelRepository
 	VideoRepo           *repository.VideoRepository
 	StoryboardRepo      *repository.StoryboardRepository
-	KnowledgeBaseRepo   *repository.KnowledgeBaseRepository
 	ModelProviderRepo   *repository.ModelProviderRepository
 	ModelComparisonRepo *repository.ModelComparisonRepository
 	TaskRepo            *repository.TaskRepository
@@ -111,7 +110,6 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		AIModelRepo:         repository.NewAIModelRepository(db),
 		VideoRepo:           repository.NewVideoRepository(db),
 		StoryboardRepo:      repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:   repository.NewKnowledgeBaseRepository(db),
 		ModelProviderRepo:   repository.NewModelProviderRepository(db),
 		ModelComparisonRepo: repository.NewModelComparisonRepository(db),
 		TaskRepo:            repository.NewTaskRepository(db),
@@ -198,10 +196,8 @@ type Services struct {
 	QualityControlService *service.QualityControlService
 	VideoService          *service.VideoService
 	ModelService          *service.ModelService
-	KnowledgeService      *service.KnowledgeService
 
 	ChapterVersionService    *service.ChapterVersionService
-	ForeshadowService        *service.ForeshadowService
 	TimelineService          *service.TimelineService
 	CharacterArcService      *service.CharacterArcService
 	StyleService             *service.StyleService
@@ -271,9 +267,7 @@ type contentSvcs struct {
 	Chapter           *service.ChapterService
 	Character         *service.CharacterService
 	Worldview         *service.WorldviewService
-	Knowledge         *service.KnowledgeService
 	ChapterVersion    *service.ChapterVersionService
-	Foreshadow        *service.ForeshadowService
 	Timeline          *service.TimelineService
 	CharacterArc      *service.CharacterArcService
 	Style             *service.StyleService
@@ -361,24 +355,14 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, v
 	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
 		WithNovelRepos(repos.NovelRepo, repos.ChapterRepo)
 
-	// 知识库服务：向量化走 WithAIService(aiSvc)（DB 里配置的 provider，按 tenant/类型加载）。
-	// legacy aiClient 参数传 nil——aiManager 从未被 RegisterProvider/SetDefault 过，
-	// aiManager.GetProvider("") 必然失败，之前在这里查它只会在每次启动时打印一条误导性的
-	// "embedding disabled" 错误日志，而实际向量化功能完全不受影响（走的是 aiSvc）。
-	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, nil).
-		WithRedis(redisClient).                                                     // Fix: cross-instance idempotency for plot point extraction
-		WithAIService(aiSvc).                                                       // per-provider concurrency-controlled embedding
-		WithSearchConfig(cfg.KnowledgeBase.SearchLimit, cfg.KnowledgeBase.MinScore) // 0 → 内置默认值
-
-	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
+	// 章节版本 / 时间线 / 角色弧光 / 风格
 	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
-	foreshadowSvc := service.NewForeshadowService(repos.KnowledgeBaseRepo, aiSvc)
 	timelineSvc := service.NewTimelineService(repos.ChapterRepo)
 	characterArcSvc := service.NewCharacterArcService(repos.CharacterRepo, repos.SnapshotRepo)
 	styleSvc := service.NewStyleService(nil)
 
 	// 生成上下文服务
-	genCtxSvc := service.NewGenerationContextService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, characterArcSvc, foreshadowSvc)
+	genCtxSvc := service.NewGenerationContextService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, characterArcSvc)
 
 	// 层次化叙事记忆服务
 	narrativeMemorySvc := service.NewNarrativeMemoryService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.ArcSummaryRepo, aiSvc).
@@ -439,8 +423,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, v
 
 	return &contentSvcs{
 		Novel: novelSvc, Chapter: chapterSvc, Character: characterSvc, Worldview: worldviewSvc,
-		Knowledge:      knowledgeSvc,
-		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
+		ChapterVersion: chapterVersionSvc, Timeline: timelineSvc,
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
 		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
@@ -590,9 +573,7 @@ func initServices(db *gorm.DB, repos *Repositories, vectorStore *vector.StoreMan
 		ChapterService:           content.Chapter,
 		CharacterService:         content.Character,
 		WorldviewService:         content.Worldview,
-		KnowledgeService:         content.Knowledge,
 		ChapterVersionService:    content.ChapterVersion,
-		ForeshadowService:        content.Foreshadow,
 		TimelineService:          content.Timeline,
 		CharacterArcService:      content.CharacterArc,
 		StyleService:             content.Style,
@@ -741,8 +722,6 @@ type Handlers struct {
 	StoryPatternHandler     *handler.StoryPatternHandler
 	ImageRefSearchHandler   *handler.ImageRefSearchHandler
 	NotificationHandler     *handler.NotificationHandler
-	KnowledgeHandler        *handler.KnowledgeHandler
-	KnowledgeToolHandler    *handler.KnowledgeToolHandler
 	CharacterLookupHandler  *handler.CharacterLookupHandler
 	DramaticHandler         *handler.DramaticHandler
 	DashboardHandler        *handler.DashboardHandler
@@ -848,8 +827,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		),
 		StoryPatternHandler:  handler.NewStoryPatternHandler(service.NewStoryPatternService()),
 		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
-		KnowledgeHandler:     handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
-		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),
 		CharacterLookupHandler: handler.NewCharacterLookupHandler(
 			service.NewCharacterLookupService(repos.CharacterRepo, repos.CharacterLookRepo, repos.SnapshotRepo),
 		),

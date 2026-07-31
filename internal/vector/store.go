@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // VectorStore 向量存储接口
@@ -33,7 +31,7 @@ type VectorStore interface {
 	HealthCheck(ctx context.Context) error
 
 	// EnsureCollection 确保指定 collection 存在（不存在则以给定维度创建），已存在则是 no-op。
-	// 幂等；调用方（见 KnowledgeService）应缓存"已确认存在"的结果，避免每次写入都发一次请求。
+	// 幂等；调用方应缓存"已确认存在"的结果，避免每次写入都发一次请求。
 	// 不保证纠正维度不匹配——如果 collection 已存在但维度与调用方期望的不同，后续 Store 调用
 	// 会在向量库层面报错，调用方需要据此判断是否是维度冲突（例如租户切换了不同的 embedding 模型）。
 	EnsureCollection(ctx context.Context, name string, dimension int) error
@@ -696,45 +694,6 @@ func buildChromaWhere(filters map[string]interface{}) map[string]interface{} {
 		conds = append(conds, map[string]interface{}{k: filters[k]})
 	}
 	return map[string]interface{}{"$and": conds}
-}
-
-// KnowledgeBaseVector 知识库向量操作
-type KnowledgeBaseVector struct {
-	store VectorStore
-}
-
-func NewKnowledgeBaseVector(store VectorStore) *KnowledgeBaseVector {
-	return &KnowledgeBaseVector{store: store}
-}
-
-// StoreKnowledge 存储知识
-func (h *KnowledgeBaseVector) StoreKnowledge(ctx context.Context, kb *model.KnowledgeBase, vector []float32) error {
-	payload := map[string]interface{}{
-		"id":       kb.ID,
-		"type":     kb.Type,
-		"title":    kb.Title,
-		"content":  kb.Content,
-		"novel_id": kb.NovelID,
-	}
-
-	_, err := h.store.Store(ctx, &StoreRequest{
-		Collection: "knowledge_base",
-		ID:         fmt.Sprintf("%d", kb.ID),
-		Vector:     vector,
-		Payload:    payload,
-	})
-
-	return err
-}
-
-// SearchKnowledge 搜索知识
-func (h *KnowledgeBaseVector) SearchKnowledge(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]*SearchResult, error) {
-	return h.store.Search(ctx, &SearchRequest{
-		Collection: "knowledge_base",
-		Query:      query,
-		Limit:      limit,
-		Filters:    filters,
-	})
 }
 
 // CollectionManager 集合管理器

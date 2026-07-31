@@ -67,7 +67,6 @@ type ChapterService struct {
 	notifSvc             *NotificationService                   // 可选：用于章节生成完成通知
 	skillRepo            *repository.SkillRepository            // 可选：用于将技能体系注入生成上下文
 	qualitySvc           *QualityControlService                 // 可选：用于生成后质量评分与触发精修
-	knowledgeSvc         *KnowledgeService                      // 可选：用于异步提取并存储剧情点
 	timelineSvc          *TimelineService                       // 可选：时间线约束注入生成 prompt
 	foreshadowRepo       *repository.ForeshadowRepository       // 可选：伏笔生命周期注入生成 prompt
 	chapterCharacterRepo *repository.ChapterCharacterRepository // 可选：章节角色级联清理
@@ -151,12 +150,6 @@ func (s *ChapterService) WithSkillRepo(repo *repository.SkillRepository) *Chapte
 // WithQualityService 注入质量控制服务（可选），生成后自动评分并触发精修
 func (s *ChapterService) WithQualityService(svc *QualityControlService) *ChapterService {
 	s.qualitySvc = svc
-	return s
-}
-
-// WithKnowledgeService 注入知识库服务（可选），章节生成后异步提取并存储剧情点
-func (s *ChapterService) WithKnowledgeService(svc *KnowledgeService) *ChapterService {
-	s.knowledgeSvc = svc
 	return s
 }
 
@@ -815,31 +808,6 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 		}
 	}
 
-	// ── Step 1e: 知识库语义搜索（可选）──────────────────────
-	// 单独存进 knowledgeContext，不并入 wikiContext：知识库条目是本书已确立的 canon 设定
-	// （必须遵守），跟 wiki_search 查回来的网络百科资料（仅供参考、可能与本书设定无关）权威
-	// 等级完全不同，混进同一个变量会让模型没法区分"这条必须守住"和"这条随便参考"。
-	// 两者在模板里对应不同的 prompt 小节（见 chapter_scene_outline.j2 / chapter_from_outline.j2
-	// 的 WikiContext vs KnowledgeContext）。
-	var knowledgeContext string
-	if toolEnabled("knowledge_search") && s.mcpService != nil && s.knowledgeSvc != nil {
-		kCtx, kCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer kCancel()
-		kOut, kErr := s.mcpService.InvokeTool(kCtx, tenantID, "knowledge_search", map[string]interface{}{
-			"novel_id": novel.ID,
-			"query":    chapterMeta.summary,
-			"limit":    s.knowledgeSvc.DefaultSearchLimit(),
-		})
-		if kErr == nil {
-			if kText := parseKnowledgeSearchOutput(kOut); kText != "" {
-				knowledgeContext = kText
-				logger.Printf("[KnowledgeSearch] chapter %d: attached knowledge context", req.ChapterNo)
-			}
-		} else {
-			logger.Errorf("[KnowledgeSearch] chapter %d: skipped: %v", req.ChapterNo, kErr)
-		}
-	}
-
 	// ── Step 1f: 角色档案查询（可选，仅日志增强，实际角色数据由 getCharactersForPrompt 提供）──
 	if toolEnabled("character_lookup") && s.mcpService != nil && s.characterRepo != nil {
 		characters, charListErr := s.characterRepo.ListByNovel(novelID)
@@ -873,7 +841,7 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 	}
 
 	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
-		ctx, tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, "", storyPatternRef, prevEnding, finalChapterCtx,
 	)
 	if outlineErr != nil {
 		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -889,7 +857,7 @@ func (s *ChapterService) GenerateChapter(ctx context.Context, tenantID uint, nov
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		ctx, tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, knowledgeContext, prevEnding, finalChapterCtx,
+		ctx, tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, "", prevEnding, finalChapterCtx,
 	)
 	if err != nil {
 		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -2428,17 +2396,7 @@ func (s *ChapterService) postProcessChapter(ctx context.Context, tenantID uint, 
 		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)
 	}
 
-	// 5b. 异步提取并存储本章剧情点（知识库）
-	if s.knowledgeSvc != nil {
-		go func() {
-			ctx := context.Background()
-			if err := s.knowledgeSvc.ExtractAndStorePlotPoints(ctx, chapter, nil); err != nil {
-				logger.Errorf("[ChapterService] ExtractAndStorePlotPoints failed for ch%d: %v", chapter.ChapterNo, err)
-			}
-		}()
-	}
-
-	// 5. 自动检查并标记已解决的剧情点（伏笔/冲突）
+	// 5b. 自动检查并标记已解决的剧情点（伏笔/冲突）
 	s.checkAndAutoResolvePlotPoints(tenantID, chapter)
 
 	// 6. 异步更新角色声音档案（每5章更新一次主要角色的声音档案，供后续章节注入使用）
@@ -2850,33 +2808,7 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 		}
 	}
 
-	// 来源2：旧伏笔系统（ForeshadowService）
-	if s.contextSvc != nil && s.contextSvc.foreshadowSvc != nil && count < 3 {
-		foreshadows, err := s.contextSvc.foreshadowSvc.CheckForeshadowStatus(novelID, chapterNo)
-		if err == nil {
-			for _, fs := range foreshadows {
-				if count >= 5 {
-					break
-				}
-				if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
-					r := []rune(fs.Description)
-					end := 12
-					if len(r) < end {
-						end = len(r)
-					}
-					dedupKey := "fs2:" + string(r[:end])
-					if seen[dedupKey] {
-						continue
-					}
-					seen[dedupKey] = true
-					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
-					count++
-				}
-			}
-		}
-	}
-
-	// 来源3：PlotPoint 表中未解决的伏笔与冲突（最多补充至5条）
+	// 来源2：PlotPoint 表中未解决的伏笔与冲突
 	if s.plotPointRepo != nil && count < 5 {
 		pps, err := s.plotPointRepo.ListByNovel(novelID, "", true) // unresolved only
 		if err == nil {
@@ -3984,42 +3916,6 @@ func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*
 // ──────────────────────────────────────────────
 // WebSearch helpers
 // ──────────────────────────────────────────────
-
-// parseKnowledgeSearchOutput parses the output map from McpService.InvokeTool("knowledge_search", …)
-// into a human-readable prompt section fed into the KnowledgeContext template variable (see
-// chapter_scene_outline.j2/chapter_from_outline.j2's "本书知识库设定" section, which already
-// supplies its own header — no need to prepend one here too).
-func parseKnowledgeSearchOutput(output map[string]interface{}) string {
-	rawResults, ok := output["results"]
-	if !ok {
-		return ""
-	}
-	b, err := json.Marshal(rawResults)
-	if err != nil {
-		return ""
-	}
-	var items []struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(b, &items); err != nil || len(items) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	for _, item := range items {
-		sb.WriteString("• ")
-		sb.WriteString(item.Title)
-		sb.WriteString("：")
-		// truncate long content
-		content := item.Content
-		if len([]rune(content)) > 200 {
-			content = string([]rune(content)[:200]) + "…"
-		}
-		sb.WriteString(content)
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
 
 // parseWebSearchOutput parses the output map from McpService.InvokeTool("web_search", …)
 // into a human-readable prompt section.

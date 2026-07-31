@@ -52,8 +52,6 @@ type Config struct {
 	StoryPatternHandler     *handler.StoryPatternHandler
 	ImageRefSearchHandler   *handler.ImageRefSearchHandler
 	NotificationHandler     *handler.NotificationHandler
-	KnowledgeHandler        *handler.KnowledgeHandler
-	KnowledgeToolHandler    *handler.KnowledgeToolHandler
 	CharacterLookupHandler  *handler.CharacterLookupHandler
 	DramaticHandler         *handler.DramaticHandler
 	DashboardHandler        *handler.DashboardHandler
@@ -367,16 +365,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.PlotPointHandler != nil {
 				novels.GET("/:id/plot-points", cfg.PlotPointHandler.ListByNovel)
 				novels.POST("/:id/plot-points/ai-extract", cfg.PlotPointHandler.AIExtractFromNovel)
-			}
-
-			// 知识库
-			if cfg.KnowledgeHandler != nil {
-				novels.GET("/:id/knowledge/search", cfg.KnowledgeHandler.SearchKnowledge)
-				novels.GET("/:id/knowledge", cfg.KnowledgeHandler.ListKnowledge)
-				novels.POST("/:id/knowledge", cfg.KnowledgeHandler.CreateKnowledge)
-				novels.POST("/:id/knowledge/bulk-import", cfg.KnowledgeHandler.BulkImport)
-				novels.PUT("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.UpdateKnowledge)
-				novels.DELETE("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.DeleteKnowledge)
 			}
 
 			// 戏剧张力管理
@@ -786,9 +774,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		}
 		if cfg.ImageRefSearchHandler != nil {
 			toolsGroup.POST("/image-ref-search", cfg.ImageRefSearchHandler.Search)
-		}
-		if cfg.KnowledgeToolHandler != nil {
-			toolsGroup.POST("/knowledge-search", cfg.KnowledgeToolHandler.Search)
 		}
 		if cfg.CharacterLookupHandler != nil {
 			toolsGroup.POST("/character-lookup", cfg.CharacterLookupHandler.Lookup)

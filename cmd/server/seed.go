@@ -358,16 +358,6 @@ func removeRetiredMcpTool(db *gorm.DB, name string) {
 	}
 }
 
-func seedKnowledgeSearchMcpTool(db *gorm.DB, cfg *config.Config) {
-	port := cfg.Server.Port
-	if port == 0 {
-		port = 8080
-	}
-	seedMcpTool(db, "knowledge_search", "知识库语义搜索",
-		"在当前小说的知识库中语义检索相关剧情点、角色事实和世界观条目，为章节生成提供精准上下文",
-		fmt.Sprintf("http://localhost:%d/api/v1/tools/knowledge-search", port))
-}
-
 func seedCharacterLookupMcpTool(db *gorm.DB, cfg *config.Config) {
 	port := cfg.Server.Port
 	if port == 0 {

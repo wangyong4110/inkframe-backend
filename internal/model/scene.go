@@ -41,40 +41,6 @@ type UpdatePlotPointRequest struct {
 	ResolvedIn  *uint    `json:"resolved_in"`
 }
 
-// KnowledgeBase 知识库
-type KnowledgeBase struct {
-	ID       uint   `json:"id" gorm:"primaryKey"`
-	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 必须：NovelID 可为 NULL（写作技巧类），TenantID 是唯一隔离手段
-	Type     string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
-	// character_fact=角色事实, lore=世界观知识, writing_technique=写作技巧
-
-	Title   string `json:"title" gorm:"size:255;not null"`
-	Content string `json:"content" gorm:"type:mediumtext"` // mediumtext：知识条目内容可能超过 64KB
-
-	Tags string `json:"tags" gorm:"type:text"` // JSON数组
-
-	// 关联
-	NovelID         *uint  `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
-	Novel           *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	SourceChapterID *uint  `json:"source_chapter_id,omitempty" gorm:"index"`
-
-	// 向量信息
-	VectorID   string     `json:"vector_id" gorm:"size:200"` // 扩大至 200：兼容自定义哈希 ID
-	VectorHash string     `json:"vector_hash" gorm:"size:64"`
-	EmbeddedAt *time.Time `json:"embedded_at,omitempty"` // 最近一次向量化时间，用于过期刷新策略
-
-	// 统计
-	UsageCount int `json:"usage_count" gorm:"default:0"`
-
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
-}
-
-func (KnowledgeBase) TableName() string {
-	return "ink_knowledge_base"
-}
-
 // HookChain 钩子链（章末悬念/情感/谜题/威胁/承诺）
 type HookChain struct {
 	ID      uint `json:"id" gorm:"primaryKey"`

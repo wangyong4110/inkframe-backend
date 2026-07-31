@@ -21,26 +21,8 @@ const (
 	recentFullCount  = 3           // 最近N章注入详细摘要
 	recentShortCount = 7           // 再往前N章注入简短摘要（30字）
 
-	shortSummaryMaxRunes        = 800 // 简短摘要截断字符数（提升上下文保真度）
-	repeatWordThreshold         = 5   // 重复词出现 N 次触发精修建议
-	consecutivePronounThreshold = 4   // 连续以他/她开头的段落数阈值
-	clichePhraseThreshold       = 2   // 长套话短语出现 N 次即触发精修（阈值低于单字）
+	shortSummaryMaxRunes = 800 // 简短摘要截断字符数（提升上下文保真度）
 )
-
-// repeatWords 高频 AI 套词（出现≥5次触发精修）
-var repeatWords = []string{
-	"突然", "忽然", "然后", "接着", "不禁", "不由得", "内心",
-	// 情绪直白陈述
-	"感到", "觉得", "沉吟", "叹了口气", "深呼吸",
-}
-
-// clichePhrases 低频但典型的 AI 机器感短语（出现≥2次触发精修）
-var clichePhrases = []string{
-	"心中涌起", "内心深处", "复杂的情绪", "说不清的感觉",
-	"与此同时", "就在此时", "不知过了多久",
-	"这意味着", "换句话说", "确实如此",
-	"空气中弥漫", "沉默笼罩",
-}
 
 // ============================================
 // NarrativeMemoryService 层次化记忆服务

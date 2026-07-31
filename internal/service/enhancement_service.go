@@ -1,191 +1,11 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
-
-// ============================================
-// Foreshadow Tracker - 伏笔追踪系统
-// ============================================
-
-type ForeshadowService struct {
-	kbRepo interface {
-		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-		Create(kb *model.KnowledgeBase) error
-		Update(kb *model.KnowledgeBase) error
-	}
-	aiService *AIService
-}
-
-func NewForeshadowService(kbRepo interface {
-	Create(kb *model.KnowledgeBase) error
-	GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-	Update(kb *model.KnowledgeBase) error
-}, aiService *AIService) *ForeshadowService {
-	return &ForeshadowService{
-		kbRepo:    kbRepo,
-		aiService: aiService,
-	}
-}
-
-// ForeshadowItem 伏笔项
-type ForeshadowItem struct {
-	ID          uint   `json:"id"`
-	ChapterID   uint   `json:"chapter_id"`
-	ChapterNo   int    `json:"chapter_no"`
-	Type        string `json:"type"` // object/person/event/ability/revelation
-	Description string `json:"description"`
-	Hint        string `json:"hint"`         // 暗示内容
-	Resolution  string `json:"resolution"`   // 回收说明
-	IsFulfilled bool   `json:"is_fulfilled"` // 是否已回收
-	FulfilledIn *uint  `json:"fulfilled_in"` // 在哪一章回收
-	FulfilledAt string `json:"fulfilled_at"`
-}
-
-// ExtractForeshadows 从章节中提取伏笔
-func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID, novelID uint) ([]*ForeshadowItem, error) {
-	prompt := fmt.Sprintf(`请从以下章节内容中识别并提取伏笔/预示/悬念，返回JSON数组格式：
-
-伏笔类型说明：
-- object: 神秘道具（如：古老的玉佩、血脉传承）
-- person: 神秘人物（如：黑袍人、神秘师父）
-- event: 重大事件预示（如：大劫将至、天下大乱）
-- ability: 能力预示（如：隐藏的血脉、特殊体质）
-- revelation: 真相揭示（如：身份秘密、历史真相）
-
-章节内容：
-%s
-
-请返回JSON格式：
-{
-  "foreshadows": [
-    {
-      "type": "object/person/event/ability/revelation",
-      "description": "伏笔描述",
-      "hint": "在章节中的暗示/铺垫",
-      "chapter_no": 当前章节号
-    }
-  ]
-}`, chapter.Content)
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, "foreshadow_extraction", prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	var extraction struct {
-		Foreshadows []struct {
-			Type        string `json:"type"`
-			Description string `json:"description"`
-			Hint        string `json:"hint"`
-		} `json:"foreshadows"`
-	}
-
-	if err := json.Unmarshal([]byte(result), &extraction); err != nil {
-		return nil, fmt.Errorf("failed to parse foreshadow extraction: %w", err)
-	}
-
-	items := make([]*ForeshadowItem, 0, len(extraction.Foreshadows))
-	for _, fs := range extraction.Foreshadows {
-		item := &ForeshadowItem{
-			ChapterID:   chapter.ID,
-			ChapterNo:   chapter.ChapterNo,
-			Type:        fs.Type,
-			Description: fs.Description,
-			Hint:        fs.Hint,
-			IsFulfilled: false,
-		}
-
-		// 存储到知识库
-		kb := &model.KnowledgeBase{
-			NovelID: &novelID,
-			Type:    "foreshadow",
-			Title:   fmt.Sprintf("[%s] %s", strings.ToUpper(fs.Type), fs.Description),
-			Content: fs.Hint,
-			Tags:    fmt.Sprintf(`["%s", "%d章"]`, fs.Type, chapter.ChapterNo),
-		}
-
-		s.kbRepo.Create(kb)
-		items = append(items, item)
-	}
-
-	return items, nil
-}
-
-// CheckForeshadowStatus 检查伏笔状态
-func (s *ForeshadowService) CheckForeshadowStatus(novelID uint, currentChapterNo int) ([]*ForeshadowItem, error) {
-	knowledgeItems, err := s.kbRepo.GetByNovel(novelID)
-	if err != nil {
-		return nil, err
-	}
-
-	items := make([]*ForeshadowItem, 0)
-	for _, kb := range knowledgeItems {
-		if kb.Type != "foreshadow" {
-			continue
-		}
-
-		var tags []string
-		json.Unmarshal([]byte(kb.Tags), &tags)
-
-		chapterNo := 0
-		for _, tag := range tags {
-			if strings.HasSuffix(tag, "章") {
-				fmt.Sscanf(tag, "%d章", &chapterNo)
-				break
-			}
-		}
-
-		item := &ForeshadowItem{
-			ID:          kb.ID,
-			Description: kb.Title,
-			Hint:        kb.Content,
-			ChapterNo:   chapterNo,
-			IsFulfilled: chapterNo > 0 && chapterNo < currentChapterNo,
-		}
-
-		// 解析是否已回收
-		if len(tags) > 2 {
-			for _, tag := range tags {
-				if strings.HasPrefix(tag, "fulfilled_") {
-					item.IsFulfilled = true
-					break
-				}
-			}
-		}
-
-		items = append(items, item)
-	}
-
-	return items, nil
-}
-
-// AnalyzeFulfillmentOpportunity 分析伏笔回收时机
-func (s *ForeshadowService) AnalyzeFulfillmentOpportunity(novelID uint, currentChapter *model.Chapter) ([]string, error) {
-	// 获取未回收的伏笔
-	unfulfilled, err := s.CheckForeshadowStatus(novelID, currentChapter.ChapterNo-1)
-	if err != nil {
-		return nil, err
-	}
-
-	opportunities := make([]string, 0)
-	for _, fs := range unfulfilled {
-		if !fs.IsFulfilled && currentChapter.ChapterNo-fs.ChapterNo >= 3 {
-			// 伏笔已超过3章，可以考虑回收
-			opportunities = append(opportunities, fmt.Sprintf(
-				"建议在第%d章回收伏笔「%s」",
-				currentChapter.ChapterNo,
-				fs.Description,
-			))
-		}
-	}
-
-	return opportunities, nil
-}
 
 // ============================================
 // Timeline Service - 时间线管理
@@ -588,7 +408,6 @@ type GenerationContextService struct {
 		ListByNovel(novelID uint) ([]*model.Character, error)
 	}
 	snapshotSvc   *CharacterArcService
-	foreshadowSvc *ForeshadowService
 }
 
 func NewGenerationContextService(
@@ -605,14 +424,12 @@ func NewGenerationContextService(
 		ListByNovel(novelID uint) ([]*model.Character, error)
 	},
 	snapshotSvc *CharacterArcService,
-	foreshadowSvc *ForeshadowService,
 ) *GenerationContextService {
 	return &GenerationContextService{
 		novelRepo:     novelRepo,
 		chapterRepo:   chapterRepo,
 		charRepo:      charRepo,
 		snapshotSvc:   snapshotSvc,
-		foreshadowSvc: foreshadowSvc,
 	}
 }
 
@@ -623,7 +440,6 @@ type GenerationContext struct {
 	RecentChapters []*model.Chapter   `json:"recent_chapters"`
 
 	// 新增：增强上下文
-	Foreshadows   []*ForeshadowItem      `json:"foreshadows"`
 	Timeline      *Timeline              `json:"timeline"`
 	CharacterArcs map[uint]*CharacterArc `json:"character_arcs"`
 
@@ -655,11 +471,6 @@ func (s *GenerationContextService) GetContext(novelID uint, currentChapterNo int
 		Characters:     characters,
 		RecentChapters: recentChapters,
 		CharacterArcs:  make(map[uint]*CharacterArc),
-	}
-
-	// 获取伏笔信息
-	if s.foreshadowSvc != nil {
-		ctx.Foreshadows, _ = s.foreshadowSvc.CheckForeshadowStatus(novelID, currentChapterNo)
 	}
 
 	// 获取时间线
@@ -703,21 +514,6 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 	for _, char := range ctx.Characters {
 		if char.Role == "protagonist" || char.Role == "antagonist" {
 			sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n", char.Name, char.Role, char.Description))
-		}
-	}
-
-	// 列出未回收的伏笔
-	if len(ctx.Foreshadows) > 0 {
-		sb.WriteString("\n【未解之谜】\n")
-		count := 0
-		for _, fs := range ctx.Foreshadows {
-			if !fs.IsFulfilled {
-				sb.WriteString(fmt.Sprintf("- %s\n", fs.Description))
-				count++
-				if count >= 5 {
-					break
-				}
-			}
 		}
 	}
 
@@ -769,21 +565,7 @@ func (s *GenerationContextService) buildGenerationPrompt(ctx *GenerationContext,
 		sb.WriteString("\n")
 	}
 
-	// 6. 伏笔提示
-	if len(ctx.Foreshadows) > 0 {
-		count := 0
-		for _, fs := range ctx.Foreshadows {
-			if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
-				sb.WriteString(fmt.Sprintf("【伏笔提示】建议考虑回收伏笔「%s」\n", fs.Description))
-				count++
-				if count >= 2 {
-					break
-				}
-			}
-		}
-	}
-
-	// 7. 额外要求
+	// 6. 额外要求
 	if extraPrompt != "" {
 		sb.WriteString(fmt.Sprintf("\n【额外要求】\n%s\n", extraPrompt))
 	}

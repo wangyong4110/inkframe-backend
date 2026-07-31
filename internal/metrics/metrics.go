@@ -352,19 +352,9 @@ var (
 	}, []string{"type", "status"}) // type: frame_interpolation/super_resolution/color_grading/stabilize/style_transfer; status: completed/failed
 )
 
-// ─── 业务指标：知识库与导出 ──────────────────────────────────────────────────
+// ─── 业务指标：导出 ──────────────────────────────────────────────────
 
 var (
-	KnowledgeSearchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "inkframe_knowledge_search_total",
-		Help: "知识库搜索总数（按检索方式分组）",
-	}, []string{"method"}) // method: vector / keyword
-
-	KnowledgeExtractTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "inkframe_knowledge_extract_total",
-		Help: "章节剧情点提取总数（按结果状态分组）",
-	}, []string{"status"}) // status: success / error / skipped
-
 	ExportCapCutTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "inkframe_export_capcut_total",
 		Help: "CapCut 草稿导出总数（按格式、结果状态分组）",

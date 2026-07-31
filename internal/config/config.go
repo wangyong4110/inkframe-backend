@@ -25,9 +25,6 @@ type Config struct {
 	// 向量数据库配置
 	VectorDB VectorDBConfig `mapstructure:"vector_db"`
 
-	// 知识库检索配置
-	KnowledgeBase KnowledgeBaseConfig `mapstructure:"knowledge_base"`
-
 	// 日志配置
 	Logger LoggerConfig `mapstructure:"logger"`
 
@@ -177,13 +174,6 @@ type VectorDBConfig struct {
 	Endpoint  string `mapstructure:"endpoint"`
 	APIKey    string `mapstructure:"api_key"`
 	IndexName string `mapstructure:"index_name"`
-}
-
-// KnowledgeBaseConfig 知识库检索配置。零值（未在 config.yaml 中配置）时，
-// KnowledgeService 会退回代码内置的默认值（SearchLimit=3, MinScore=0.6）。
-type KnowledgeBaseConfig struct {
-	SearchLimit int     `mapstructure:"search_limit"` // 每次检索返回的知识条目数
-	MinScore    float32 `mapstructure:"min_score"`    // 语义搜索的最小相似度阈值（0-1）
 }
 
 // LoggerConfig 日志配置
