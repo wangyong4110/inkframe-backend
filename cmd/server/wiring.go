@@ -63,9 +63,6 @@ type Repositories struct {
 	ChapterRewriteTaskRepo     *repository.ChapterRewriteTaskRepository
 	RewriteContinuityIndexRepo *repository.RewriteContinuityIndexRepository
 	RewriteChapterSummaryRepo  *repository.RewriteChapterSummaryRepository
-	PlatformAccountRepo        *repository.PlatformAccountRepository
-	VideoPublishRecordRepo     *repository.VideoPublishRecordRepository
-	ContinuityReportRepo       *repository.ContinuityReportRepository
 	// Asset Library
 	AssetRepo               *repository.AssetRepository
 	TagRepo                 *repository.TagRepository
@@ -147,9 +144,6 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterRewriteTaskRepo:     repository.NewChapterRewriteTaskRepository(db),
 		RewriteContinuityIndexRepo: repository.NewRewriteContinuityIndexRepository(db),
 		RewriteChapterSummaryRepo:  repository.NewRewriteChapterSummaryRepository(db),
-		PlatformAccountRepo:        repository.NewPlatformAccountRepository(db),
-		VideoPublishRecordRepo:     repository.NewVideoPublishRecordRepository(db),
-		ContinuityReportRepo:       repository.NewContinuityReportRepository(db),
 		// Asset Library
 		AssetRepo:               repository.NewAssetRepository(db),
 		TagRepo:                 repository.NewTagRepository(db),
@@ -825,8 +819,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				getEnv("TENCENT_WSA_SECRET_KEY", cfg.WebSearch.SecretKey),
 			),
 		),
-		StoryPatternHandler:  handler.NewStoryPatternHandler(service.NewStoryPatternService()),
-		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
+		StoryPatternHandler: handler.NewStoryPatternHandler(service.NewStoryPatternService()),
+		NotificationHandler: handler.NewNotificationHandler(services.NotificationService),
 		CharacterLookupHandler: handler.NewCharacterLookupHandler(
 			service.NewCharacterLookupService(repos.CharacterRepo, repos.CharacterLookRepo, repos.SnapshotRepo),
 		),
